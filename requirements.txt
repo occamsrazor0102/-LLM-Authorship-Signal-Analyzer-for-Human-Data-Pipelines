@@ -1,0 +1,26 @@
+# Core dependencies
+pandas
+openpyxl
+
+# Optional: improves sentence segmentation (no model download needed)
+# spacy
+
+# Optional: enables Layer 3.1 with Anthropic API
+# anthropic
+
+# Optional: enables Layer 3.1 with OpenAI API
+# openai
+
+# v0.61: Semantic Vector Analysis (Layer 2.8)
+# sentence-transformers
+# scikit-learn
+
+# v0.61: Local Perplexity Scoring
+# transformers
+# torch
+
+# v0.61: Robust Text Normalization
+# ftfy
+
+# v0.61: PDF Input Support
+# pypdf
