@@ -14,41 +14,85 @@ The pipeline analyzes text across multiple independent layers, each targeting a 
 
 ### Detection Layers
 
-**Layer 0 — Preamble Detection**
-Catches LLM output artifacts that weren't cleaned before submission: assistant acknowledgments ("Sure, here's..."), artifact delivery frames ("Below is a rewritten..."), first-person creation claims ("I've drafted..."), and meta-design language ("failure-inducing", "designed to test").
+| Layer | Module | Description |
+|-------|--------|-------------|
+| **Preamble** | `analyzers/preamble.py` | Catches LLM output artifacts: assistant acknowledgments, artifact delivery frames, first-person creation claims, meta-design language |
+| **Fingerprint** | `analyzers/fingerprint.py` | 120-word tiered lexicon of LLM-preferred vocabulary (diagnostic only, not standalone trigger) |
+| **Prompt Signature** | `analyzers/prompt_signature.py` | Structural patterns of LLM-generated prompts: Constraint Frame Density, Must-Frame Saturation Rate, meta-evaluation design language |
+| **Voice Dissonance** | `analyzers/voice_dissonance.py` | Measures contradiction between casual voice markers and technical specification density |
+| **Instruction Density** | `analyzers/instruction_density.py` | Counts formal-exhaustive specification patterns: imperatives, conditionals, binary specs |
+| **Semantic Resonance** | `analyzers/semantic_resonance.py` | Cosine similarity of sentence embeddings against AI/human archetype centroids |
+| **Self-Similarity** | `analyzers/self_similarity.py` | N-gram Self-Similarity Index (NSSI) for detecting formulaic LLM patterns |
+| **Continuation (API)** | `analyzers/continuation_api.py` | DNA-GPT divergent continuation analysis via Anthropic/OpenAI API |
+| **Continuation (Local)** | `analyzers/continuation_local.py` | Zero-LLM DNA-GPT proxy using backoff n-gram language model |
+| **Perplexity** | `analyzers/perplexity.py` | distilgpt2-based perplexity scoring |
 
-**Layer 2 — Intrinsic Fingerprints** *(diagnostic only)*
-A 120-word tiered lexicon of LLM-preferred vocabulary drawn from Kobak et al. (2025, 379 excess style words from 15M PubMed abstracts), Gray (2024), Liang et al. (2024), and GPTZero. Words like "delve," "utilize," "comprehensive," "facilitate." Used for convergence and cross-submission similarity analysis, not as a standalone trigger — too many legitimate formal texts use these words individually.
+### Scoring Channels
 
-**Layer 2.5 — Prompt-Engineering Signatures**
-Structural patterns characteristic of LLM-generated task prompts: Constraint Frame Density (CFD), Must-Frame Saturation Rate (MFSR), meta-evaluation design language, numbered criteria lists, and framing completeness scoring. Detects the systematic over-specification that LLMs produce when asked to write evaluation prompts.
+Signals are organized into four independent scoring channels:
 
-**Layer 2.6 — Voice-Specification Dissonance (VSD)**
-Measures the contradiction between casual voice markers (contractions, hedges, colloquialisms, misspellings) and technical specification density (CamelCase columns, file references, formulas, tab references). High specification with zero casual voice is the profile of sterile LLM output.
-
-**Layer 2.6 — Prompt Specification Index (PSI)** *(v0.53.2)*
-Measures the density of prompt-engineering specification language: role assignment ("you are a pharmacist"), agent directives ("you must," "your response"), output format specs ("format as," "structure your"), completeness demands ("ensure that," "be comprehensive"), and response meta-framing ("your response should demonstrate"). Individual patterns are normal in human-authored prompts — a human writing a GDPval prompt *should* include role-setting. The signal is the formulaic *stacking* of multiple categories in a short span that characterizes LLM-generated prompts.
-
-**Layer 2.6 — Sterile Specification Index (SSI)**
-Catches high combined specification (tech + prompt) with suppressed voice markers, low contractions, and zero hedging — the profile of clean formal LLM output that lacks the natural variation of human writing. Two tiers: SSI-STRICT (high confidence, AMBER) and SSI-RELAXED (moderate confidence, YELLOW).
-
-**Layer 2.7 — Instruction Density Index (IDI)**
-Counts formal-exhaustive specification patterns: imperative verbs, conditional constraints, binary specification markers, missing-reference flags, and flag-count modifiers. High IDI indicates the systematic exhaustive coverage that LLMs produce when generating task specifications.
-
-### Aggregation
-
-Signals from all layers are collected and resolved using priority-based ordering. The highest-severity, highest-priority signal becomes the primary determination. Lower-priority signals are preserved as supporting evidence in the audit trail.
-
-A **multi-layer convergence floor** triggers YELLOW when 3+ layers show sub-threshold but non-zero signal simultaneously — catching the "nothing screams but everything whispers" profile where moderately sophisticated LLM prompts evade every individual threshold.
+| Channel | Module | Primary Layers |
+|---------|--------|----------------|
+| **Prompt Structure** | `channels/prompt_structure.py` | Preamble, Prompt Signature, Voice Dissonance, Instruction Density |
+| **Stylometric** | `channels/stylometric.py` | Self-Similarity, Semantic Resonance, Perplexity, Fingerprint |
+| **Continuation** | `channels/continuation.py` | Continuation API or Continuation Local |
+| **Windowed** | `channels/windowed.py` | Sentence-window scoring |
 
 ### Determination Levels
 
 | Level | Meaning | Action |
 |-------|---------|--------|
-| 🔴 RED | Strong evidence of LLM generation | Flag for review, likely reject |
-| 🟠 AMBER | Substantial evidence, high confidence | Flag for manual review |
-| 🟡 YELLOW | Minor signals or convergence pattern | Note for awareness, may be legitimate |
-| 🟢 GREEN | No significant signals detected | Pass |
+| RED | Strong evidence of LLM generation | Flag for review, likely reject |
+| AMBER | Substantial evidence, high confidence | Flag for manual review |
+| YELLOW | Minor signals or convergence pattern | Note for awareness, may be legitimate |
+| GREEN | No significant signals detected | Pass |
+
+## Package Structure
+
+```
+llm_detector/                  # Main package
+    __init__.py                # Version, public API re-exports
+    __main__.py                # python -m llm_detector entry point
+    compat.py                  # Feature flags (HAS_SPACY, HAS_FTFY, etc.)
+    text_utils.py              # Shared utilities
+    normalize.py               # Text normalization
+    language_gate.py           # Language/fairness support check
+    pipeline.py                # Full pipeline orchestration
+    fusion.py                  # Evidence fusion across channels
+    calibration.py             # Conformal calibration
+    baselines.py               # Baseline collection and analysis
+    similarity.py              # Cross-submission similarity
+    io.py                      # File I/O (XLSX, CSV, PDF)
+    cli.py                     # Command-line interface
+    gui.py                     # Desktop GUI
+
+    analyzers/                 # One module per detection layer
+        preamble.py
+        fingerprint.py
+        prompt_signature.py
+        voice_dissonance.py
+        instruction_density.py
+        semantic_resonance.py
+        self_similarity.py
+        continuation_api.py
+        continuation_local.py
+        perplexity.py
+        stylometry.py
+        windowing.py
+
+    channels/                  # Channel scoring
+        prompt_structure.py
+        stylometric.py
+        continuation.py
+        windowed.py
+
+    lexicon/                   # Externalized detection vocabulary
+        packs.py               # LexiconPack definitions & scoring engine
+        integration.py         # Enhanced layer wrappers
+
+tests/                         # Test suite
+run_detector                   # Thin CLI launcher
+```
 
 ## Installation
 
@@ -56,39 +100,40 @@ A **multi-layer convergence floor** triggers YELLOW when 3+ layers show sub-thre
 pip install openpyxl pandas
 # Optional (improves sentence segmentation):
 pip install spacy
+# Optional (semantic resonance layer):
+pip install sentence-transformers scikit-learn
+# Optional (perplexity scoring):
+pip install transformers torch
+# Optional (robust Unicode normalization):
+pip install ftfy
+# Optional (PDF input):
+pip install pypdf
+# Optional (DNA-GPT API continuation):
+pip install anthropic  # or: pip install openai
 ```
-
-No model downloads required. The spaCy sentencizer is a rule-based component that ships with the package.
 
 ## Usage
 
 ### Single Text Analysis
 
 ```bash
-python llm_detector_v0532.py --text "Your prompt text here"
+python -m llm_detector --text "Your prompt text here"
+# or
+./run_detector --text "Your prompt text here"
 ```
 
-### Desktop GUI (v0.55)
+### Desktop GUI
 
 ```bash
-# Standalone executable launcher
-./llm_detector_v055_gui.py
-
-# Alternative: launch directly from the pipeline script
-python "llm_detector_v055-OAI API.py" --gui
+python -m llm_detector --gui
 ```
 
-GUI mode supports:
-- Single text analysis with full pipeline scoring.
-- Batch CSV/XLSX analysis with prompt column and sheet selection.
-- Optional attempter filtering.
-- Optional DNA-GPT provider/API key settings.
-
-### File Mode (XLSX/CSV)
+### File Mode (XLSX/CSV/PDF)
 
 ```bash
-python llm_detector_v0532.py input.xlsx --sheet "Sheet1" --prompt-col "prompt"
-python llm_detector_v0532.py input.csv --prompt-col "content"
+python -m llm_detector input.xlsx --sheet "Sheet1" --prompt-col "prompt"
+python -m llm_detector input.csv --prompt-col "content"
+python -m llm_detector document.pdf
 ```
 
 ### CLI Options
@@ -96,6 +141,7 @@ python llm_detector_v0532.py input.csv --prompt-col "content"
 | Flag | Description |
 |------|-------------|
 | `--text` | Analyze a single text string |
+| `--gui` | Launch desktop GUI mode |
 | `--sheet` | Sheet name for XLSX files |
 | `--prompt-col` | Column name containing prompts (default: "prompt") |
 | `--verbose`, `-v` | Show all layer details for every result |
@@ -103,67 +149,53 @@ python llm_detector_v0532.py input.csv --prompt-col "content"
 | `--attempter` | Filter by attempter name (substring match) |
 | `--no-similarity` | Skip cross-submission similarity analysis |
 | `--similarity-threshold` | Jaccard threshold for similarity flagging (default: 0.40) |
+| `--no-layer3` | Skip continuation analysis entirely |
+| `--api-key` | API key for DNA-GPT continuation analysis |
+| `--provider` | LLM provider: `anthropic` or `openai` (default: anthropic) |
+| `--mode` | Detection mode: `task_prompt`, `generic_aigt`, or `auto` (default: auto) |
 | `--collect PATH` | Append scored results to JSONL for baseline accumulation |
 | `--analyze-baselines JSONL` | Compute percentile distributions from accumulated data |
-| `--baselines-csv PATH` | Output path for baseline analysis CSV |
+| `--calibrate JSONL` | Build calibration table from labeled baselines |
+| `--cal-table JSON` | Path to calibration table JSON |
 
 ### Python API
 
 ```python
-import llm_detector_v0532 as detector
+from llm_detector import analyze_prompt
 
-result = detector.analyze_prompt(
+result = analyze_prompt(
     text="You are a board-certified pharmacist. Analyze the following...",
     task_id="task_001",
     occupation="pharmacist",
     attempter="worker_42",
 )
 
-print(result['determination'])   # RED / AMBER / YELLOW / GREEN
-print(result['reason'])          # Primary signal description
-print(result['confidence'])      # 0.0 - 1.0
+print(result['determination'])       # RED / AMBER / YELLOW / GREEN
+print(result['reason'])              # Primary signal description
+print(result['confidence'])          # 0.0 - 1.0
 print(result['supporting_signals'])  # List of other signals that fired
 
 # Layer-level diagnostics
-print(result['l26_prompt_spec'])  # PSI score
-print(result['l26_total_spec'])   # Combined tech + prompt spec
-print(result['l27_idi'])          # Instruction Density Index
-print(result['l25_composite'])    # Prompt-engineering composite
+print(result['voice_dissonance_vsd'])            # Voice-Specification Dissonance
+print(result['prompt_signature_composite'])      # Prompt signature composite
+print(result['instruction_density_idi'])         # Instruction Density Index
 
 # Cross-submission similarity (batch mode)
-results = [detector.analyze_prompt(t['prompt'], ...) for t in tasks]
+from llm_detector import analyze_similarity
+results = [analyze_prompt(t['prompt'], ...) for t in tasks]
 text_map = {r['task_id']: t['prompt'] for r, t in zip(results, tasks)}
-flags = detector.analyze_similarity(results, text_map)
+flags = analyze_similarity(results, text_map)
 ```
-
-## Cross-Submission Similarity Analysis
-
-When processing multiple submissions (batch mode), the pipeline runs pairwise similarity analysis across different attempters to detect copied or templated submissions. Uses both Jaccard text similarity and structural feature similarity (layer scores as vectors). Flags pairs where the same text or structural profile appears across different contributors.
-
-## Baseline Collection
-
-The pipeline supports longitudinal threshold calibration through baseline accumulation:
-
-```bash
-# Accumulate data across runs
-python llm_detector_v0532.py batch1.xlsx --collect baselines.jsonl
-python llm_detector_v0532.py batch2.xlsx --collect baselines.jsonl
-
-# Analyze accumulated distributions
-python llm_detector_v0532.py --analyze-baselines baselines.jsonl --baselines-csv report.csv
-```
-
-This exports per-occupation percentile distributions for all layer scores, enabling data-driven threshold tuning as more labeled data accumulates.
 
 ## Testing
 
-The regression test harness validates that changes don't break existing behavior:
-
 ```bash
-python test_regression_v0532.py
+python tests/test_pipeline.py
+python tests/test_analyzers.py
+python tests/test_continuation_local.py
+python tests/test_fusion.py
+python tests/test_normalize.py
 ```
-
-12 tests covering smoke tests (known LLM/human texts), aggregation priority ordering, and cross-submission similarity logic.
 
 ## Design Principles
 
@@ -171,24 +203,11 @@ python test_regression_v0532.py
 
 **No single-layer vetoes.** Every layer can be defeated individually. The convergence floor ensures that when multiple layers whisper, the system still listens.
 
-**Voice gate preserves specificity.** VSD requires actual casual voice absence, not just specification presence. A human writing formal text naturally varies more than an LLM generating sterile specifications.
+**Voice gate preserves specificity.** Voice Dissonance requires actual casual voice absence, not just specification presence. A human writing formal text naturally varies more than an LLM generating sterile specifications.
 
-**Diagnostic layers inform but don't trigger.** Layer 2 fingerprints participate in convergence and similarity analysis but don't fire standalone signals — the false positive rate on individual vocabulary items is too high.
+**Diagnostic layers inform but don't trigger.** Fingerprint analysis participates in convergence and similarity analysis but doesn't fire standalone signals — the false positive rate on individual vocabulary items is too high.
 
 **Audit trail by default.** Every determination includes the primary signal, all supporting signals, and full layer-level diagnostics. Nothing is hidden from the reviewer.
-
-## Version History
-
-| Version | Key Changes |
-|---------|-------------|
-| v0.53.2 | Prompt Specification Score (PSI), SSI relaxation, multi-layer convergence floor |
-| v0.53.1 | Layer 2 fingerprint expansion (27→120 words), tech_parens whitelist, reason bundling |
-| v0.53 | Cross-submission similarity analysis, baseline collection framework, regression harness |
-| v0.52.2 | Specification Convergence bonus, SSI supplementary check |
-| v0.52.1 | IDI priority fix, constraint pattern boundary fix, CSV fillna |
-| v0.52 | Expanded constraint frames, IDI layer, SSI |
-| v0.51 | Bug fixes (casual markers, preamble anchors, em-dash regex, spaCy sentencizer) |
-| v0.5 | Initial release (L0, L2, L2.5, L2.6) |
 
 ## License
 
