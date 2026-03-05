@@ -5,6 +5,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to build from"
+        required: false
+        default: "main"
 
 permissions:
   contents: write
