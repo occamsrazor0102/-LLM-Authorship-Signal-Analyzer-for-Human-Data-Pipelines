@@ -66,9 +66,12 @@ def _dna_call_anthropic(prefix, continuation_length, api_key,
     return continuations
 
 
+DNA_GPT_STORED_PROMPT_ID = 'pmpt_69a8ff3fd48081938b2de58954245ebf0f4f01733906fee0'
+
+
 def _dna_call_openai(prefix, continuation_length, api_key,
                      model='gpt-4o-mini', n_samples=3, temperature=0.7):
-    """Generate continuations using OpenAI API."""
+    """Generate continuations using OpenAI Responses API with stored prompt."""
     try:
         import openai
     except ImportError:
@@ -77,12 +80,17 @@ def _dna_call_openai(prefix, continuation_length, api_key,
     continuations = []
     max_tokens = min(max(continuation_length * 2, 200), 4096)
     for _ in range(n_samples):
-        resp = client.chat.completions.create(
-            model=model, max_tokens=max_tokens, temperature=temperature,
-            messages=[{"role": "user",
-                       "content": f"Continue the following text naturally, maintaining the same style, tone, and topic. Do not add any preamble or meta-commentary — just continue writing:\n\n{prefix}"}]
+        resp = client.responses.create(
+            model=model,
+            max_output_tokens=max_tokens,
+            temperature=temperature,
+            instructions={
+                "type": "stored_prompt",
+                "id": DNA_GPT_STORED_PROMPT_ID,
+            },
+            input=prefix,
         )
-        continuations.append(resp.choices[0].message.content if resp.choices else "")
+        continuations.append(resp.output_text or "")
     return continuations
 
 
