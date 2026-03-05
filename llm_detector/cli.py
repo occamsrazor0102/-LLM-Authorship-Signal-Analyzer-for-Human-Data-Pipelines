@@ -4,6 +4,8 @@ import os
 import argparse
 from collections import Counter, defaultdict
 
+import sys
+
 import pandas as pd
 
 from llm_detector.pipeline import analyze_prompt
@@ -13,6 +15,11 @@ from llm_detector.calibration import (
 from llm_detector.baselines import analyze_baselines, collect_baselines
 from llm_detector.similarity import analyze_similarity, print_similarity_report
 from llm_detector.io import load_xlsx, load_csv, load_pdf
+
+
+def _is_frozen():
+    """Check if running as a PyInstaller bundle."""
+    return getattr(sys, 'frozen', False)
 
 
 def print_result(r, verbose=False):
@@ -170,6 +177,10 @@ def main():
         return
 
     if not args.input:
+        if _is_frozen():
+            from llm_detector.gui import launch_gui
+            launch_gui()
+            return
         parser.print_help()
         return
 
@@ -276,6 +287,12 @@ def main():
 
     if args.collect:
         collect_baselines(results, args.collect)
+
+
+def main_gui():
+    """Entry point that always launches the GUI (for gui-scripts / executable)."""
+    from llm_detector.gui import launch_gui
+    launch_gui()
 
 
 if __name__ == '__main__':

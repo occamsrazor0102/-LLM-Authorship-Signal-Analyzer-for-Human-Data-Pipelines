@@ -2,25 +2,26 @@
 pandas
 openpyxl
 
-# Optional: improves sentence segmentation (no model download needed)
+# API providers for DNA-GPT continuation analysis
+anthropic
+openai
+
+# Optional: improves sentence segmentation
 # spacy
 
-# Optional: enables Layer 3.1 with Anthropic API
-# anthropic
-
-# Optional: enables Layer 3.1 with OpenAI API
-# openai
-
-# v0.61: Semantic Vector Analysis (Layer 2.8)
+# Optional: semantic vector analysis (Layer 2.8)
 # sentence-transformers
 # scikit-learn
 
-# v0.61: Local Perplexity Scoring
+# Optional: local perplexity scoring
 # transformers
 # torch
 
-# v0.61: Robust Text Normalization
+# Optional: robust text encoding repair
 # ftfy
 
-# v0.61: PDF Input Support
+# Optional: PDF input support
 # pypdf
+
+# Bundling as standalone executable
+# pyinstaller
