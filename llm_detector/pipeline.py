@@ -3,8 +3,8 @@
 from llm_detector.compat import HAS_SEMANTIC, HAS_PERPLEXITY
 from llm_detector.normalize import normalize_text
 from llm_detector.language_gate import check_language_support
-from llm_detector.analyzers.preamble import run_preamble
-from llm_detector.analyzers.fingerprint import run_fingerprint
+from llm_detector.analyzers.preamble import run_preamble, run_preamble_spans
+from llm_detector.analyzers.fingerprint import run_fingerprint, run_fingerprint_spans
 from llm_detector.lexicon.integration import (
     run_prompt_signature_enhanced,
     run_voice_dissonance_enhanced,
@@ -17,7 +17,8 @@ from llm_detector.analyzers.continuation_local import run_continuation_local_mul
 from llm_detector.analyzers.perplexity import run_perplexity
 from llm_detector.analyzers.token_cohesiveness import run_token_cohesiveness
 from llm_detector.analyzers.stylometry import mask_topical_content, extract_stylometric_features
-from llm_detector.analyzers.windowing import score_windows, score_surprisal_windows
+from llm_detector.analyzers.windowing import score_windows, score_surprisal_windows, get_hot_window_spans
+from llm_detector.lexicon.packs import score_all_pack_spans
 from llm_detector.fusion import determine
 from llm_detector.calibration import apply_calibration
 
@@ -79,6 +80,27 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
     # Windowed scoring
     window_result = score_windows(text_for_analysis)
 
+    # Span-level explainability ("X-Ray" view)
+    xray_spans = []
+    xray_spans.extend(
+        {'start': s, 'end': e, 'text': t, 'source': n, 'label': sev, 'type': 'preamble'}
+        for s, e, t, n, sev in run_preamble_spans(text_for_analysis)
+    )
+    xray_spans.extend(
+        {'start': s, 'end': e, 'text': t, 'source': 'fingerprint', 'label': w, 'type': 'fingerprint'}
+        for s, e, t, _, w in run_fingerprint_spans(text_for_analysis)
+    )
+    xray_spans.extend(
+        {'start': s, 'end': e, 'text': t, 'source': pn, 'label': pn, 'type': 'lexicon'}
+        for s, e, t, pn, _w in score_all_pack_spans(text_for_analysis)
+    )
+    for hw in get_hot_window_spans(text_for_analysis):
+        xray_spans.append({
+            'start': hw[0], 'end': hw[1], 'text': '', 'source': 'hot_window',
+            'label': f'score={hw[2]:.2f}', 'type': 'window',
+        })
+    xray_spans.sort(key=lambda x: x['start'])
+
     # Evidence fusion
     det, reason, confidence, channel_details = determine(
         preamble_score, preamble_severity, prompt_sig, voice_dis, instr_density, word_count,
@@ -139,6 +161,8 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         'channel_details': channel_details,
         'audit_trail': audit_trail,
         'pipeline_version': 'v0.65',
+        # X-Ray spans
+        'xray_spans': xray_spans,
         # Normalization
         'norm_obfuscation_delta': norm_report.get('obfuscation_delta', 0.0),
         'norm_invisible_chars': norm_report.get('invisible_chars', 0),

@@ -48,3 +48,20 @@ def run_preamble(text):
 
     score = {'CRITICAL': 0.99, 'HIGH': 0.75, 'MEDIUM': 0.50, 'NONE': 0.0}[severity]
     return score, severity, hits
+
+
+def run_preamble_spans(text):
+    """Return character-level spans for preamble pattern hits.
+
+    Returns list of (start_char, end_char, matched_text, pattern_name, severity).
+    """
+    first_500 = text[:500]
+    spans = []
+
+    for pat, name, sev in PREAMBLE_PATTERNS:
+        search_text = first_500 if name in ('assistant_ack', 'artifact_delivery', 'first_person_creation', 'cot_leakage') else text
+        for m in re.finditer(pat, search_text):
+            spans.append((m.start(), m.end(), m.group(), name, sev))
+
+    spans.sort(key=lambda s: s[0])
+    return spans

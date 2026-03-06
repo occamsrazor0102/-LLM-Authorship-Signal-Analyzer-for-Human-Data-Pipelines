@@ -718,6 +718,67 @@ def score_packs(text: str, pack_names: Optional[List[str]] = None,
     return {name: score_pack(text, name, n_sentences) for name in names}
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# SPAN-LEVEL EXPLAINABILITY ("X-RAY" VIEW)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def score_pack_spans(text: str, pack_name: str) -> List[Tuple[int, int, str, str, float]]:
+    """Return character-level spans for all regex/keyword hits in a pack.
+
+    Args:
+        text: The original (normalized) text.
+        pack_name: Key in PACK_REGISTRY.
+
+    Returns:
+        List of (start_char, end_char, matched_text, pack_name, weight) tuples,
+        sorted by start_char.
+    """
+    compiled = _COMPILED_PACKS[pack_name]
+    spans = []
+
+    # Pattern hits (with weights)
+    for compiled_re, weight in compiled:
+        for m in compiled_re.finditer(text):
+            spans.append((m.start(), m.end(), m.group(), pack_name, weight))
+
+    # Keyword hits (weight = 1.0 for plain keywords)
+    kw_re = _KEYWORD_RES.get(pack_name)
+    if kw_re:
+        for m in kw_re.finditer(text):
+            # Skip if already covered by a pattern span at same position
+            if not any(s[0] <= m.start() and s[1] >= m.end() for s in spans):
+                spans.append((m.start(), m.end(), m.group(), pack_name, 1.0))
+
+    # Uppercase keyword hits (weight = 2.0 for normative forms)
+    uc_re = _UPPERCASE_RES.get(pack_name)
+    if uc_re:
+        for m in uc_re.finditer(text):
+            if not any(s[0] <= m.start() and s[1] >= m.end() for s in spans):
+                spans.append((m.start(), m.end(), m.group(), pack_name, 2.0))
+
+    spans.sort(key=lambda s: s[0])
+    return spans
+
+
+def score_all_pack_spans(text: str, pack_names: Optional[List[str]] = None
+                         ) -> List[Tuple[int, int, str, str, float]]:
+    """Return merged character-level spans across multiple packs.
+
+    Args:
+        text: The original (normalized) text.
+        pack_names: Pack names to scan. If None, scans all registered packs.
+
+    Returns:
+        Sorted list of (start_char, end_char, matched_text, pack_name, weight).
+    """
+    names = pack_names or list(PACK_REGISTRY.keys())
+    all_spans = []
+    for name in names:
+        all_spans.extend(score_pack_spans(text, name))
+    all_spans.sort(key=lambda s: s[0])
+    return all_spans
+
+
 def get_packs_for_layer(target_layer: str) -> List[str]:
     """Get pack names that feed a specific pipeline layer."""
     return [name for name, pack in PACK_REGISTRY.items()

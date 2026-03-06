@@ -7,7 +7,7 @@ import re
 import zlib
 import statistics
 
-from llm_detector.text_utils import ENGLISH_FUNCTION_WORDS, get_sentences
+from llm_detector.text_utils import ENGLISH_FUNCTION_WORDS, get_sentences, get_sentence_spans
 from llm_detector.analyzers.self_similarity import _FORMULAIC_PATTERNS, _TRANSITION, _POWER_ADJ
 
 
@@ -248,3 +248,33 @@ def score_windows(text, window_size=5, stride=2):
         'comp_trajectory_cv': round(comp_trajectory_cv, 4),
         'changepoint': changepoint,
     }
+
+
+def get_hot_window_spans(text, threshold=0.30, window_size=5, stride=2):
+    """Return character-level spans for hot (high-scoring) sentence windows.
+
+    Args:
+        text: Original text.
+        threshold: Minimum window score to include (default 0.30).
+        window_size: Sentences per window.
+        stride: Sentence stride.
+
+    Returns list of (start_char, end_char, score, 'hot_window', window_index).
+    """
+    sent_spans = get_sentence_spans(text)
+    if len(sent_spans) < window_size:
+        return []
+
+    result = score_windows(text, window_size=window_size, stride=stride)
+    spans = []
+
+    for w in result['windows']:
+        if w['score'] >= threshold:
+            w_start = w['start']
+            w_end = min(w['end'] - 1, len(sent_spans) - 1)
+            if w_start < len(sent_spans) and w_end < len(sent_spans):
+                char_start = sent_spans[w_start][1]
+                char_end = sent_spans[w_end][2]
+                spans.append((char_start, char_end, w['score'], 'hot_window', w_start))
+
+    return spans
