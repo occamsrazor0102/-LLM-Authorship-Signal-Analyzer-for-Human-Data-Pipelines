@@ -6,6 +6,8 @@ A stylometric detection pipeline that identifies LLM-generated or LLM-assisted t
 
 - Chain-of-thought leakage detection (`<think>` tags, reasoning-model phrases)
 - DivEye-inspired surprisal variance and volatility decay in perplexity analysis
+- Multi-truncation stability and cross-prefix surprisal curves (v0.65)
+- Token cohesiveness (TOCSIN) and CUSUM changepoint detection (v0.65)
 - Simpler file structure optimized for single-file distribution
 
 ## The Problem
@@ -32,6 +34,8 @@ The pipeline analyzes text across multiple independent layers, each targeting a 
 | **Continuation (API)** | `analyzers/continuation_api.py` | DNA-GPT divergent continuation analysis via Anthropic/OpenAI API |
 | **Continuation (Local)** | `analyzers/continuation_local.py` | Zero-LLM DNA-GPT proxy using backoff n-gram language model |
 | **Perplexity** | `analyzers/perplexity.py` | distilgpt2-based perplexity scoring |
+| **Token Cohesiveness** | `analyzers/token_cohesiveness.py` | TOCSIN: semantic fragility under random word deletion |
+| **Windowing** | `analyzers/windowing.py` | Sentence-window analysis with FW trajectory, compression profile, and CUSUM changepoint detection |
 
 ### Scoring Channels
 
@@ -40,9 +44,9 @@ Signals are organized into four independent scoring channels:
 | Channel | Module | Primary Layers |
 |---------|--------|----------------|
 | **Prompt Structure** | `channels/prompt_structure.py` | Preamble, Prompt Signature, Voice Dissonance, Instruction Density |
-| **Stylometric** | `channels/stylometric.py` | Self-Similarity, Semantic Resonance, Perplexity, Fingerprint |
-| **Continuation** | `channels/continuation.py` | Continuation API or Continuation Local |
-| **Windowed** | `channels/windowed.py` | Sentence-window scoring |
+| **Stylometric** | `channels/stylometric.py` | Self-Similarity, Semantic Resonance, Perplexity, Fingerprint, TOCSIN |
+| **Continuation** | `channels/continuation.py` | Continuation API or Local (multi-truncation, NCD matrix) |
+| **Windowed** | `channels/windowed.py` | Sentence-window scoring (FW trajectory, compression profile, changepoint) |
 
 ### Lexicon Pack System
 
@@ -55,6 +59,23 @@ The pipeline includes 16 externalized vocabulary families organized by semantic 
 | Exec-Spec | gherkin, rubric, acceptance | Prompt Signature |
 | Instruction | task_verbs, value_domain | Instruction Density |
 | Format | format_markup | Voice Dissonance |
+
+### v0.65 Detection Signals
+
+Ten new signals added in v0.65, exploiting temporal uniformity and compressibility patterns:
+
+| Signal | Channel | Description |
+|--------|---------|-------------|
+| Multi-truncation stability | Continuation | Composite score variance across γ=0.3/0.5/0.7 truncation points |
+| Cross-prefix surprisal curve | Continuation | How predictability improves with more context (human: 15–40%, AI: 0–10%) |
+| Multi-segment NCD matrix | Continuation | Pairwise compression distance across 4 text segments |
+| Function word trajectory | Windowed | CV of function word ratio across sentence windows |
+| Windowed compression profile | Windowed | Per-window zlib compression ratio uniformity |
+| CUSUM changepoint | Windowed | Detects human→AI transition boundaries via effect size |
+| Surprisal trajectory | Windowed | Windowed token-level surprisal statistics (requires `transformers`) |
+| Structural compression delta (s13) | Self-Similarity | Original vs word-shuffled compression ratio |
+| Zlib-normalized perplexity | Perplexity | PPL × compression ratio compound signal |
+| Token cohesiveness (TOCSIN) | Stylometric | Semantic fragility under random word deletion (requires `sentence-transformers`) |
 
 ### Detection Modes
 
@@ -111,6 +132,7 @@ llm_detector/                  # Main package
         perplexity.py
         stylometry.py
         windowing.py
+        token_cohesiveness.py
 
     channels/                  # Channel scoring
         prompt_structure.py
@@ -233,9 +255,15 @@ flags = analyze_similarity(results, text_map)
 ## Testing
 
 ```bash
+# Run all tests:
+for f in tests/test_*.py; do python "$f"; done
+
+# Individual test files:
 python tests/test_pipeline.py
 python tests/test_analyzers.py
 python tests/test_continuation_local.py
+python tests/test_windowed.py
+python tests/test_token_cohesiveness.py
 python tests/test_fusion.py
 python tests/test_normalize.py
 ```
