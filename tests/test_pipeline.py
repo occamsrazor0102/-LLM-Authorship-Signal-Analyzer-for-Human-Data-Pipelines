@@ -62,6 +62,8 @@ def test_pipeline_v061():
     check("semantic_resonance_determination in result", 'semantic_resonance_determination' in r)
     check("perplexity_value in result", 'perplexity_value' in r)
     check("perplexity_determination in result", 'perplexity_determination' in r)
+    check("surprisal_variance in result", 'surprisal_variance' in r)
+    check("volatility_decay_ratio in result", 'volatility_decay_ratio' in r)
 
     # Audit trail
     at = r.get('audit_trail', {})

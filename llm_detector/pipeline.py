@@ -223,6 +223,10 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         'perplexity_value': ppl.get('perplexity', 0.0),
         'perplexity_determination': ppl.get('determination'),
         'perplexity_confidence': ppl.get('confidence', 0.0),
+        'surprisal_variance': ppl.get('surprisal_variance', 0.0),
+        'surprisal_first_half_var': ppl.get('surprisal_first_half_var', 0.0),
+        'surprisal_second_half_var': ppl.get('surprisal_second_half_var', 0.0),
+        'volatility_decay_ratio': ppl.get('volatility_decay_ratio', 1.0),
     })
 
     # Self-similarity (NSSI)

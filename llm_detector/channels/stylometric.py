@@ -87,6 +87,22 @@ def score_stylometric(fingerprint_score, self_sim, voice_dis=None, semantic=None
                 severity = 'YELLOW'
                 parts.append(f"PPL={ppl_val:.0f}(YELLOW)")
 
+    # Surprisal variance & volatility decay: supporting signal
+    # Low variance + high decay ratio signals AI-generated uniformity
+    if ppl:
+        s_var = ppl.get('surprisal_variance', 0.0)
+        v_decay = ppl.get('volatility_decay_ratio', 1.0)
+        if s_var > 0:
+            sub['surprisal_variance'] = s_var
+            sub['volatility_decay_ratio'] = v_decay
+            if severity != 'GREEN' and s_var > 0:
+                if s_var < 2.0 and v_decay > 1.5:
+                    score = min(score + 0.08, 1.0)
+                    parts.append(f"SurpVar={s_var:.2f}/Decay={v_decay:.2f}(boost)")
+                elif s_var < 3.0 and v_decay > 1.2:
+                    score = min(score + 0.04, 1.0)
+                    parts.append(f"SurpVar={s_var:.2f}/Decay={v_decay:.2f}(mild)")
+
     # Fingerprints add supporting weight if any stylometric signal is active
     if fingerprint_score >= 0.30 and severity != 'GREEN':
         score = min(score + 0.10, 1.0)
