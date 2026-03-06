@@ -6,7 +6,7 @@ Combines NSSI, semantic resonance, perplexity, and fingerprints.
 from llm_detector.channels import ChannelResult
 
 
-def score_stylometric(fingerprint_score, self_sim, voice_dis=None, semantic=None, ppl=None):
+def score_stylometric(fingerprint_score, self_sim, voice_dis=None, semantic=None, ppl=None, tocsin=None):
     """Score stylometric channel. Returns ChannelResult."""
     sub = {}
     score = 0.0
@@ -102,6 +102,24 @@ def score_stylometric(fingerprint_score, self_sim, voice_dis=None, semantic=None
                 elif s_var < 3.0 and v_decay > 1.2:
                     score = min(score + 0.04, 1.0)
                     parts.append(f"SurpVar={s_var:.2f}/Decay={v_decay:.2f}(mild)")
+
+    # Token cohesiveness (TOCSIN): supporting signal
+    if tocsin and tocsin.get('determination'):
+        tocsin_det = tocsin['determination']
+        sub['cohesiveness'] = tocsin.get('cohesiveness', 0)
+
+        if tocsin_det == 'AMBER':
+            if severity in ('RED', 'AMBER'):
+                score = min(score + 0.10, 1.0)
+                parts.append(f"TOCSIN=AMBER(coh={tocsin['cohesiveness']:.4f},boost)")
+            else:
+                score = max(score, tocsin.get('confidence', 0.50))
+                severity = max(severity, 'AMBER',
+                               key=lambda s: ChannelResult.SEV_ORDER.get(s, 0))
+                parts.append(f"TOCSIN=AMBER(coh={tocsin['cohesiveness']:.4f})")
+        elif tocsin_det == 'YELLOW' and severity != 'GREEN':
+            score = min(score + 0.05, 1.0)
+            parts.append(f"TOCSIN=YELLOW(supporting)")
 
     # Fingerprints add supporting weight if any stylometric signal is active
     if fingerprint_score >= 0.30 and severity != 'GREEN':

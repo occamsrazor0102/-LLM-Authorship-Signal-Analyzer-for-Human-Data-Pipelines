@@ -2,6 +2,12 @@
 
 A stylometric detection pipeline that identifies LLM-generated or LLM-assisted task prompts submitted through human data collection workflows. Designed for quality assurance in benchmark construction (GDPval-style evaluation tasks), clinical education assessments, and any pipeline where humans are expected to author original prompts but may submit LLM-generated content instead.
 
+### Monolith Repo Only
+
+- Chain-of-thought leakage detection (`<think>` tags, reasoning-model phrases)
+- DivEye-inspired surprisal variance and volatility decay in perplexity analysis
+- Simpler file structure optimized for single-file distribution
+
 ## The Problem
 
 Human data pipelines — where workers author task prompts, evaluation scenarios, or assessment items — are vulnerable to a specific failure mode: a contributor uses an LLM to generate their submission rather than writing it themselves. This degrades data quality because LLM-generated prompts exhibit systematic biases in structure, vocabulary, and specification patterns that contaminate the resulting benchmark.

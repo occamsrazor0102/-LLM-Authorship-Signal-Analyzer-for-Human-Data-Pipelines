@@ -10,8 +10,8 @@ import zlib
 import statistics
 from collections import Counter
 
-# -- Formulaic Academic Phrases --
-_FORMULAIC_PATTERNS = [
+# -- Formulaic Academic Phrases (pre-compiled) --
+_FORMULAIC_PATTERNS_RAW = [
     (r'\bthis\s+(?:report|analysis|paper|study|section|document)\s+(?:provides?|presents?|examines?|dissects?|identifies?|evaluates?|proposes?|outlines?)\b', 1.5),
     (r'\b(?:it\s+is\s+(?:worth|important|imperative|crucial|essential|critical)\s+(?:noting|to\s+note|to\s+acknowledge|to\s+emphasize|to\s+recognize))\b', 2.0),
     (r'\b(?:to\s+address\s+this\s+(?:gap|issue|problem|challenge|limitation|deficiency|concern|shortcoming))\b', 1.5),
@@ -31,6 +31,11 @@ _FORMULAIC_PATTERNS = [
     (r'\b(?:the\s+path\s+forward\s+(?:is|requires|demands|involves))\b', 1.5),
     (r'\b(?:(?:unless|until)\s+the\s+(?:community|industry|field|sector)\s+(?:adopts?|embraces?|commits?))\b', 2.0),
     (r'\b(?:the\s+(?:immediate|long.term|strategic)\s+(?:future|imperative|priority|solution)\s+(?:belongs?\s+to|lies?\s+in|requires?))\b', 2.0),
+]
+
+_FORMULAIC_PATTERNS = [
+    (re.compile(pat, re.IGNORECASE), weight)
+    for pat, weight in _FORMULAIC_PATTERNS_RAW
 ]
 
 # -- Power Adjectives --
@@ -112,13 +117,14 @@ def run_self_similarity(text):
             'comp_ratio': 0.0, 'hapax_ratio': 0.0,
             'hapax_count': 0, 'unique_words': 0,
             'word_count': word_count, 'sentence_count': n_sents,
+            'shuffled_comp_ratio': 0.0, 'structural_compression_delta': 0.0,
         }
 
     # 1. Formulaic phrase density
     formulaic_raw = 0
     formulaic_weighted = 0.0
-    for pattern, weight in _FORMULAIC_PATTERNS:
-        hits = len(re.findall(pattern, text, re.I))
+    for compiled_pat, weight in _FORMULAIC_PATTERNS:
+        hits = len(compiled_pat.findall(text))
         formulaic_raw += hits
         formulaic_weighted += hits * weight
     formulaic_density = formulaic_raw / n_sents
@@ -231,6 +237,22 @@ def run_self_similarity(text):
         s12 = min((0.45 - hapax_ratio) / 0.15, 1.0)
     if s12 > 0: signals.append(('hapax_deficit', s12))
 
+    # s13: Structural compression delta (original vs shuffled) -- FEAT 5
+    import random as _random
+    shuffled_words = list(clean_words)
+    _random.seed(42)
+    _random.shuffle(shuffled_words)
+    shuffled_text = ' '.join(shuffled_words)
+    shuffled_bytes = shuffled_text.encode('utf-8')
+    shuffled_comp_len = len(zlib.compress(shuffled_bytes))
+    shuffled_comp_ratio = shuffled_comp_len / max(len(shuffled_bytes), 1)
+    structural_compression_delta = shuffled_comp_ratio - comp_ratio
+
+    s13 = 0.0
+    if structural_compression_delta < 0.03 and word_count >= 150:
+        s13 = min((0.03 - structural_compression_delta) / 0.02, 1.0)
+    if s13 > 0: signals.append(('low_structural_delta', s13))
+
     # -- Convergence scoring --
     n_active = len(signals)
     if n_active == 0:
@@ -283,4 +305,6 @@ def run_self_similarity(text):
         'hapax_count': hapax_count,
         'unique_words': unique_words,
         'word_count': word_count, 'sentence_count': n_sents,
+        'shuffled_comp_ratio': round(shuffled_comp_ratio, 4),
+        'structural_compression_delta': round(structural_compression_delta, 4),
     }

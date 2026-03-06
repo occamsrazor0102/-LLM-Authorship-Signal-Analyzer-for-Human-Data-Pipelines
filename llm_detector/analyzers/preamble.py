@@ -1,4 +1,9 @@
-"""Preamble detection -- catches LLM output artifacts like 'Sure, here is...'"""
+"""Preamble detection -- catches LLM output artifacts.
+
+Detects: assistant acknowledgments, artifact delivery frames, first-person
+creation claims, meta-design language, style masking, editorial meta-commentary,
+and Chain-of-Thought leakage from Large Reasoning Models (DeepSeek-R1, o1/o3).
+"""
 
 import re
 
@@ -11,11 +16,16 @@ PREAMBLE_PATTERNS = [
     (r"(?i)^\s*[\"']?(I'?ve |I have |I'?ll |let me )(created?|drafted?|prepared?|written|designed|built|put together)", "first_person_creation", "CRITICAL"),
     (r"(?i)(natural workplace style|sounds? like a real|human[- ]issued|reads? like a human)", "style_masking", "HIGH"),
     (r"(?i)notes on what I (fixed|changed|cleaned|updated|revised)", "editorial_meta", "HIGH"),
-    # Chain-of-thought leakage: reasoning model artifacts left in output
+    # Chain-of-thought leakage from Large Reasoning Models (DeepSeek-R1, o1/o3)
     (r"<think>", "cot_leakage", "CRITICAL"),
     (r"</think>", "cot_leakage", "CRITICAL"),
-    (r"(?i)\blet me (?:rethink|reconsider|recalculate|re-examine|think about this)\b", "cot_reasoning", "HIGH"),
-    (r"(?i)\bwait,?\s+(?:actually|no|let me)", "cot_self_correction", "HIGH"),
+    (r"<reasoning>", "cot_leakage", "CRITICAL"),
+    (r"</reasoning>", "cot_leakage", "CRITICAL"),
+    (r"(?i)\blet me (?:rethink|reconsider|recalculate|re-examine|verify|double[- ]check)\b", "cot_reasoning", "HIGH"),
+    (r"(?i)\bwait,?\s+(?:actually|no|let me|that'?s not)", "cot_self_correction", "HIGH"),
+    (r"(?i)\bhmm,?\s+(?:let me|on second thought|actually)", "cot_self_correction", "HIGH"),
+    (r"(?i)\bmy (?:final|revised|updated) answer (?:is|should|would)\b", "cot_conclusion", "HIGH"),
+    (r"(?i)\bstep \d+\s*:", "cot_step_numbering", "MEDIUM"),
 ]
 
 
@@ -26,7 +36,7 @@ def run_preamble(text):
     severity = 'NONE'
 
     for pat, name, sev in PREAMBLE_PATTERNS:
-        search_text = first_500 if name in ('assistant_ack', 'artifact_delivery', 'first_person_creation') else text
+        search_text = first_500 if name in ('assistant_ack', 'artifact_delivery', 'first_person_creation', 'cot_leakage') else text
         if re.search(pat, search_text):
             hits.append((name, sev))
             if sev == 'CRITICAL':

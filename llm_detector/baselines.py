@@ -26,6 +26,13 @@ _BASELINE_FIELDS = [
     'calibrated_confidence', 'conformity_level', 'calibration_stratum',
     'pack_constraint_score', 'pack_exec_spec_score', 'pack_schema_score',
     'pack_active_families', 'pack_prompt_boost', 'pack_idi_boost',
+    'perplexity_value', 'surprisal_variance', 'volatility_decay_ratio',
+    'continuation_composite_stability', 'continuation_composite_variance',
+    'continuation_improvement_rate', 'continuation_ncd_matrix_variance',
+    'window_fw_trajectory_cv', 'window_comp_trajectory_cv',
+    'tocsin_cohesiveness', 'perplexity_zlib_normalized_ppl',
+    'self_similarity_structural_compression_delta',
+    'surprisal_trajectory_cv', 'surprisal_stationarity',
 ]
 
 
@@ -38,7 +45,7 @@ def collect_baselines(results, output_path):
         for r in results:
             record = {k: r.get(k) for k in _BASELINE_FIELDS}
             record['_timestamp'] = timestamp
-            record['_version'] = 'v0.61'
+            record['_version'] = 'v0.65'
             wc = r.get('word_count', 0)
             if wc < 100:
                 record['length_bin'] = 'short'

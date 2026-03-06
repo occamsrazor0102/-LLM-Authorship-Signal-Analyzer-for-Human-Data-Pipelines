@@ -13,10 +13,11 @@ from llm_detector.lexicon.integration import (
 from llm_detector.analyzers.semantic_resonance import run_semantic_resonance
 from llm_detector.analyzers.self_similarity import run_self_similarity
 from llm_detector.analyzers.continuation_api import run_continuation_api
-from llm_detector.analyzers.continuation_local import run_continuation_local
+from llm_detector.analyzers.continuation_local import run_continuation_local_multi
 from llm_detector.analyzers.perplexity import run_perplexity
+from llm_detector.analyzers.token_cohesiveness import run_token_cohesiveness
 from llm_detector.analyzers.stylometry import mask_topical_content, extract_stylometric_features
-from llm_detector.analyzers.windowing import score_windows
+from llm_detector.analyzers.windowing import score_windows, score_surprisal_windows
 from llm_detector.fusion import determine
 from llm_detector.calibration import apply_calibration
 
@@ -26,7 +27,7 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
                    dna_model=None, dna_samples=3,
                    ground_truth=None, language=None, domain=None,
                    mode='auto', cal_table=None):
-    """Run full v0.61 pipeline on a single prompt. Returns result dict."""
+    """Run full v0.65 pipeline on a single prompt. Returns result dict."""
     # Normalization pre-pass
     normalized_text, norm_report = normalize_text(text)
     word_count_raw = len(text.split())
@@ -59,10 +60,17 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
             model=dna_model, n_samples=dna_samples,
         )
     elif run_l3:
-        cont_result = run_continuation_local(text_for_analysis)
+        cont_result = run_continuation_local_multi(text_for_analysis)
 
     semantic = run_semantic_resonance(text_for_analysis)
     ppl = run_perplexity(text_for_analysis)
+    tocsin = run_token_cohesiveness(text_for_analysis)
+
+    # FEAT 10: Surprisal trajectory from per-token losses
+    surprisal_traj = {}
+    token_losses = ppl.get('token_losses')
+    if token_losses:
+        surprisal_traj = score_surprisal_windows(token_losses)
 
     # Topic-scrubbed stylometry
     masked_text, mask_count = mask_topical_content(text_for_analysis)
@@ -78,6 +86,7 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         lang_gate=lang_gate, norm_report=norm_report,
         mode=mode, fingerprint_score=fingerprint_score,
         semantic=semantic, ppl=ppl,
+        tocsin=tocsin,
         window_result=window_result,
     )
 
@@ -95,7 +104,7 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
 
     # Audit trail
     audit_trail = {
-        'pipeline_version': 'v0.61',
+        'pipeline_version': 'v0.65',
         'mode_resolved': channel_details.get('mode', mode),
         'channels': channel_details.get('channels', {}),
         'fairness_gate': {
@@ -129,6 +138,7 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         'mode': channel_details.get('mode', mode),
         'channel_details': channel_details,
         'audit_trail': audit_trail,
+        'pipeline_version': 'v0.65',
         # Normalization
         'norm_obfuscation_delta': norm_report.get('obfuscation_delta', 0.0),
         'norm_invisible_chars': norm_report.get('invisible_chars', 0),
@@ -191,6 +201,10 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         'window_hot_span': window_result.get('hot_span_length', 0),
         'window_n_windows': window_result.get('n_windows', 0),
         'window_mixed_signal': window_result.get('mixed_signal', False),
+        'window_fw_trajectory_cv': window_result.get('fw_trajectory_cv', 0.0),
+        'window_comp_trajectory_mean': window_result.get('comp_trajectory_mean', 0.0),
+        'window_comp_trajectory_cv': window_result.get('comp_trajectory_cv', 0.0),
+        'window_changepoint': window_result.get('changepoint'),
         # Pack diagnostics
         'pack_constraint_score': prompt_sig.get('pack_constraint_score', 0.0),
         'pack_exec_spec_score': prompt_sig.get('pack_exec_spec_score', 0.0),
@@ -249,6 +263,8 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
             'self_similarity_hapax_ratio': self_sim.get('hapax_ratio', 0.0),
             'self_similarity_hapax_count': self_sim.get('hapax_count', 0),
             'self_similarity_unique_words': self_sim.get('unique_words', 0),
+            'self_similarity_shuffled_comp_ratio': self_sim.get('shuffled_comp_ratio', 0.0),
+            'self_similarity_structural_compression_delta': self_sim.get('structural_compression_delta', 0.0),
         })
     else:
         result.update({
@@ -261,6 +277,8 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
             'self_similarity_sent_length_cv': 0.0, 'self_similarity_comp_ratio': 0.0,
             'self_similarity_hapax_ratio': 0.0, 'self_similarity_hapax_count': 0,
             'self_similarity_unique_words': 0,
+            'self_similarity_shuffled_comp_ratio': 0.0,
+            'self_similarity_structural_compression_delta': 0.0,
         })
 
     # Continuation (DNA-GPT)
@@ -279,6 +297,12 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
             'continuation_repeat4': proxy.get('repeat4', 0.0),
             'continuation_ttr': proxy.get('ttr', 0.0),
             'continuation_composite': proxy.get('composite', 0.0),
+            'continuation_composite_variance': proxy.get('composite_variance', 0.0),
+            'continuation_composite_stability': proxy.get('composite_stability', 0.0),
+            'continuation_improvement_rate': proxy.get('improvement_rate', 0.0),
+            'continuation_ncd_matrix_mean': proxy.get('ncd_matrix_mean', 0.0),
+            'continuation_ncd_matrix_variance': proxy.get('ncd_matrix_variance', 0.0),
+            'continuation_ncd_matrix_min': proxy.get('ncd_matrix_min', 0.0),
         })
     else:
         result.update({
@@ -288,6 +312,32 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
             'continuation_ncd': 0.0, 'continuation_internal_overlap': 0.0,
             'continuation_cond_surprisal': 0.0, 'continuation_repeat4': 0.0,
             'continuation_ttr': 0.0, 'continuation_composite': 0.0,
+            'continuation_composite_variance': 0.0, 'continuation_composite_stability': 0.0,
+            'continuation_improvement_rate': 0.0,
+            'continuation_ncd_matrix_mean': 0.0, 'continuation_ncd_matrix_variance': 0.0,
+            'continuation_ncd_matrix_min': 0.0,
         })
+
+    # Token cohesiveness (TOCSIN)
+    result.update({
+        'tocsin_cohesiveness': tocsin.get('cohesiveness', 0.0),
+        'tocsin_cohesiveness_std': tocsin.get('cohesiveness_std', 0.0),
+        'tocsin_determination': tocsin.get('determination'),
+        'tocsin_confidence': tocsin.get('confidence', 0.0),
+    })
+
+    # Perplexity compound signals (FEAT 7)
+    result.update({
+        'perplexity_comp_ratio': ppl.get('comp_ratio', 0.0),
+        'perplexity_zlib_normalized_ppl': ppl.get('zlib_normalized_ppl', 0.0),
+        'perplexity_comp_ppl_ratio': ppl.get('comp_ppl_ratio', 0.0),
+    })
+
+    # Surprisal trajectory (FEAT 10)
+    result.update({
+        'surprisal_trajectory_cv': surprisal_traj.get('surprisal_trajectory_cv', 0.0),
+        'surprisal_var_of_var': surprisal_traj.get('surprisal_var_of_var', 0.0),
+        'surprisal_stationarity': surprisal_traj.get('surprisal_stationarity', 0.0),
+    })
 
     return result

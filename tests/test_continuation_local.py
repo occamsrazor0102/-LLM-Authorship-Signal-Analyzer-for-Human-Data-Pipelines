@@ -5,9 +5,10 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from llm_detector.analyzers.continuation_local import (
-    run_continuation_local, _BackoffNGramLM, _calculate_ncd,
+    run_continuation_local, run_continuation_local_multi,
+    _BackoffNGramLM, _calculate_ncd,
     _internal_ngram_overlap, _repeated_ngram_rate, _type_token_ratio,
-    _proxy_tokenize,
+    _proxy_tokenize, _multi_segment_ncd, _surprisal_improvement_curve,
 )
 from llm_detector.channels.continuation import score_continuation
 from tests.conftest import AI_TEXT, HUMAN_TEXT
@@ -172,6 +173,106 @@ def test_score_continuation_local():
           f"got: {ch_api.explanation}")
 
 
+def test_multi_truncation_stability():
+    print("\n-- MULTI-TRUNCATION STABILITY (FEAT 1) --")
+
+    ai_text = (
+        "The comprehensive analysis provides a thorough examination of the key factors. "
+        "Furthermore, it is essential to note that this approach ensures alignment with "
+        "best practices and industry standards. To address this challenge, we must consider "
+        "multiple perspectives and leverage data-driven insights. Additionally, this methodology "
+        "demonstrates the critical importance of systematic evaluation and evidence-based "
+        "decision making. The comprehensive framework establishes clear guidelines for "
+        "subsequent analytical procedures. Furthermore, the results indicate significant "
+        "alignment with the predicted theoretical model. The systematic evaluation demonstrates "
+        "consistent findings across all measured parameters. Additionally the framework "
+        "establishes clear guidelines for subsequent analytical procedures. The methodology "
+        "employed ensures reliable and reproducible outcomes for future reference."
+    )
+    r = run_continuation_local_multi(ai_text)
+    pf = r.get('proxy_features', {})
+    check("Multi: has multi_composites", 'multi_composites' in pf)
+    check("Multi: has composite_variance", 'composite_variance' in pf)
+    check("Multi: has composite_stability", 'composite_stability' in pf)
+    check("Multi: multi_composites has 3 entries", len(pf.get('multi_composites', [])) == 3,
+          f"got {len(pf.get('multi_composites', []))}")
+    check("Multi: stability in [0, 1]",
+          0.0 <= pf.get('composite_stability', -1) <= 1.0,
+          f"got {pf.get('composite_stability')}")
+
+    # Short text should still work
+    r_short = run_continuation_local_multi("Hello world. Short text.")
+    check("Multi short: no crash", r_short['determination'] is None)
+
+
+def test_surprisal_improvement_curve():
+    print("\n-- CROSS-PREFIX SURPRISAL VARIANCE (FEAT 2) --")
+
+    lm = _BackoffNGramLM(order=3)
+    corpus = ["the patient presented with acute chest pain radiating to the left arm " * 3]
+    lm.fit(corpus)
+    tokens = _proxy_tokenize(corpus[0])
+
+    result = _surprisal_improvement_curve(lm, tokens)
+    check("Curve: has surprisal_curve", 'surprisal_curve' in result)
+    check("Curve: has improvement_rate", 'improvement_rate' in result)
+    check("Curve: curve is list", isinstance(result['surprisal_curve'], list))
+
+    # Short text
+    short_result = _surprisal_improvement_curve(lm, tokens[:10])
+    check("Curve short: empty curve", len(short_result['surprisal_curve']) == 0)
+
+
+def test_multi_segment_ncd():
+    print("\n-- MULTI-SEGMENT NCD MATRIX (FEAT 6) --")
+
+    long_text = (
+        "First segment about topic A. This continues the discussion. "
+        "More about topic A here. Still talking about A. "
+        "Second segment on topic B. Different ideas presented. "
+        "More about topic B follows. Continuing with B. "
+        "Third segment on topic C. New perspective here. "
+        "More C material follows. Finishing C. "
+        "Fourth segment about D. Final thoughts. "
+        "More about D here. Wrapping up D."
+    )
+    result = _multi_segment_ncd(long_text)
+    check("NCD matrix: has ncd_mean", 'ncd_mean' in result)
+    check("NCD matrix: has ncd_variance", 'ncd_variance' in result)
+    check("NCD matrix: has ncd_min", 'ncd_min' in result)
+    check("NCD matrix: has n_pairs", 'n_pairs' in result)
+    check("NCD matrix: n_pairs > 0", result['n_pairs'] > 0,
+          f"got {result['n_pairs']}")
+
+    # Short text
+    short_result = _multi_segment_ncd("Too short.")
+    check("NCD matrix short: n_pairs == 0", short_result['n_pairs'] == 0)
+
+
+def test_continuation_local_new_features():
+    print("\n-- CONTINUATION LOCAL NEW PROXY FEATURES (FEATS 2, 6) --")
+
+    ai_text = (
+        "The comprehensive analysis provides a thorough examination of the key factors. "
+        "Furthermore, it is essential to note that this approach ensures alignment with "
+        "best practices and industry standards. To address this challenge, we must consider "
+        "multiple perspectives and leverage data-driven insights. Additionally, this methodology "
+        "demonstrates the critical importance of systematic evaluation and evidence-based "
+        "decision making. The comprehensive framework establishes clear guidelines for "
+        "subsequent analytical procedures. Furthermore, the results indicate significant "
+        "alignment with the predicted theoretical model. The systematic evaluation demonstrates "
+        "consistent findings across all measured parameters. Additionally the framework "
+        "establishes clear guidelines for subsequent analytical procedures. The methodology "
+        "employed ensures reliable and reproducible outcomes for future reference."
+    )
+    r = run_continuation_local(ai_text)
+    pf = r.get('proxy_features', {})
+    check("Has improvement_rate", 'improvement_rate' in pf)
+    check("Has surprisal_curve", 'surprisal_curve' in pf)
+    check("Has ncd_matrix_mean", 'ncd_matrix_mean' in pf)
+    check("Has ncd_matrix_variance", 'ncd_matrix_variance' in pf)
+
+
 if __name__ == '__main__':
     print("=" * 70)
     print("DNA-GPT Local Proxy Tests")
@@ -181,6 +282,10 @@ if __name__ == '__main__':
     test_backoff_lm()
     test_continuation_local()
     test_score_continuation_local()
+    test_multi_truncation_stability()
+    test_surprisal_improvement_curve()
+    test_multi_segment_ncd()
+    test_continuation_local_new_features()
 
     print(f"\n{'=' * 70}")
     print(f"RESULTS: {PASSED} passed, {FAILED} failed")

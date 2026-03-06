@@ -51,7 +51,7 @@ def test_pdf_loading():
 
 
 def test_pipeline_v061():
-    print("\n-- FULL PIPELINE v0.61 INTEGRATION --")
+    print("\n-- FULL PIPELINE v0.65 INTEGRATION --")
 
     text = CLINICAL_TEXT * 3
     r = analyze_prompt(text, task_id='v061_test', run_l3=True, mode='auto')
@@ -67,7 +67,7 @@ def test_pipeline_v061():
 
     # Audit trail
     at = r.get('audit_trail', {})
-    check("audit_trail version is v0.61", at.get('pipeline_version') == 'v0.61',
+    check("audit_trail version is v0.65", at.get('pipeline_version') == 'v0.65',
           f"got {at.get('pipeline_version')}")
     check("audit_trail has semantic_available", 'semantic_available' in at)
     check("audit_trail has perplexity_available", 'perplexity_available' in at)
@@ -83,6 +83,17 @@ def test_pipeline_v061():
     check("calibrated_confidence", 'calibrated_confidence' in r)
     check("conformity_level", 'conformity_level' in r)
     check("self_similarity fields", 'self_similarity_nssi_score' in r)
+
+    # v0.65 new fields
+    check("continuation_composite_stability", 'continuation_composite_stability' in r)
+    check("continuation_improvement_rate", 'continuation_improvement_rate' in r)
+    check("continuation_ncd_matrix_variance", 'continuation_ncd_matrix_variance' in r)
+    check("window_fw_trajectory_cv", 'window_fw_trajectory_cv' in r)
+    check("window_comp_trajectory_cv", 'window_comp_trajectory_cv' in r)
+    check("tocsin_cohesiveness", 'tocsin_cohesiveness' in r)
+    check("perplexity_zlib_normalized_ppl", 'perplexity_zlib_normalized_ppl' in r)
+    check("self_similarity_structural_compression_delta", 'self_similarity_structural_compression_delta' in r)
+    check("surprisal_trajectory_cv", 'surprisal_trajectory_cv' in r)
 
     # Channel structure
     cd = r.get('channel_details', {})

@@ -34,7 +34,8 @@ def _detect_mode(prompt_sig, instr_density, self_sim, word_count):
 def determine(preamble_score, preamble_severity, prompt_sig, voice_dis,
               instr_density=None, word_count=0,
               self_sim=None, cont_result=None, lang_gate=None, norm_report=None,
-              mode='auto', fingerprint_score=0.0, semantic=None, ppl=None, **kwargs):
+              mode='auto', fingerprint_score=0.0, semantic=None, ppl=None,
+              tocsin=None, **kwargs):
     """Evidence fusion with channel-based corroboration.
 
     Returns (determination, reason, confidence, channel_details).
@@ -45,7 +46,7 @@ def determine(preamble_score, preamble_severity, prompt_sig, voice_dis,
 
     # Score all channels
     ch_prompt = score_prompt_structure(preamble_score, preamble_severity, prompt_sig, voice_dis, instr_density, word_count)
-    ch_style = score_stylometric(fingerprint_score, self_sim, voice_dis, semantic=semantic, ppl=ppl)
+    ch_style = score_stylometric(fingerprint_score, self_sim, voice_dis, semantic=semantic, ppl=ppl, tocsin=tocsin)
     ch_cont = score_continuation(cont_result)
     ch_window = score_windowed(window_result=kwargs.get('window_result'))
 
