@@ -3,11 +3,14 @@
 import re
 
 FINGERPRINT_WORDS = [
+    # Original 27 (ChatGPT-3.5 era, established in v0.51)
     'delve', 'utilize', 'comprehensive', 'streamline', 'leverage', 'robust',
     'facilitate', 'innovative', 'synergy', 'paradigm', 'holistic', 'nuanced',
     'multifaceted', 'spearhead', 'underscore', 'pivotal', 'landscape',
     'cutting-edge', 'actionable', 'seamlessly', 'noteworthy', 'meticulous',
     'endeavor', 'paramount', 'aforementioned', 'furthermore', 'henceforth',
+    # v0.63 additions (Kobak et al. 2024 excess vocabulary, Science Advances)
+    'tapestry', 'realm', 'embark', 'foster', 'showcasing',
 ]
 
 _FINGERPRINT_RE = re.compile(

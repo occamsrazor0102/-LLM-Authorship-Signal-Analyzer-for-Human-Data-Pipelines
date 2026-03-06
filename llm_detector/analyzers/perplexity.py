@@ -53,6 +53,7 @@ def run_perplexity(text):
     volatility_decay_ratio = 1.0
     first_half_var = 0.0
     second_half_var = 0.0
+    n_tokens = 0
     try:
         with _torch.no_grad():
             logits = model(input_ids).logits
@@ -87,6 +88,34 @@ def run_perplexity(text):
         det = None
         conf = 0.0
         reason = f"Normal perplexity ({ppl:.1f}): consistent with human text"
+
+    # Layer 2: DivEye + Volatility compound upgrade (Basani & Chen; Sun et al.)
+    diveye_signal = surprisal_variance < 2.0 and n_tokens >= 30
+    volatility_signal = volatility_decay_ratio > 1.5 and n_tokens >= 40
+
+    if diveye_signal and volatility_signal:
+        if det is None:
+            det = 'YELLOW'
+            conf = min(0.40, 0.20 + (2.0 - surprisal_variance) * 0.05
+                       + (volatility_decay_ratio - 1.0) * 0.05)
+            reason = (f"Surprisal uniformity (var={surprisal_variance:.2f}, "
+                      f"decay={volatility_decay_ratio:.2f}): machine rhythm detected")
+        elif det == 'YELLOW':
+            det = 'AMBER'
+            conf = min(0.65, conf + 0.15)
+            reason += (f" + DivEye(var={surprisal_variance:.2f}, "
+                       f"decay={volatility_decay_ratio:.2f})")
+        elif det == 'AMBER':
+            conf = min(0.80, conf + 0.10)
+            reason += (f" + DivEye(var={surprisal_variance:.2f}, "
+                       f"decay={volatility_decay_ratio:.2f})")
+    elif diveye_signal or volatility_signal:
+        if det is not None:
+            conf = min(conf + 0.05, 0.70)
+            if diveye_signal:
+                reason += f" + low_variance({surprisal_variance:.2f})"
+            else:
+                reason += f" + volatility_decay({volatility_decay_ratio:.2f})"
 
     return {
         'perplexity': round(ppl, 2),

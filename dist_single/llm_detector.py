@@ -790,6 +790,7 @@ _BASELINE_FIELDS = [
     'calibrated_confidence', 'conformity_level', 'calibration_stratum',
     'pack_constraint_score', 'pack_exec_spec_score', 'pack_schema_score',
     'pack_active_families', 'pack_prompt_boost', 'pack_idi_boost',
+    'perplexity_value', 'surprisal_variance', 'volatility_decay_ratio',
 ]
 
 
@@ -967,11 +968,16 @@ PREAMBLE_PATTERNS = [
     (r"(?i)^\s*[\"']?(I'?ve |I have |I'?ll |let me )(created?|drafted?|prepared?|written|designed|built|put together)", "first_person_creation", "CRITICAL"),
     (r"(?i)(natural workplace style|sounds? like a real|human[- ]issued|reads? like a human)", "style_masking", "HIGH"),
     (r"(?i)notes on what I (fixed|changed|cleaned|updated|revised)", "editorial_meta", "HIGH"),
-    # Chain-of-thought leakage: reasoning model artifacts left in output
+    # Chain-of-thought leakage from Large Reasoning Models (DeepSeek-R1, o1/o3)
     (r"<think>", "cot_leakage", "CRITICAL"),
     (r"</think>", "cot_leakage", "CRITICAL"),
-    (r"(?i)\blet me (?:rethink|reconsider|recalculate|re-examine|think about this)\b", "cot_reasoning", "HIGH"),
-    (r"(?i)\bwait,?\s+(?:actually|no|let me)", "cot_self_correction", "HIGH"),
+    (r"<reasoning>", "cot_leakage", "CRITICAL"),
+    (r"</reasoning>", "cot_leakage", "CRITICAL"),
+    (r"(?i)\blet me (?:rethink|reconsider|recalculate|re-examine|verify|double[- ]check)\b", "cot_reasoning", "HIGH"),
+    (r"(?i)\bwait,?\s+(?:actually|no|let me|that'?s not)", "cot_self_correction", "HIGH"),
+    (r"(?i)\bhmm,?\s+(?:let me|on second thought|actually)", "cot_self_correction", "HIGH"),
+    (r"(?i)\bmy (?:final|revised|updated) answer (?:is|should|would)\b", "cot_conclusion", "HIGH"),
+    (r"(?i)\bstep \d+\s*:", "cot_step_numbering", "MEDIUM"),
 ]
 
 
@@ -982,7 +988,7 @@ def run_preamble(text):
     severity = 'NONE'
 
     for pat, name, sev in PREAMBLE_PATTERNS:
-        search_text = first_500 if name in ('assistant_ack', 'artifact_delivery', 'first_person_creation') else text
+        search_text = first_500 if name in ('assistant_ack', 'artifact_delivery', 'first_person_creation', 'cot_leakage') else text
         if re.search(pat, search_text):
             hits.append((name, sev))
             if sev == 'CRITICAL':
@@ -1001,11 +1007,14 @@ def run_preamble(text):
 # ════════════════════════════════════════════════════════════════════
 
 FINGERPRINT_WORDS = [
+    # Original 27 (ChatGPT-3.5 era, established in v0.51)
     'delve', 'utilize', 'comprehensive', 'streamline', 'leverage', 'robust',
     'facilitate', 'innovative', 'synergy', 'paradigm', 'holistic', 'nuanced',
     'multifaceted', 'spearhead', 'underscore', 'pivotal', 'landscape',
     'cutting-edge', 'actionable', 'seamlessly', 'noteworthy', 'meticulous',
     'endeavor', 'paramount', 'aforementioned', 'furthermore', 'henceforth',
+    # v0.63 additions (Kobak et al. 2024 excess vocabulary, Science Advances)
+    'tapestry', 'realm', 'embark', 'foster', 'showcasing',
 ]
 
 _FINGERPRINT_RE = re.compile(
@@ -1357,7 +1366,7 @@ def run_semantic_resonance(text):
 # ══ analyzers/self_similarity ══════════════════════════════════════
 # ════════════════════════════════════════════════════════════════════
 
-_FORMULAIC_PATTERNS = [
+_FORMULAIC_PATTERNS_RAW = [
     (r'\bthis\s+(?:report|analysis|paper|study|section|document)\s+(?:provides?|presents?|examines?|dissects?|identifies?|evaluates?|proposes?|outlines?)\b', 1.5),
     (r'\b(?:it\s+is\s+(?:worth|important|imperative|crucial|essential|critical)\s+(?:noting|to\s+note|to\s+acknowledge|to\s+emphasize|to\s+recognize))\b', 2.0),
     (r'\b(?:to\s+address\s+this\s+(?:gap|issue|problem|challenge|limitation|deficiency|concern|shortcoming))\b', 1.5),
@@ -1377,6 +1386,11 @@ _FORMULAIC_PATTERNS = [
     (r'\b(?:the\s+path\s+forward\s+(?:is|requires|demands|involves))\b', 1.5),
     (r'\b(?:(?:unless|until)\s+the\s+(?:community|industry|field|sector)\s+(?:adopts?|embraces?|commits?))\b', 2.0),
     (r'\b(?:the\s+(?:immediate|long.term|strategic)\s+(?:future|imperative|priority|solution)\s+(?:belongs?\s+to|lies?\s+in|requires?))\b', 2.0),
+]
+
+_FORMULAIC_PATTERNS = [
+    (re.compile(pat, re.IGNORECASE), weight)
+    for pat, weight in _FORMULAIC_PATTERNS_RAW
 ]
 
 # -- Power Adjectives --
@@ -1463,8 +1477,8 @@ def run_self_similarity(text):
     # 1. Formulaic phrase density
     formulaic_raw = 0
     formulaic_weighted = 0.0
-    for pattern, weight in _FORMULAIC_PATTERNS:
-        hits = len(re.findall(pattern, text, re.I))
+    for compiled_pat, weight in _FORMULAIC_PATTERNS:
+        hits = len(compiled_pat.findall(text))
         formulaic_raw += hits
         formulaic_weighted += hits * weight
     formulaic_density = formulaic_raw / n_sents
@@ -2095,6 +2109,7 @@ def run_perplexity(text):
     volatility_decay_ratio = 1.0
     first_half_var = 0.0
     second_half_var = 0.0
+    n_tokens = 0
     try:
         with _torch.no_grad():
             logits = model(input_ids).logits
@@ -2129,6 +2144,34 @@ def run_perplexity(text):
         det = None
         conf = 0.0
         reason = f"Normal perplexity ({ppl:.1f}): consistent with human text"
+
+    # Layer 2: DivEye + Volatility compound upgrade (Basani & Chen; Sun et al.)
+    diveye_signal = surprisal_variance < 2.0 and n_tokens >= 30
+    volatility_signal = volatility_decay_ratio > 1.5 and n_tokens >= 40
+
+    if diveye_signal and volatility_signal:
+        if det is None:
+            det = 'YELLOW'
+            conf = min(0.40, 0.20 + (2.0 - surprisal_variance) * 0.05
+                       + (volatility_decay_ratio - 1.0) * 0.05)
+            reason = (f"Surprisal uniformity (var={surprisal_variance:.2f}, "
+                      f"decay={volatility_decay_ratio:.2f}): machine rhythm detected")
+        elif det == 'YELLOW':
+            det = 'AMBER'
+            conf = min(0.65, conf + 0.15)
+            reason += (f" + DivEye(var={surprisal_variance:.2f}, "
+                       f"decay={volatility_decay_ratio:.2f})")
+        elif det == 'AMBER':
+            conf = min(0.80, conf + 0.10)
+            reason += (f" + DivEye(var={surprisal_variance:.2f}, "
+                       f"decay={volatility_decay_ratio:.2f})")
+    elif diveye_signal or volatility_signal:
+        if det is not None:
+            conf = min(conf + 0.05, 0.70)
+            if diveye_signal:
+                reason += f" + low_variance({surprisal_variance:.2f})"
+            else:
+                reason += f" + volatility_decay({volatility_decay_ratio:.2f})"
 
     return {
         'perplexity': round(ppl, 2),
@@ -2276,8 +2319,8 @@ def score_windows(text, window_size=5, stride=2):
         n_w = max(len(window_words), 1)
 
         formulaic_count = sum(
-            len(re.findall(pat, window_text, re.I))
-            for pat, _weight in _FORMULAIC_PATTERNS
+            len(compiled_pat.findall(window_text))
+            for compiled_pat, _weight in _FORMULAIC_PATTERNS
         )
         formulaic_density = formulaic_count / (n_w / 100)
 

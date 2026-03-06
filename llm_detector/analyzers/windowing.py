@@ -35,8 +35,8 @@ def score_windows(text, window_size=5, stride=2):
         n_w = max(len(window_words), 1)
 
         formulaic_count = sum(
-            len(re.findall(pat, window_text, re.I))
-            for pat, _weight in _FORMULAIC_PATTERNS
+            len(compiled_pat.findall(window_text))
+            for compiled_pat, _weight in _FORMULAIC_PATTERNS
         )
         formulaic_density = formulaic_count / (n_w / 100)
 

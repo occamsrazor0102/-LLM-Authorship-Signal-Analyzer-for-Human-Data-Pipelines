@@ -10,8 +10,8 @@ import zlib
 import statistics
 from collections import Counter
 
-# -- Formulaic Academic Phrases --
-_FORMULAIC_PATTERNS = [
+# -- Formulaic Academic Phrases (pre-compiled) --
+_FORMULAIC_PATTERNS_RAW = [
     (r'\bthis\s+(?:report|analysis|paper|study|section|document)\s+(?:provides?|presents?|examines?|dissects?|identifies?|evaluates?|proposes?|outlines?)\b', 1.5),
     (r'\b(?:it\s+is\s+(?:worth|important|imperative|crucial|essential|critical)\s+(?:noting|to\s+note|to\s+acknowledge|to\s+emphasize|to\s+recognize))\b', 2.0),
     (r'\b(?:to\s+address\s+this\s+(?:gap|issue|problem|challenge|limitation|deficiency|concern|shortcoming))\b', 1.5),
@@ -31,6 +31,11 @@ _FORMULAIC_PATTERNS = [
     (r'\b(?:the\s+path\s+forward\s+(?:is|requires|demands|involves))\b', 1.5),
     (r'\b(?:(?:unless|until)\s+the\s+(?:community|industry|field|sector)\s+(?:adopts?|embraces?|commits?))\b', 2.0),
     (r'\b(?:the\s+(?:immediate|long.term|strategic)\s+(?:future|imperative|priority|solution)\s+(?:belongs?\s+to|lies?\s+in|requires?))\b', 2.0),
+]
+
+_FORMULAIC_PATTERNS = [
+    (re.compile(pat, re.IGNORECASE), weight)
+    for pat, weight in _FORMULAIC_PATTERNS_RAW
 ]
 
 # -- Power Adjectives --
@@ -117,8 +122,8 @@ def run_self_similarity(text):
     # 1. Formulaic phrase density
     formulaic_raw = 0
     formulaic_weighted = 0.0
-    for pattern, weight in _FORMULAIC_PATTERNS:
-        hits = len(re.findall(pattern, text, re.I))
+    for compiled_pat, weight in _FORMULAIC_PATTERNS:
+        hits = len(compiled_pat.findall(text))
         formulaic_raw += hits
         formulaic_weighted += hits * weight
     formulaic_density = formulaic_raw / n_sents

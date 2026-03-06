@@ -26,6 +26,7 @@ _BASELINE_FIELDS = [
     'calibrated_confidence', 'conformity_level', 'calibration_stratum',
     'pack_constraint_score', 'pack_exec_spec_score', 'pack_schema_score',
     'pack_active_families', 'pack_prompt_boost', 'pack_idi_boost',
+    'perplexity_value', 'surprisal_variance', 'volatility_decay_ratio',
 ]
 
 
