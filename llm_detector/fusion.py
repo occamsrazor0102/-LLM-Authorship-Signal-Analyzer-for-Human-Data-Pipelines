@@ -103,6 +103,7 @@ def determine(preamble_score, preamble_severity, prompt_sig, voice_dis,
     n_yellow_plus = sum(1 for ch in all_active if ch.sev_level >= 1)
     n_primary_red = sum(1 for ch in primary_active if ch.severity == 'RED')
     n_primary_amber = sum(1 for ch in primary_active if ch.sev_level >= 2)
+    n_primary_yellow_plus = sum(1 for ch in primary_active if ch.sev_level >= 1)
 
     top_explanations = [ch.explanation for ch in all_active[:3]]
     combined_reason = ' + '.join(top_explanations) if top_explanations else 'No significant signals'
@@ -135,7 +136,12 @@ def determine(preamble_score, preamble_severity, prompt_sig, voice_dis,
             return 'MIXED', f"{reason} [windowed variance suggests hybrid text]", min(conf, 0.60), channel_details
         return det, reason, conf, channel_details
 
-    if n_yellow_plus >= 2:
+    if mode == 'task_prompt':
+        convergence_count = n_primary_yellow_plus + min(1, len(support_active))
+    else:
+        convergence_count = n_yellow_plus
+
+    if convergence_count >= 2:
         det, reason, conf = _apply_cap('AMBER', f"{combined_reason} [multi-channel convergence]", min(top_score, 0.60))
         if ch_window.sub_signals.get('mixed_signal') and ch_window.severity != 'GREEN':
             return 'MIXED', f"{reason} [windowed variance suggests hybrid text]", min(conf, 0.55), channel_details

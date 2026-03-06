@@ -86,9 +86,9 @@ def apply_calibration(confidence, cal_table, domain=None, length_bin=None):
     if nc_score <= cal.get(0.01, 0):
         p_value = 1.0
     elif nc_score <= cal.get(0.05, 0):
-        p_value = 0.05
-    elif nc_score <= cal.get(0.10, 0):
         p_value = 0.10
+    elif nc_score <= cal.get(0.10, 0):
+        p_value = 0.05
     else:
         p_value = 0.01
 

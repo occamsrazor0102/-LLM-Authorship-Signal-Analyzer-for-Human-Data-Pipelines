@@ -263,7 +263,7 @@ def main():
     else:
         sim_pairs = []
 
-    default_name = os.path.basename(args.input).rsplit('.', 1)[0] + '_pipeline_v056.csv'
+    default_name = os.path.basename(args.input).rsplit('.', 1)[0] + '_pipeline_v061.csv'
     input_dir = os.path.dirname(os.path.abspath(args.input))
     output_path = args.output or os.path.join(input_dir, default_name)
 
