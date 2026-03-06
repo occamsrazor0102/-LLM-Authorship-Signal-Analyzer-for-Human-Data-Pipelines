@@ -4,10 +4,112 @@ Ref: M4GT-Bench (Wang et al. 2024) -- mixed detection as separate task.
 """
 
 import re
+import zlib
 import statistics
 
 from llm_detector.text_utils import ENGLISH_FUNCTION_WORDS, get_sentences
 from llm_detector.analyzers.self_similarity import _FORMULAIC_PATTERNS, _TRANSITION, _POWER_ADJ
+
+
+def detect_changepoint(feature_sequence, threshold=3.0):
+    """CUSUM changepoint detection on a 1D feature sequence.
+
+    Returns dict with changepoint index and effect size, or None.
+    """
+    if len(feature_sequence) < 6:
+        return None
+
+    n = len(feature_sequence)
+    mean_all = statistics.mean(feature_sequence)
+
+    cusum = [0.0]
+    for val in feature_sequence:
+        cusum.append(cusum[-1] + (val - mean_all))
+
+    max_dev = 0.0
+    best_idx = None
+    for i in range(1, n):
+        dev = abs(cusum[i])
+        if dev > max_dev:
+            max_dev = dev
+            best_idx = i
+
+    if best_idx is None or best_idx < 2 or best_idx > n - 2:
+        return None
+
+    before = feature_sequence[:best_idx]
+    after = feature_sequence[best_idx:]
+    if len(before) < 2 or len(after) < 2:
+        return None
+
+    mean_before = statistics.mean(before)
+    mean_after = statistics.mean(after)
+    pooled_std = statistics.stdev(feature_sequence)
+
+    if pooled_std < 1e-6:
+        return None
+
+    effect_size = abs(mean_after - mean_before) / pooled_std
+    if effect_size < threshold:
+        return None
+
+    return {
+        'changepoint_sentence': best_idx,
+        'effect_size': round(effect_size, 3),
+        'mean_before': round(mean_before, 4),
+        'mean_after': round(mean_after, 4),
+    }
+
+
+def score_surprisal_windows(token_losses, window_size=64, stride=32):
+    """Score text using windowed token-level surprisal statistics.
+
+    Args:
+        token_losses: 1D list of per-token loss values (from DivEye/perplexity).
+        window_size: Tokens per window.
+        stride: Token stride between windows.
+
+    Returns dict with surprisal trajectory features.
+    """
+    if len(token_losses) < window_size:
+        return {
+            'surprisal_windows': 0,
+            'surprisal_trajectory_cv': 0.0,
+            'surprisal_var_of_var': 0.0,
+            'surprisal_stationarity': 0.0,
+        }
+
+    window_means = []
+    window_vars = []
+
+    for start in range(0, len(token_losses) - window_size + 1, stride):
+        chunk = token_losses[start:start + window_size]
+        if hasattr(chunk, 'mean'):  # torch tensor
+            window_means.append(chunk.mean().item())
+            window_vars.append(chunk.std().item() if len(chunk) > 1 else 0.0)
+        else:
+            window_means.append(statistics.mean(chunk))
+            window_vars.append(statistics.stdev(chunk) if len(chunk) > 1 else 0.0)
+
+    if len(window_means) < 3:
+        return {
+            'surprisal_windows': len(window_means),
+            'surprisal_trajectory_cv': 0.0,
+            'surprisal_var_of_var': 0.0,
+            'surprisal_stationarity': 0.0,
+        }
+
+    trajectory_cv = statistics.stdev(window_means) / max(statistics.mean(window_means), 1e-6)
+    var_of_var = statistics.stdev(window_vars) / max(statistics.mean(window_vars), 1e-6)
+
+    stationarity_score = max(0.0, 1.0 - trajectory_cv) * max(0.0, 1.0 - var_of_var)
+
+    return {
+        'surprisal_windows': len(window_means),
+        'surprisal_trajectory_cv': round(trajectory_cv, 4),
+        'surprisal_var_of_var': round(var_of_var, 4),
+        'surprisal_stationarity': round(stationarity_score, 4),
+    }
 
 
 def score_windows(text, window_size=5, stride=2):
@@ -25,9 +127,15 @@ def score_windows(text, window_size=5, stride=2):
             'hot_span_length': 0,
             'n_windows': 0,
             'mixed_signal': False,
+            'fw_trajectory_cv': 0.0,
+            'comp_trajectory_mean': 0.0,
+            'comp_trajectory_cv': 0.0,
+            'changepoint': None,
         }
 
     windows = []
+    fw_ratios = []
+    comp_ratios = []
     for start in range(0, len(sentences) - window_size + 1, stride):
         end = start + window_size
         window_text = ' '.join(sentences[start:end])
@@ -48,6 +156,15 @@ def score_windows(text, window_size=5, stride=2):
 
         fw = sum(1 for w in window_words if w.lower() in ENGLISH_FUNCTION_WORDS)
         fw_ratio = fw / n_w
+        fw_ratios.append(fw_ratio)
+
+        # FEAT 4: Per-window compression
+        window_bytes = window_text.encode('utf-8')
+        if len(window_bytes) > 20:
+            window_comp = len(zlib.compress(window_bytes)) / len(window_bytes)
+        else:
+            window_comp = 0.5
+        comp_ratios.append(window_comp)
 
         w_sent_lengths = [len(s.split()) for s in sentences[start:end] if s.strip()]
         if len(w_sent_lengths) >= 2:
@@ -97,6 +214,27 @@ def score_windows(text, window_size=5, stride=2):
 
     mixed_signal = variance >= 0.02 and max_score >= 0.30 and mean_score < 0.50
 
+    # FEAT 3: Function word trajectory CV
+    if len(fw_ratios) >= 3:
+        fw_trajectory_cv = statistics.stdev(fw_ratios) / max(statistics.mean(fw_ratios), 0.01)
+    else:
+        fw_trajectory_cv = 0.0
+
+    # FEAT 4: Compression trajectory
+    if len(comp_ratios) >= 3:
+        comp_trajectory_cv = statistics.stdev(comp_ratios) / max(statistics.mean(comp_ratios), 0.01)
+        comp_trajectory_mean = statistics.mean(comp_ratios)
+    else:
+        comp_trajectory_cv = 0.0
+        comp_trajectory_mean = 0.0
+
+    # FEAT 9: Changepoint detection
+    changepoint = None
+    if len(scores) >= 6:
+        changepoint = detect_changepoint(scores)
+        if changepoint:
+            changepoint['changepoint_sentence'] = changepoint['changepoint_sentence'] * stride
+
     return {
         'windows': windows,
         'max_window_score': round(max_score, 3),
@@ -105,4 +243,8 @@ def score_windows(text, window_size=5, stride=2):
         'hot_span_length': hot_span,
         'n_windows': len(windows),
         'mixed_signal': mixed_signal,
+        'fw_trajectory_cv': round(fw_trajectory_cv, 4),
+        'comp_trajectory_mean': round(comp_trajectory_mean, 4),
+        'comp_trajectory_cv': round(comp_trajectory_cv, 4),
+        'changepoint': changepoint,
     }

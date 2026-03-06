@@ -3,7 +3,7 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from llm_detector.analyzers.windowing import score_windows
+from llm_detector.analyzers.windowing import score_windows, detect_changepoint, score_surprisal_windows
 from llm_detector.channels.windowed import score_windowed
 from tests.conftest import AI_TEXT, HUMAN_TEXT
 
@@ -119,6 +119,72 @@ def test_channel_high_hot_span():
           f"got {ch.severity}")
 
 
+def test_fw_trajectory_cv():
+    print("\n-- Function word trajectory CV (FEAT 3) --")
+    result = score_windows(LONG_AI_TEXT)
+    check("fw_trajectory_cv in result", 'fw_trajectory_cv' in result,
+          f"keys: {list(result.keys())}")
+    if result['n_windows'] > 0:
+        check("fw_trajectory_cv >= 0", result['fw_trajectory_cv'] >= 0.0)
+
+    # Short text should return 0.0
+    short_result = score_windows(SHORT_TEXT)
+    check("fw_trajectory_cv == 0 for short", short_result['fw_trajectory_cv'] == 0.0)
+
+
+def test_comp_trajectory():
+    print("\n-- Compression trajectory (FEAT 4) --")
+    result = score_windows(LONG_AI_TEXT)
+    check("comp_trajectory_mean in result", 'comp_trajectory_mean' in result)
+    check("comp_trajectory_cv in result", 'comp_trajectory_cv' in result)
+    if result['n_windows'] > 0:
+        check("comp_trajectory_mean > 0", result['comp_trajectory_mean'] > 0.0,
+              f"got {result['comp_trajectory_mean']}")
+
+
+def test_changepoint_detection():
+    print("\n-- Changepoint detection (FEAT 9) --")
+    # Uniform sequence -> no changepoint
+    uniform = [0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3]
+    cp_none = detect_changepoint(uniform)
+    check("Uniform seq: no changepoint", cp_none is None)
+
+    # Clear jump -> changepoint
+    jump = [0.1, 0.1, 0.1, 0.8, 0.8, 0.8, 0.8]
+    cp_jump = detect_changepoint(jump, threshold=1.5)
+    check("Jump seq: changepoint detected", cp_jump is not None,
+          f"got {cp_jump}")
+    if cp_jump:
+        check("Jump: has effect_size", 'effect_size' in cp_jump)
+        check("Jump: changepoint in middle", 2 <= cp_jump['changepoint_sentence'] <= 5,
+              f"got {cp_jump['changepoint_sentence']}")
+
+    # Too short -> None
+    check("Short seq: None", detect_changepoint([0.1, 0.2]) is None)
+
+
+def test_surprisal_windows():
+    print("\n-- Surprisal trajectory (FEAT 10) --")
+    # Normal list
+    import random
+    rng = random.Random(42)
+    losses = [rng.gauss(3.0, 1.0) for _ in range(200)]
+    result = score_surprisal_windows(losses)
+    check("Has surprisal_trajectory_cv", 'surprisal_trajectory_cv' in result)
+    check("Has surprisal_stationarity", 'surprisal_stationarity' in result)
+    check("surprisal_windows > 0", result['surprisal_windows'] > 0)
+
+    # Too short
+    short = score_surprisal_windows([1.0, 2.0, 3.0])
+    check("Short: surprisal_windows == 0", short['surprisal_windows'] == 0)
+
+
+def test_windowed_changepoint_in_score_windows():
+    print("\n-- Changepoint in score_windows output (FEAT 9) --")
+    result = score_windows(LONG_AI_TEXT)
+    check("changepoint key exists", 'changepoint' in result)
+
+
 if __name__ == '__main__':
     print("=" * 70)
     print("  WINDOWED SCORING TESTS")
@@ -131,6 +197,11 @@ if __name__ == '__main__':
     test_channel_none_returns_green()
     test_channel_empty_windows()
     test_channel_high_hot_span()
+    test_fw_trajectory_cv()
+    test_comp_trajectory()
+    test_changepoint_detection()
+    test_surprisal_windows()
+    test_windowed_changepoint_in_score_windows()
 
     print(f"\n{'=' * 70}")
     print(f"  RESULTS: {PASSED} passed, {FAILED} failed")

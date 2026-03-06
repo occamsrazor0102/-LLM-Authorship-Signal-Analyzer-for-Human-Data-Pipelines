@@ -117,6 +117,7 @@ def run_self_similarity(text):
             'comp_ratio': 0.0, 'hapax_ratio': 0.0,
             'hapax_count': 0, 'unique_words': 0,
             'word_count': word_count, 'sentence_count': n_sents,
+            'shuffled_comp_ratio': 0.0, 'structural_compression_delta': 0.0,
         }
 
     # 1. Formulaic phrase density
@@ -236,6 +237,22 @@ def run_self_similarity(text):
         s12 = min((0.45 - hapax_ratio) / 0.15, 1.0)
     if s12 > 0: signals.append(('hapax_deficit', s12))
 
+    # s13: Structural compression delta (original vs shuffled) -- FEAT 5
+    import random as _random
+    shuffled_words = list(clean_words)
+    _random.seed(42)
+    _random.shuffle(shuffled_words)
+    shuffled_text = ' '.join(shuffled_words)
+    shuffled_bytes = shuffled_text.encode('utf-8')
+    shuffled_comp_len = len(zlib.compress(shuffled_bytes))
+    shuffled_comp_ratio = shuffled_comp_len / max(len(shuffled_bytes), 1)
+    structural_compression_delta = shuffled_comp_ratio - comp_ratio
+
+    s13 = 0.0
+    if structural_compression_delta < 0.03 and word_count >= 150:
+        s13 = min((0.03 - structural_compression_delta) / 0.02, 1.0)
+    if s13 > 0: signals.append(('low_structural_delta', s13))
+
     # -- Convergence scoring --
     n_active = len(signals)
     if n_active == 0:
@@ -288,4 +305,6 @@ def run_self_similarity(text):
         'hapax_count': hapax_count,
         'unique_words': unique_words,
         'word_count': word_count, 'sentence_count': n_sents,
+        'shuffled_comp_ratio': round(shuffled_comp_ratio, 4),
+        'structural_compression_delta': round(structural_compression_delta, 4),
     }

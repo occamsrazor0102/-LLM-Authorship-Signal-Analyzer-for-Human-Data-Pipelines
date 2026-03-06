@@ -791,6 +791,12 @@ _BASELINE_FIELDS = [
     'pack_constraint_score', 'pack_exec_spec_score', 'pack_schema_score',
     'pack_active_families', 'pack_prompt_boost', 'pack_idi_boost',
     'perplexity_value', 'surprisal_variance', 'volatility_decay_ratio',
+    'continuation_composite_stability', 'continuation_composite_variance',
+    'continuation_improvement_rate', 'continuation_ncd_matrix_variance',
+    'window_fw_trajectory_cv', 'window_comp_trajectory_cv',
+    'tocsin_cohesiveness', 'perplexity_zlib_normalized_ppl',
+    'self_similarity_structural_compression_delta',
+    'surprisal_trajectory_cv', 'surprisal_stationarity',
 ]
 
 
@@ -803,7 +809,7 @@ def collect_baselines(results, output_path):
         for r in results:
             record = {k: r.get(k) for k in _BASELINE_FIELDS}
             record['_timestamp'] = timestamp
-            record['_version'] = 'v0.61'
+            record['_version'] = 'v0.65'
             wc = r.get('word_count', 0)
             if wc < 100:
                 record['length_bin'] = 'short'
@@ -1472,6 +1478,7 @@ def run_self_similarity(text):
             'comp_ratio': 0.0, 'hapax_ratio': 0.0,
             'hapax_count': 0, 'unique_words': 0,
             'word_count': word_count, 'sentence_count': n_sents,
+            'shuffled_comp_ratio': 0.0, 'structural_compression_delta': 0.0,
         }
 
     # 1. Formulaic phrase density
@@ -1591,6 +1598,22 @@ def run_self_similarity(text):
         s12 = min((0.45 - hapax_ratio) / 0.15, 1.0)
     if s12 > 0: signals.append(('hapax_deficit', s12))
 
+    # s13: Structural compression delta (original vs shuffled) -- FEAT 5
+    import random as _random
+    shuffled_words = list(clean_words)
+    _random.seed(42)
+    _random.shuffle(shuffled_words)
+    shuffled_text = ' '.join(shuffled_words)
+    shuffled_bytes = shuffled_text.encode('utf-8')
+    shuffled_comp_len = len(zlib.compress(shuffled_bytes))
+    shuffled_comp_ratio = shuffled_comp_len / max(len(shuffled_bytes), 1)
+    structural_compression_delta = shuffled_comp_ratio - comp_ratio
+
+    s13 = 0.0
+    if structural_compression_delta < 0.03 and word_count >= 150:
+        s13 = min((0.03 - structural_compression_delta) / 0.02, 1.0)
+    if s13 > 0: signals.append(('low_structural_delta', s13))
+
     # -- Convergence scoring --
     n_active = len(signals)
     if n_active == 0:
@@ -1643,6 +1666,8 @@ def run_self_similarity(text):
         'hapax_count': hapax_count,
         'unique_words': unique_words,
         'word_count': word_count, 'sentence_count': n_sents,
+        'shuffled_comp_ratio': round(shuffled_comp_ratio, 4),
+        'structural_compression_delta': round(structural_compression_delta, 4),
     }
 
 
@@ -1955,6 +1980,73 @@ def _type_token_ratio(tokens):
     return len(set(tokens)) / len(tokens)
 
 
+def _surprisal_improvement_curve(lm, full_tokens, splits=(0.25, 0.50, 0.75)):
+    """Measure how conditional surprisal changes with increasing prefix length.
+
+    Returns dict with surprisal at each split point and the improvement rate.
+    """
+    n = len(full_tokens)
+    if n < 40:
+        return {'surprisal_curve': [], 'improvement_rate': 0.0}
+
+    tail_start = int(n * 0.75)
+    tail_tokens = full_tokens[tail_start:]
+
+    surprisals = []
+    for split in splits:
+        prefix_end = int(n * split)
+        if prefix_end < 10:
+            continue
+        prefix = full_tokens[:prefix_end]
+        surp = _conditional_surprisal(lm, prefix, tail_tokens)
+        surprisals.append((split, round(surp, 4)))
+
+    if len(surprisals) >= 2:
+        first = surprisals[0][1]
+        last = surprisals[-1][1]
+        improvement_rate = (first - last) / max(first, 1e-6)
+    else:
+        improvement_rate = 0.0
+
+    return {
+        'surprisal_curve': surprisals,
+        'improvement_rate': round(improvement_rate, 4),
+    }
+
+
+def _multi_segment_ncd(text, n_segments=4):
+    """Compute NCD between all pairs of text segments.
+
+    Low variance = all segments are similarly redundant = AI signal.
+    """
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    if len(sentences) < n_segments * 2:
+        return {'ncd_mean': 0.0, 'ncd_variance': 0.0, 'ncd_min': 0.0, 'n_pairs': 0}
+
+    seg_size = len(sentences) // n_segments
+    segments = []
+    for i in range(n_segments):
+        start = i * seg_size
+        end = start + seg_size if i < n_segments - 1 else len(sentences)
+        segments.append(' '.join(sentences[start:end]))
+
+    ncds = []
+    for i in range(len(segments)):
+        for j in range(i + 1, len(segments)):
+            ncd = _calculate_ncd(segments[i], segments[j])
+            ncds.append(ncd)
+
+    if not ncds:
+        return {'ncd_mean': 0.0, 'ncd_variance': 0.0, 'ncd_min': 0.0, 'n_pairs': 0}
+
+    return {
+        'ncd_mean': round(statistics.mean(ncds), 4),
+        'ncd_variance': round(statistics.variance(ncds) if len(ncds) >= 2 else 0.0, 6),
+        'ncd_min': round(min(ncds), 4),
+        'n_pairs': len(ncds),
+    }
+
+
 def run_continuation_local(text, gamma=0.5, K=32, order=5):
     """Zero-LLM DNA-GPT proxy via backoff n-gram language model."""
     word_count = len(text.split())
@@ -2002,13 +2094,25 @@ def run_continuation_local(text, gamma=0.5, K=32, order=5):
     repeat4 = _repeated_ngram_rate(suffix_tokens, 4)
     ttr = _type_token_ratio(suffix_tokens)
 
+    # FEAT 2: Cross-prefix surprisal improvement curve
+    all_tokens = _proxy_tokenize(text)
+    surp_curve = _surprisal_improvement_curve(lm, all_tokens)
+
     proxy_features = {
         'ncd': round(ncd, 4),
         'internal_overlap': round(internal_overlap, 4),
         'cond_surprisal': round(cond_surp, 4),
         'repeat4': round(repeat4, 4),
         'ttr': round(ttr, 4),
+        'surprisal_curve': surp_curve['surprisal_curve'],
+        'improvement_rate': surp_curve['improvement_rate'],
     }
+
+    # FEAT 6: Multi-segment NCD matrix
+    multi_ncd = _multi_segment_ncd(text)
+    proxy_features['ncd_matrix_mean'] = multi_ncd['ncd_mean']
+    proxy_features['ncd_matrix_variance'] = multi_ncd['ncd_variance']
+    proxy_features['ncd_matrix_min'] = multi_ncd['ncd_min']
 
     # Composite scoring
     ncd_signal = max(0.0, (1.0 - ncd) / 0.15)
@@ -2016,6 +2120,11 @@ def run_continuation_local(text, gamma=0.5, K=32, order=5):
     repeat_signal = max(0.0, min(1.0, repeat4 / 0.15))
     ttr_signal = max(0.0, min(1.0, (0.55 - ttr) / 0.20))
     bscore_signal = min(1.0, bscore / 0.15)
+
+    # NCD uniformity signal (FEAT 6)
+    ncd_uniformity_signal = 0.0
+    if multi_ncd['ncd_variance'] < 0.002 and multi_ncd['n_pairs'] >= 3:
+        ncd_uniformity_signal = min((0.002 - multi_ncd['ncd_variance']) / 0.001, 1.0) * 0.5
 
     composite = (
         0.30 * bscore_signal +
@@ -2025,6 +2134,9 @@ def run_continuation_local(text, gamma=0.5, K=32, order=5):
         0.10 * ttr_signal +
         0.05 * max(0.0, min(1.0, (5.0 - cond_surp) / 3.0))
     )
+    # Blend in NCD uniformity with small weight
+    if ncd_uniformity_signal > 0:
+        composite = composite * 0.93 + ncd_uniformity_signal * 0.07
 
     proxy_features['composite'] = round(composite, 4)
 
@@ -2065,6 +2177,47 @@ def run_continuation_local(text, gamma=0.5, K=32, order=5):
     }
 
 
+def run_continuation_local_multi(text, gammas=(0.3, 0.5, 0.7), K=16, order=5):
+    """Multi-truncation DNA-GPT local proxy.
+
+    Runs continuation analysis at multiple truncation ratios and measures
+    stability of the composite score. High stability (low variance) across
+    truncation points is an AI signal.
+    """
+    composites = []
+    full_result = None
+
+    for gamma in gammas:
+        result = run_continuation_local(text, gamma=gamma, K=K, order=order)
+        comp = result.get('proxy_features', {}).get('composite', 0.0)
+        composites.append(comp)
+        if gamma == 0.5:
+            full_result = result
+
+    if full_result is None:
+        full_result = result
+
+    if len(composites) >= 2:
+        comp_mean = statistics.mean(composites)
+        comp_var = statistics.variance(composites)
+        stability = max(0.0, 1.0 - (comp_var / 0.08))
+    else:
+        comp_mean = composites[0] if composites else 0.0
+        comp_var = 0.0
+        stability = 0.0
+
+    full_result['proxy_features']['multi_composites'] = [round(c, 4) for c in composites]
+    full_result['proxy_features']['composite_variance'] = round(comp_var, 6)
+    full_result['proxy_features']['composite_stability'] = round(stability, 4)
+
+    # Stability boosts the composite when it agrees with the primary signal
+    if stability >= 0.75 and comp_mean >= 0.30:
+        boosted = min(full_result['proxy_features']['composite'] + 0.10, 1.0)
+        full_result['proxy_features']['composite'] = round(boosted, 4)
+
+    return full_result
+
+
 # ════════════════════════════════════════════════════════════════════
 # ══ analyzers/perplexity ═══════════════════════════════════════════
 # ════════════════════════════════════════════════════════════════════
@@ -2073,6 +2226,8 @@ _PPL_EMPTY = {
     'perplexity': 0.0, 'determination': None, 'confidence': 0.0,
     'surprisal_variance': 0.0, 'surprisal_first_half_var': 0.0,
     'surprisal_second_half_var': 0.0, 'volatility_decay_ratio': 1.0,
+    'comp_ratio': 0.0, 'zlib_normalized_ppl': 0.0, 'comp_ppl_ratio': 0.0,
+    'token_losses': None,
 }
 
 
@@ -2104,12 +2259,20 @@ def run_perplexity(text):
 
     ppl = _torch.exp(loss).item()
 
+    # ── FEAT 7: Compression-perplexity divergence ──
+    text_bytes = text.encode('utf-8')
+    comp_len = len(zlib.compress(text_bytes))
+    comp_ratio = comp_len / max(len(text_bytes), 1)
+    zlib_normalized_ppl = ppl * comp_ratio
+    comp_ppl_ratio = comp_ratio / max(ppl / 100.0, 0.01)
+
     # ── Surprisal diversity & volatility decay ──
     surprisal_variance = 0.0
     volatility_decay_ratio = 1.0
     first_half_var = 0.0
     second_half_var = 0.0
     n_tokens = 0
+    token_losses_list = None
     try:
         with _torch.no_grad():
             logits = model(input_ids).logits
@@ -2122,6 +2285,7 @@ def run_perplexity(text):
         )
         losses = per_token_loss.float().cpu().numpy()
         n_tokens = len(losses)
+        token_losses_list = losses.tolist()
 
         if n_tokens >= 10:
             surprisal_variance = float(losses.var())
@@ -2173,6 +2337,17 @@ def run_perplexity(text):
             else:
                 reason += f" + volatility_decay({volatility_decay_ratio:.2f})"
 
+    # FEAT 7: Zlib-normalized perplexity compound signal
+    zlib_ppl_signal = zlib_normalized_ppl < 8.0 and n_tokens >= 30
+    if zlib_ppl_signal:
+        if det is None:
+            det = 'YELLOW'
+            conf = min(0.35, 0.15 + (8.0 - zlib_normalized_ppl) * 0.02)
+            reason = f"Zlib-normalized PPL ({zlib_normalized_ppl:.1f}): predictable and compressible"
+        elif det in ('YELLOW', 'AMBER'):
+            conf = min(conf + 0.05, 0.80)
+            reason += f" + zlib_ppl({zlib_normalized_ppl:.1f})"
+
     return {
         'perplexity': round(ppl, 2),
         'determination': det,
@@ -2182,6 +2357,10 @@ def run_perplexity(text):
         'surprisal_first_half_var': round(first_half_var, 4),
         'surprisal_second_half_var': round(second_half_var, 4),
         'volatility_decay_ratio': round(volatility_decay_ratio, 4),
+        'comp_ratio': round(comp_ratio, 4),
+        'zlib_normalized_ppl': round(zlib_normalized_ppl, 2),
+        'comp_ppl_ratio': round(comp_ppl_ratio, 4),
+        'token_losses': token_losses_list,
     }
 
 
@@ -2294,6 +2473,107 @@ def extract_stylometric_features(text, masked_text=None):
 # ══ analyzers/windowing ════════════════════════════════════════════
 # ════════════════════════════════════════════════════════════════════
 
+def detect_changepoint(feature_sequence, threshold=3.0):
+    """CUSUM changepoint detection on a 1D feature sequence.
+
+    Returns dict with changepoint index and effect size, or None.
+    """
+    if len(feature_sequence) < 6:
+        return None
+
+    n = len(feature_sequence)
+    mean_all = statistics.mean(feature_sequence)
+
+    cusum = [0.0]
+    for val in feature_sequence:
+        cusum.append(cusum[-1] + (val - mean_all))
+
+    max_dev = 0.0
+    best_idx = None
+    for i in range(1, n):
+        dev = abs(cusum[i])
+        if dev > max_dev:
+            max_dev = dev
+            best_idx = i
+
+    if best_idx is None or best_idx < 2 or best_idx > n - 2:
+        return None
+
+    before = feature_sequence[:best_idx]
+    after = feature_sequence[best_idx:]
+    if len(before) < 2 or len(after) < 2:
+        return None
+
+    mean_before = statistics.mean(before)
+    mean_after = statistics.mean(after)
+    pooled_std = statistics.stdev(feature_sequence)
+
+    if pooled_std < 1e-6:
+        return None
+
+    effect_size = abs(mean_after - mean_before) / pooled_std
+    if effect_size < threshold:
+        return None
+
+    return {
+        'changepoint_sentence': best_idx,
+        'effect_size': round(effect_size, 3),
+        'mean_before': round(mean_before, 4),
+        'mean_after': round(mean_after, 4),
+    }
+
+
+def score_surprisal_windows(token_losses, window_size=64, stride=32):
+    """Score text using windowed token-level surprisal statistics.
+
+    Args:
+        token_losses: 1D list of per-token loss values (from DivEye/perplexity).
+        window_size: Tokens per window.
+        stride: Token stride between windows.
+
+    Returns dict with surprisal trajectory features.
+    """
+    if len(token_losses) < window_size:
+        return {
+            'surprisal_windows': 0,
+            'surprisal_trajectory_cv': 0.0,
+            'surprisal_var_of_var': 0.0,
+            'surprisal_stationarity': 0.0,
+        }
+
+    window_means = []
+    window_vars = []
+
+    for start in range(0, len(token_losses) - window_size + 1, stride):
+        chunk = token_losses[start:start + window_size]
+        if hasattr(chunk, 'mean'):  # torch tensor
+            window_means.append(chunk.mean().item())
+            window_vars.append(chunk.std().item() if len(chunk) > 1 else 0.0)
+        else:
+            window_means.append(statistics.mean(chunk))
+            window_vars.append(statistics.stdev(chunk) if len(chunk) > 1 else 0.0)
+
+    if len(window_means) < 3:
+        return {
+            'surprisal_windows': len(window_means),
+            'surprisal_trajectory_cv': 0.0,
+            'surprisal_var_of_var': 0.0,
+            'surprisal_stationarity': 0.0,
+        }
+
+    trajectory_cv = statistics.stdev(window_means) / max(statistics.mean(window_means), 1e-6)
+    var_of_var = statistics.stdev(window_vars) / max(statistics.mean(window_vars), 1e-6)
+
+    stationarity_score = max(0.0, 1.0 - trajectory_cv) * max(0.0, 1.0 - var_of_var)
+
+    return {
+        'surprisal_windows': len(window_means),
+        'surprisal_trajectory_cv': round(trajectory_cv, 4),
+        'surprisal_var_of_var': round(var_of_var, 4),
+        'surprisal_stationarity': round(stationarity_score, 4),
+    }
+
+
 def score_windows(text, window_size=5, stride=2):
     """Score text in overlapping sentence windows.
 
@@ -2309,9 +2589,15 @@ def score_windows(text, window_size=5, stride=2):
             'hot_span_length': 0,
             'n_windows': 0,
             'mixed_signal': False,
+            'fw_trajectory_cv': 0.0,
+            'comp_trajectory_mean': 0.0,
+            'comp_trajectory_cv': 0.0,
+            'changepoint': None,
         }
 
     windows = []
+    fw_ratios = []
+    comp_ratios = []
     for start in range(0, len(sentences) - window_size + 1, stride):
         end = start + window_size
         window_text = ' '.join(sentences[start:end])
@@ -2332,6 +2618,15 @@ def score_windows(text, window_size=5, stride=2):
 
         fw = sum(1 for w in window_words if w.lower() in ENGLISH_FUNCTION_WORDS)
         fw_ratio = fw / n_w
+        fw_ratios.append(fw_ratio)
+
+        # FEAT 4: Per-window compression
+        window_bytes = window_text.encode('utf-8')
+        if len(window_bytes) > 20:
+            window_comp = len(zlib.compress(window_bytes)) / len(window_bytes)
+        else:
+            window_comp = 0.5
+        comp_ratios.append(window_comp)
 
         w_sent_lengths = [len(s.split()) for s in sentences[start:end] if s.strip()]
         if len(w_sent_lengths) >= 2:
@@ -2381,6 +2676,27 @@ def score_windows(text, window_size=5, stride=2):
 
     mixed_signal = variance >= 0.02 and max_score >= 0.30 and mean_score < 0.50
 
+    # FEAT 3: Function word trajectory CV
+    if len(fw_ratios) >= 3:
+        fw_trajectory_cv = statistics.stdev(fw_ratios) / max(statistics.mean(fw_ratios), 0.01)
+    else:
+        fw_trajectory_cv = 0.0
+
+    # FEAT 4: Compression trajectory
+    if len(comp_ratios) >= 3:
+        comp_trajectory_cv = statistics.stdev(comp_ratios) / max(statistics.mean(comp_ratios), 0.01)
+        comp_trajectory_mean = statistics.mean(comp_ratios)
+    else:
+        comp_trajectory_cv = 0.0
+        comp_trajectory_mean = 0.0
+
+    # FEAT 9: Changepoint detection
+    changepoint = None
+    if len(scores) >= 6:
+        changepoint = detect_changepoint(scores)
+        if changepoint:
+            changepoint['changepoint_sentence'] = changepoint['changepoint_sentence'] * stride
+
     return {
         'windows': windows,
         'max_window_score': round(max_score, 3),
@@ -2389,6 +2705,10 @@ def score_windows(text, window_size=5, stride=2):
         'hot_span_length': hot_span,
         'n_windows': len(windows),
         'mixed_signal': mixed_signal,
+        'fw_trajectory_cv': round(fw_trajectory_cv, 4),
+        'comp_trajectory_mean': round(comp_trajectory_mean, 4),
+        'comp_trajectory_cv': round(comp_trajectory_cv, 4),
+        'changepoint': changepoint,
     }
 
 
@@ -3632,7 +3952,7 @@ def score_prompt_structure(preamble_score, preamble_severity, prompt_sig, voice_
 # ══ channels/stylometric ═══════════════════════════════════════════
 # ════════════════════════════════════════════════════════════════════
 
-def score_stylometric(fingerprint_score, self_sim, voice_dis=None, semantic=None, ppl=None):
+def score_stylometric(fingerprint_score, self_sim, voice_dis=None, semantic=None, ppl=None, tocsin=None):
     """Score stylometric channel. Returns ChannelResult."""
     sub = {}
     score = 0.0
@@ -3728,6 +4048,24 @@ def score_stylometric(fingerprint_score, self_sim, voice_dis=None, semantic=None
                 elif s_var < 3.0 and v_decay > 1.2:
                     score = min(score + 0.04, 1.0)
                     parts.append(f"SurpVar={s_var:.2f}/Decay={v_decay:.2f}(mild)")
+
+    # Token cohesiveness (TOCSIN): supporting signal
+    if tocsin and tocsin.get('determination'):
+        tocsin_det = tocsin['determination']
+        sub['cohesiveness'] = tocsin.get('cohesiveness', 0)
+
+        if tocsin_det == 'AMBER':
+            if severity in ('RED', 'AMBER'):
+                score = min(score + 0.10, 1.0)
+                parts.append(f"TOCSIN=AMBER(coh={tocsin['cohesiveness']:.4f},boost)")
+            else:
+                score = max(score, tocsin.get('confidence', 0.50))
+                severity = max(severity, 'AMBER',
+                               key=lambda s: ChannelResult.SEV_ORDER.get(s, 0))
+                parts.append(f"TOCSIN=AMBER(coh={tocsin['cohesiveness']:.4f})")
+        elif tocsin_det == 'YELLOW' and severity != 'GREEN':
+            score = min(score + 0.05, 1.0)
+            parts.append(f"TOCSIN=YELLOW(supporting)")
 
     # Fingerprints add supporting weight if any stylometric signal is active
     if fingerprint_score >= 0.30 and severity != 'GREEN':
@@ -3878,7 +4216,8 @@ def _detect_mode(prompt_sig, instr_density, self_sim, word_count):
 def determine(preamble_score, preamble_severity, prompt_sig, voice_dis,
               instr_density=None, word_count=0,
               self_sim=None, cont_result=None, lang_gate=None, norm_report=None,
-              mode='auto', fingerprint_score=0.0, semantic=None, ppl=None, **kwargs):
+              mode='auto', fingerprint_score=0.0, semantic=None, ppl=None,
+              tocsin=None, **kwargs):
     """Evidence fusion with channel-based corroboration.
 
     Returns (determination, reason, confidence, channel_details).
@@ -3889,7 +4228,7 @@ def determine(preamble_score, preamble_severity, prompt_sig, voice_dis,
 
     # Score all channels
     ch_prompt = score_prompt_structure(preamble_score, preamble_severity, prompt_sig, voice_dis, instr_density, word_count)
-    ch_style = score_stylometric(fingerprint_score, self_sim, voice_dis, semantic=semantic, ppl=ppl)
+    ch_style = score_stylometric(fingerprint_score, self_sim, voice_dis, semantic=semantic, ppl=ppl, tocsin=tocsin)
     ch_cont = score_continuation(cont_result)
     ch_window = score_windowed(window_result=kwargs.get('window_result'))
 
@@ -4029,7 +4368,7 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
                    dna_model=None, dna_samples=3,
                    ground_truth=None, language=None, domain=None,
                    mode='auto', cal_table=None):
-    """Run full v0.61 pipeline on a single prompt. Returns result dict."""
+    """Run full v0.65 pipeline on a single prompt. Returns result dict."""
     # Normalization pre-pass
     normalized_text, norm_report = normalize_text(text)
     word_count_raw = len(text.split())
@@ -4062,10 +4401,17 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
             model=dna_model, n_samples=dna_samples,
         )
     elif run_l3:
-        cont_result = run_continuation_local(text_for_analysis)
+        cont_result = run_continuation_local_multi(text_for_analysis)
 
     semantic = run_semantic_resonance(text_for_analysis)
     ppl = run_perplexity(text_for_analysis)
+    tocsin = run_token_cohesiveness(text_for_analysis)
+
+    # FEAT 10: Surprisal trajectory from per-token losses
+    surprisal_traj = {}
+    token_losses = ppl.get('token_losses')
+    if token_losses:
+        surprisal_traj = score_surprisal_windows(token_losses)
 
     # Topic-scrubbed stylometry
     masked_text, mask_count = mask_topical_content(text_for_analysis)
@@ -4081,6 +4427,7 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         lang_gate=lang_gate, norm_report=norm_report,
         mode=mode, fingerprint_score=fingerprint_score,
         semantic=semantic, ppl=ppl,
+        tocsin=tocsin,
         window_result=window_result,
     )
 
@@ -4098,7 +4445,7 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
 
     # Audit trail
     audit_trail = {
-        'pipeline_version': 'v0.61',
+        'pipeline_version': 'v0.65',
         'mode_resolved': channel_details.get('mode', mode),
         'channels': channel_details.get('channels', {}),
         'fairness_gate': {
@@ -4132,6 +4479,7 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         'mode': channel_details.get('mode', mode),
         'channel_details': channel_details,
         'audit_trail': audit_trail,
+        'pipeline_version': 'v0.65',
         # Normalization
         'norm_obfuscation_delta': norm_report.get('obfuscation_delta', 0.0),
         'norm_invisible_chars': norm_report.get('invisible_chars', 0),
@@ -4194,6 +4542,10 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         'window_hot_span': window_result.get('hot_span_length', 0),
         'window_n_windows': window_result.get('n_windows', 0),
         'window_mixed_signal': window_result.get('mixed_signal', False),
+        'window_fw_trajectory_cv': window_result.get('fw_trajectory_cv', 0.0),
+        'window_comp_trajectory_mean': window_result.get('comp_trajectory_mean', 0.0),
+        'window_comp_trajectory_cv': window_result.get('comp_trajectory_cv', 0.0),
+        'window_changepoint': window_result.get('changepoint'),
         # Pack diagnostics
         'pack_constraint_score': prompt_sig.get('pack_constraint_score', 0.0),
         'pack_exec_spec_score': prompt_sig.get('pack_exec_spec_score', 0.0),
@@ -4252,6 +4604,8 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
             'self_similarity_hapax_ratio': self_sim.get('hapax_ratio', 0.0),
             'self_similarity_hapax_count': self_sim.get('hapax_count', 0),
             'self_similarity_unique_words': self_sim.get('unique_words', 0),
+            'self_similarity_shuffled_comp_ratio': self_sim.get('shuffled_comp_ratio', 0.0),
+            'self_similarity_structural_compression_delta': self_sim.get('structural_compression_delta', 0.0),
         })
     else:
         result.update({
@@ -4264,6 +4618,8 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
             'self_similarity_sent_length_cv': 0.0, 'self_similarity_comp_ratio': 0.0,
             'self_similarity_hapax_ratio': 0.0, 'self_similarity_hapax_count': 0,
             'self_similarity_unique_words': 0,
+            'self_similarity_shuffled_comp_ratio': 0.0,
+            'self_similarity_structural_compression_delta': 0.0,
         })
 
     # Continuation (DNA-GPT)
@@ -4282,6 +4638,12 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
             'continuation_repeat4': proxy.get('repeat4', 0.0),
             'continuation_ttr': proxy.get('ttr', 0.0),
             'continuation_composite': proxy.get('composite', 0.0),
+            'continuation_composite_variance': proxy.get('composite_variance', 0.0),
+            'continuation_composite_stability': proxy.get('composite_stability', 0.0),
+            'continuation_improvement_rate': proxy.get('improvement_rate', 0.0),
+            'continuation_ncd_matrix_mean': proxy.get('ncd_matrix_mean', 0.0),
+            'continuation_ncd_matrix_variance': proxy.get('ncd_matrix_variance', 0.0),
+            'continuation_ncd_matrix_min': proxy.get('ncd_matrix_min', 0.0),
         })
     else:
         result.update({
@@ -4291,7 +4653,33 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
             'continuation_ncd': 0.0, 'continuation_internal_overlap': 0.0,
             'continuation_cond_surprisal': 0.0, 'continuation_repeat4': 0.0,
             'continuation_ttr': 0.0, 'continuation_composite': 0.0,
+            'continuation_composite_variance': 0.0, 'continuation_composite_stability': 0.0,
+            'continuation_improvement_rate': 0.0,
+            'continuation_ncd_matrix_mean': 0.0, 'continuation_ncd_matrix_variance': 0.0,
+            'continuation_ncd_matrix_min': 0.0,
         })
+
+    # Token cohesiveness (TOCSIN)
+    result.update({
+        'tocsin_cohesiveness': tocsin.get('cohesiveness', 0.0),
+        'tocsin_cohesiveness_std': tocsin.get('cohesiveness_std', 0.0),
+        'tocsin_determination': tocsin.get('determination'),
+        'tocsin_confidence': tocsin.get('confidence', 0.0),
+    })
+
+    # Perplexity compound signals (FEAT 7)
+    result.update({
+        'perplexity_comp_ratio': ppl.get('comp_ratio', 0.0),
+        'perplexity_zlib_normalized_ppl': ppl.get('zlib_normalized_ppl', 0.0),
+        'perplexity_comp_ppl_ratio': ppl.get('comp_ppl_ratio', 0.0),
+    })
+
+    # Surprisal trajectory (FEAT 10)
+    result.update({
+        'surprisal_trajectory_cv': surprisal_traj.get('surprisal_trajectory_cv', 0.0),
+        'surprisal_var_of_var': surprisal_traj.get('surprisal_var_of_var', 0.0),
+        'surprisal_stationarity': surprisal_traj.get('surprisal_stationarity', 0.0),
+    })
 
     return result
 

@@ -149,6 +149,73 @@ def _type_token_ratio(tokens):
     return len(set(tokens)) / len(tokens)
 
 
+def _surprisal_improvement_curve(lm, full_tokens, splits=(0.25, 0.50, 0.75)):
+    """Measure how conditional surprisal changes with increasing prefix length.
+
+    Returns dict with surprisal at each split point and the improvement rate.
+    """
+    n = len(full_tokens)
+    if n < 40:
+        return {'surprisal_curve': [], 'improvement_rate': 0.0}
+
+    tail_start = int(n * 0.75)
+    tail_tokens = full_tokens[tail_start:]
+
+    surprisals = []
+    for split in splits:
+        prefix_end = int(n * split)
+        if prefix_end < 10:
+            continue
+        prefix = full_tokens[:prefix_end]
+        surp = _conditional_surprisal(lm, prefix, tail_tokens)
+        surprisals.append((split, round(surp, 4)))
+
+    if len(surprisals) >= 2:
+        first = surprisals[0][1]
+        last = surprisals[-1][1]
+        improvement_rate = (first - last) / max(first, 1e-6)
+    else:
+        improvement_rate = 0.0
+
+    return {
+        'surprisal_curve': surprisals,
+        'improvement_rate': round(improvement_rate, 4),
+    }
+
+
+def _multi_segment_ncd(text, n_segments=4):
+    """Compute NCD between all pairs of text segments.
+
+    Low variance = all segments are similarly redundant = AI signal.
+    """
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    if len(sentences) < n_segments * 2:
+        return {'ncd_mean': 0.0, 'ncd_variance': 0.0, 'ncd_min': 0.0, 'n_pairs': 0}
+
+    seg_size = len(sentences) // n_segments
+    segments = []
+    for i in range(n_segments):
+        start = i * seg_size
+        end = start + seg_size if i < n_segments - 1 else len(sentences)
+        segments.append(' '.join(sentences[start:end]))
+
+    ncds = []
+    for i in range(len(segments)):
+        for j in range(i + 1, len(segments)):
+            ncd = _calculate_ncd(segments[i], segments[j])
+            ncds.append(ncd)
+
+    if not ncds:
+        return {'ncd_mean': 0.0, 'ncd_variance': 0.0, 'ncd_min': 0.0, 'n_pairs': 0}
+
+    return {
+        'ncd_mean': round(statistics.mean(ncds), 4),
+        'ncd_variance': round(statistics.variance(ncds) if len(ncds) >= 2 else 0.0, 6),
+        'ncd_min': round(min(ncds), 4),
+        'n_pairs': len(ncds),
+    }
+
+
 def run_continuation_local(text, gamma=0.5, K=32, order=5):
     """Zero-LLM DNA-GPT proxy via backoff n-gram language model."""
     word_count = len(text.split())
@@ -196,13 +263,25 @@ def run_continuation_local(text, gamma=0.5, K=32, order=5):
     repeat4 = _repeated_ngram_rate(suffix_tokens, 4)
     ttr = _type_token_ratio(suffix_tokens)
 
+    # FEAT 2: Cross-prefix surprisal improvement curve
+    all_tokens = _proxy_tokenize(text)
+    surp_curve = _surprisal_improvement_curve(lm, all_tokens)
+
     proxy_features = {
         'ncd': round(ncd, 4),
         'internal_overlap': round(internal_overlap, 4),
         'cond_surprisal': round(cond_surp, 4),
         'repeat4': round(repeat4, 4),
         'ttr': round(ttr, 4),
+        'surprisal_curve': surp_curve['surprisal_curve'],
+        'improvement_rate': surp_curve['improvement_rate'],
     }
+
+    # FEAT 6: Multi-segment NCD matrix
+    multi_ncd = _multi_segment_ncd(text)
+    proxy_features['ncd_matrix_mean'] = multi_ncd['ncd_mean']
+    proxy_features['ncd_matrix_variance'] = multi_ncd['ncd_variance']
+    proxy_features['ncd_matrix_min'] = multi_ncd['ncd_min']
 
     # Composite scoring
     ncd_signal = max(0.0, (1.0 - ncd) / 0.15)
@@ -210,6 +289,11 @@ def run_continuation_local(text, gamma=0.5, K=32, order=5):
     repeat_signal = max(0.0, min(1.0, repeat4 / 0.15))
     ttr_signal = max(0.0, min(1.0, (0.55 - ttr) / 0.20))
     bscore_signal = min(1.0, bscore / 0.15)
+
+    # NCD uniformity signal (FEAT 6)
+    ncd_uniformity_signal = 0.0
+    if multi_ncd['ncd_variance'] < 0.002 and multi_ncd['n_pairs'] >= 3:
+        ncd_uniformity_signal = min((0.002 - multi_ncd['ncd_variance']) / 0.001, 1.0) * 0.5
 
     composite = (
         0.30 * bscore_signal +
@@ -219,6 +303,9 @@ def run_continuation_local(text, gamma=0.5, K=32, order=5):
         0.10 * ttr_signal +
         0.05 * max(0.0, min(1.0, (5.0 - cond_surp) / 3.0))
     )
+    # Blend in NCD uniformity with small weight
+    if ncd_uniformity_signal > 0:
+        composite = composite * 0.93 + ncd_uniformity_signal * 0.07
 
     proxy_features['composite'] = round(composite, 4)
 
@@ -257,3 +344,44 @@ def run_continuation_local(text, gamma=0.5, K=32, order=5):
         'word_count': word_count,
         'proxy_features': proxy_features,
     }
+
+
+def run_continuation_local_multi(text, gammas=(0.3, 0.5, 0.7), K=16, order=5):
+    """Multi-truncation DNA-GPT local proxy.
+
+    Runs continuation analysis at multiple truncation ratios and measures
+    stability of the composite score. High stability (low variance) across
+    truncation points is an AI signal.
+    """
+    composites = []
+    full_result = None
+
+    for gamma in gammas:
+        result = run_continuation_local(text, gamma=gamma, K=K, order=order)
+        comp = result.get('proxy_features', {}).get('composite', 0.0)
+        composites.append(comp)
+        if gamma == 0.5:
+            full_result = result
+
+    if full_result is None:
+        full_result = result
+
+    if len(composites) >= 2:
+        comp_mean = statistics.mean(composites)
+        comp_var = statistics.variance(composites)
+        stability = max(0.0, 1.0 - (comp_var / 0.08))
+    else:
+        comp_mean = composites[0] if composites else 0.0
+        comp_var = 0.0
+        stability = 0.0
+
+    full_result['proxy_features']['multi_composites'] = [round(c, 4) for c in composites]
+    full_result['proxy_features']['composite_variance'] = round(comp_var, 6)
+    full_result['proxy_features']['composite_stability'] = round(stability, 4)
+
+    # Stability boosts the composite when it agrees with the primary signal
+    if stability >= 0.75 and comp_mean >= 0.30:
+        boosted = min(full_result['proxy_features']['composite'] + 0.10, 1.0)
+        full_result['proxy_features']['composite'] = round(boosted, 4)
+
+    return full_result

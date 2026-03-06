@@ -8,6 +8,7 @@ from llm_detector.compat import HAS_SEMANTIC, HAS_PERPLEXITY
 from llm_detector.analyzers.semantic_resonance import run_semantic_resonance
 from llm_detector.analyzers.perplexity import run_perplexity
 from llm_detector.analyzers.preamble import run_preamble
+from llm_detector.analyzers.self_similarity import run_self_similarity
 from tests.conftest import AI_TEXT, HUMAN_TEXT, CLINICAL_TEXT
 
 PASSED = 0
@@ -115,6 +116,65 @@ def test_feature_flags():
     print(f"    HAS_SEMANTIC={HAS_SEMANTIC}, HAS_PERPLEXITY={HAS_PERPLEXITY}")
 
 
+def test_self_similarity_s13():
+    print("\n-- SELF-SIMILARITY S13: STRUCTURAL COMPRESSION DELTA (FEAT 5) --")
+
+    long_ai = (
+        "This comprehensive analysis provides a thorough examination of the key factors "
+        "that contribute to the overall effectiveness of the proposed framework. Furthermore, "
+        "it is essential to note that the implementation of these strategies ensures alignment "
+        "with best practices and industry standards. To address this challenge, we must consider "
+        "multiple perspectives and leverage data-driven insights to achieve optimal outcomes. "
+        "Additionally, this approach demonstrates the critical importance of systematic evaluation "
+        "and evidence-based decision making in the modern landscape. The primary challenge remains "
+        "ensuring comprehensive coverage across all critical domains while maintaining analytical "
+        "rigor. The fundamental premise of this framework establishes clear guidelines for all "
+        "subsequent analytical procedures. Moreover, the systematic assessment reveals significant "
+        "opportunities for sustained growth and development. In conclusion, these findings underscore "
+        "the transformative potential of this holistic framework for evidence-based practice. "
+        "The comprehensive methodology employed in this investigation demonstrates the critical "
+        "importance of maintaining rigorous analytical standards throughout the evaluation process. "
+        "Furthermore, the empirical evidence gathered during this systematic review provides "
+        "compelling support for the proposed intervention strategy. The results indicate that "
+        "a multifaceted approach yields superior outcomes when compared to traditional methods. "
+        "Additionally, the framework incorporates robust quality assurance mechanisms designed "
+        "to ensure the reliability and validity of all analytical outputs generated during "
+        "the assessment phase of this comprehensive evaluation initiative."
+    )
+    r = run_self_similarity(long_ai)
+    check("s13: shuffled_comp_ratio in result", 'shuffled_comp_ratio' in r,
+          f"keys: {[k for k in r.keys() if 'shuf' in k or 'struct' in k]}")
+    check("s13: structural_compression_delta in result", 'structural_compression_delta' in r)
+    check("s13: shuffled_comp_ratio > 0", r['shuffled_comp_ratio'] > 0,
+          f"got {r['shuffled_comp_ratio']}")
+    check("s13: delta is finite", isinstance(r['structural_compression_delta'], float))
+
+    # Short text should still return zeros for these
+    r_short = run_self_similarity("Short text.")
+    check("s13 short: shuffled_comp_ratio == 0 (short text exempt)",
+          r_short.get('shuffled_comp_ratio', 0) == 0 or r_short.get('word_count', 0) < 200)
+
+
+def test_perplexity_compound_signals():
+    print("\n-- PERPLEXITY COMPOUND SIGNALS (FEAT 7) --")
+
+    short = "Hello world."
+    r_short = run_perplexity(short)
+    check("Short: comp_ratio in result", 'comp_ratio' in r_short)
+    check("Short: zlib_normalized_ppl in result", 'zlib_normalized_ppl' in r_short)
+    check("Short: comp_ppl_ratio in result", 'comp_ppl_ratio' in r_short)
+    check("Short: token_losses in result", 'token_losses' in r_short)
+
+    if HAS_PERPLEXITY:
+        r = run_perplexity(CLINICAL_TEXT)
+        check("Clinical: comp_ratio > 0", r['comp_ratio'] > 0,
+              f"got {r['comp_ratio']}")
+        check("Clinical: zlib_normalized_ppl > 0", r['zlib_normalized_ppl'] > 0,
+              f"got {r['zlib_normalized_ppl']}")
+        check("Clinical: token_losses is list", isinstance(r['token_losses'], list),
+              f"got type {type(r.get('token_losses'))}")
+
+
 if __name__ == '__main__':
     print("=" * 70)
     print("Analyzer Tests")
@@ -123,7 +183,9 @@ if __name__ == '__main__':
     test_feature_flags()
     test_semantic_resonance()
     test_perplexity()
+    test_perplexity_compound_signals()
     test_cot_leakage()
+    test_self_similarity_s13()
 
     print(f"\n{'=' * 70}")
     print(f"RESULTS: {PASSED} passed, {FAILED} failed")

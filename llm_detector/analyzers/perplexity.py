@@ -8,6 +8,8 @@ Surprisal diversity features based on:
 - "When AI Settles Down" (volatility decay across text halves)
 """
 
+import zlib
+
 from llm_detector.compat import HAS_PERPLEXITY, get_perplexity_model
 
 if HAS_PERPLEXITY:
@@ -17,6 +19,8 @@ _PPL_EMPTY = {
     'perplexity': 0.0, 'determination': None, 'confidence': 0.0,
     'surprisal_variance': 0.0, 'surprisal_first_half_var': 0.0,
     'surprisal_second_half_var': 0.0, 'volatility_decay_ratio': 1.0,
+    'comp_ratio': 0.0, 'zlib_normalized_ppl': 0.0, 'comp_ppl_ratio': 0.0,
+    'token_losses': None,
 }
 
 
@@ -48,12 +52,20 @@ def run_perplexity(text):
 
     ppl = _torch.exp(loss).item()
 
+    # ── FEAT 7: Compression-perplexity divergence ──
+    text_bytes = text.encode('utf-8')
+    comp_len = len(zlib.compress(text_bytes))
+    comp_ratio = comp_len / max(len(text_bytes), 1)
+    zlib_normalized_ppl = ppl * comp_ratio
+    comp_ppl_ratio = comp_ratio / max(ppl / 100.0, 0.01)
+
     # ── Surprisal diversity & volatility decay ──
     surprisal_variance = 0.0
     volatility_decay_ratio = 1.0
     first_half_var = 0.0
     second_half_var = 0.0
     n_tokens = 0
+    token_losses_list = None
     try:
         with _torch.no_grad():
             logits = model(input_ids).logits
@@ -66,6 +78,7 @@ def run_perplexity(text):
         )
         losses = per_token_loss.float().cpu().numpy()
         n_tokens = len(losses)
+        token_losses_list = losses.tolist()
 
         if n_tokens >= 10:
             surprisal_variance = float(losses.var())
@@ -117,6 +130,17 @@ def run_perplexity(text):
             else:
                 reason += f" + volatility_decay({volatility_decay_ratio:.2f})"
 
+    # FEAT 7: Zlib-normalized perplexity compound signal
+    zlib_ppl_signal = zlib_normalized_ppl < 8.0 and n_tokens >= 30
+    if zlib_ppl_signal:
+        if det is None:
+            det = 'YELLOW'
+            conf = min(0.35, 0.15 + (8.0 - zlib_normalized_ppl) * 0.02)
+            reason = f"Zlib-normalized PPL ({zlib_normalized_ppl:.1f}): predictable and compressible"
+        elif det in ('YELLOW', 'AMBER'):
+            conf = min(conf + 0.05, 0.80)
+            reason += f" + zlib_ppl({zlib_normalized_ppl:.1f})"
+
     return {
         'perplexity': round(ppl, 2),
         'determination': det,
@@ -126,4 +150,8 @@ def run_perplexity(text):
         'surprisal_first_half_var': round(first_half_var, 4),
         'surprisal_second_half_var': round(second_half_var, 4),
         'volatility_decay_ratio': round(volatility_decay_ratio, 4),
+        'comp_ratio': round(comp_ratio, 4),
+        'zlib_normalized_ppl': round(zlib_normalized_ppl, 2),
+        'comp_ppl_ratio': round(comp_ppl_ratio, 4),
+        'token_losses': token_losses_list,
     }
