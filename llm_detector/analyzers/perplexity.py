@@ -8,7 +8,7 @@ Surprisal diversity features based on:
 - "When AI Settles Down" (volatility decay across text halves)
 """
 
-from llm_detector.compat import HAS_PERPLEXITY, _PPL_MODEL, _PPL_TOKENIZER
+from llm_detector.compat import HAS_PERPLEXITY, get_perplexity_model
 
 if HAS_PERPLEXITY:
     import torch as _torch
@@ -33,15 +33,17 @@ def run_perplexity(text):
     if len(words) < 50:
         return {**_PPL_EMPTY, 'reason': 'Perplexity: text too short'}
 
-    encodings = _PPL_TOKENIZER(text, return_tensors='pt', truncation=True,
-                                max_length=1024)
+    model, tokenizer = get_perplexity_model()
+
+    encodings = tokenizer(text, return_tensors='pt', truncation=True,
+                           max_length=1024)
     input_ids = encodings.input_ids
 
     if input_ids.size(1) < 10:
         return {**_PPL_EMPTY, 'reason': 'Perplexity: too few tokens after encoding'}
 
     with _torch.no_grad():
-        outputs = _PPL_MODEL(input_ids, labels=input_ids)
+        outputs = model(input_ids, labels=input_ids)
         loss = outputs.loss
 
     ppl = _torch.exp(loss).item()
@@ -53,7 +55,7 @@ def run_perplexity(text):
     second_half_var = 0.0
     try:
         with _torch.no_grad():
-            logits = _PPL_MODEL(input_ids).logits
+            logits = model(input_ids).logits
         shift_logits = logits[:, :-1, :].contiguous()
         shift_labels = input_ids[:, 1:].contiguous()
         loss_fn = _torch.nn.CrossEntropyLoss(reduction='none')

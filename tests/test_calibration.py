@@ -105,7 +105,7 @@ def test_apply_without_cal_table():
     result = apply_calibration(0.75, None)
     check("raw unchanged", result['calibrated_confidence'] == 0.75,
           f"got {result['calibrated_confidence']}")
-    check("p_value is None", result['p_value'] is None)
+    check("conformity_level is None", result['conformity_level'] is None)
     check("stratum is uncalibrated", result['stratum_used'] == 'uncalibrated')
 
 
@@ -119,7 +119,7 @@ def test_apply_with_cal_table():
     result = apply_calibration(0.75, cal_table)
     check("calibrated_confidence is a number",
           isinstance(result['calibrated_confidence'], (int, float)))
-    check("p_value is a number", isinstance(result['p_value'], (int, float)))
+    check("conformity_level is a number", isinstance(result['conformity_level'], (int, float)))
 
 
 def test_stratum_fallback():
@@ -139,23 +139,23 @@ def test_stratum_fallback():
           f"got {result_fallback['stratum_used']}")
 
 
-def test_pvalue_monotonicity():
-    print("\n-- p-value monotonicity --")
+def test_conformity_level_monotonicity():
+    print("\n-- conformity_level monotonicity --")
     cal_table = {
         'global': {0.01: 0.10, 0.05: 0.30, 0.10: 0.50},
         'strata': {},
         'n_calibration': 100,
     }
-    # As confidence increases, nc_score decreases, p_value should increase
+    # As confidence increases, nc_score decreases, conformity_level should increase
     confidences = [0.40, 0.60, 0.75, 0.85, 0.95]
-    p_values = []
+    levels = []
     for conf in confidences:
         result = apply_calibration(conf, cal_table)
-        p_values.append(result['p_value'])
+        levels.append(result['conformity_level'])
 
-    check("p-values are monotonically non-decreasing as confidence increases",
-          all(p_values[i] <= p_values[i+1] for i in range(len(p_values) - 1)),
-          f"p_values={p_values} for confidences={confidences}")
+    check("conformity_levels are monotonically non-decreasing as confidence increases",
+          all(levels[i] <= levels[i+1] for i in range(len(levels) - 1)),
+          f"levels={levels} for confidences={confidences}")
 
 
 if __name__ == '__main__':
@@ -169,7 +169,7 @@ if __name__ == '__main__':
     test_apply_without_cal_table()
     test_apply_with_cal_table()
     test_stratum_fallback()
-    test_pvalue_monotonicity()
+    test_conformity_level_monotonicity()
 
     print(f"\n{'=' * 70}")
     print(f"  RESULTS: {PASSED} passed, {FAILED} failed")

@@ -33,11 +33,11 @@ def print_result(r, verbose=False):
     print(f"     Reason: {r['reason']}")
 
     cal_conf = r.get('calibrated_confidence')
-    p_val = r.get('p_value')
+    p_val = r.get('conformity_level')
     if cal_conf is not None and cal_conf != r.get('confidence'):
         cal_str = f"     Calibrated: conf={cal_conf:.3f}"
         if p_val is not None:
-            cal_str += f"  p={p_val:.3f}"
+            cal_str += f"  conf_level={p_val:.3f}"
         cal_str += f"  [{r.get('calibration_stratum', '?')}]"
         print(cal_str)
 
@@ -234,13 +234,18 @@ def main():
     print(f"\n{'='*90}")
     print(f"  PIPELINE v0.61 RESULTS (n={len(results)})")
     print(f"{'='*90}")
-    for det in ['RED', 'AMBER', 'YELLOW', 'GREEN']:
+    all_dets = ['RED', 'AMBER', 'MIXED', 'YELLOW', 'REVIEW', 'GREEN']
+    icons = {
+        'RED': '\U0001f534', 'AMBER': '\U0001f7e0', 'YELLOW': '\U0001f7e1',
+        'GREEN': '\U0001f7e2', 'MIXED': '\U0001f535', 'REVIEW': '\u26aa',
+    }
+    for det in all_dets:
         ct = det_counts.get(det, 0)
-        pct = ct / len(results) * 100
-        icons = {'RED': '\U0001f534', 'AMBER': '\U0001f7e0', 'YELLOW': '\U0001f7e1', 'GREEN': '\U0001f7e2'}
-        print(f"  {icons[det]} {det:>8}: {ct:>4} ({pct:.1f}%)")
+        if ct > 0 or det in ('RED', 'AMBER', 'YELLOW', 'GREEN'):
+            pct = ct / len(results) * 100
+            print(f"  {icons[det]} {det:>8}: {ct:>4} ({pct:.1f}%)")
 
-    flagged = [r for r in results if r['determination'] in ('RED', 'AMBER')]
+    flagged = [r for r in results if r['determination'] in ('RED', 'AMBER', 'MIXED')]
     if flagged:
         print(f"\n{'='*90}")
         print(f"  FLAGGED SUBMISSIONS: {len(flagged)}")

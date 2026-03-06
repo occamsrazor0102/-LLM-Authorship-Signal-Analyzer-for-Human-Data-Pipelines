@@ -148,10 +148,12 @@ class DetectorGUI:
             counts[r['determination']] += 1
             self._append(f"[{i}/{len(tasks)}] {self._format_result(r)}\n")
 
-        summary = (
-            f"\nSummary: RED={counts.get('RED', 0)} | AMBER={counts.get('AMBER', 0)} "
-            f"| YELLOW={counts.get('YELLOW', 0)} | GREEN={counts.get('GREEN', 0)}\n"
-        )
+        parts = []
+        for det in ['RED', 'AMBER', 'MIXED', 'YELLOW', 'REVIEW', 'GREEN']:
+            ct = counts.get(det, 0)
+            if ct > 0 or det in ('RED', 'AMBER', 'YELLOW', 'GREEN'):
+                parts.append(f"{det}={ct}")
+        summary = f"\nSummary: {' | '.join(parts)}\n"
         self._append(summary)
 
     @staticmethod

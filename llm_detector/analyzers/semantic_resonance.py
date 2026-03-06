@@ -3,7 +3,7 @@
 Ref: Mitchell et al. (2023) "DetectGPT" -- semantic density as AI signal.
 """
 
-from llm_detector.compat import HAS_SEMANTIC, _EMBEDDER, _AI_CENTROIDS, _HUMAN_CENTROIDS
+from llm_detector.compat import HAS_SEMANTIC, get_semantic_models
 
 if HAS_SEMANTIC:
     from sklearn.metrics.pairwise import cosine_similarity as _cosine_similarity
@@ -45,13 +45,15 @@ def run_semantic_resonance(text):
     if not chunks:
         chunks = [text]
 
-    vecs = _EMBEDDER.encode(chunks)
+    embedder, ai_centroids, human_centroids = get_semantic_models()
 
-    ai_sims = _cosine_similarity(vecs, _AI_CENTROIDS)
+    vecs = embedder.encode(chunks)
+
+    ai_sims = _cosine_similarity(vecs, ai_centroids)
     max_ai_sim = float(ai_sims.max())
     mean_ai_sim = float(ai_sims.max(axis=1).mean())
 
-    human_sims = _cosine_similarity(vecs, _HUMAN_CENTROIDS)
+    human_sims = _cosine_similarity(vecs, human_centroids)
     max_human_sim = float(human_sims.max())
     mean_human_sim = float(human_sims.max(axis=1).mean())
 

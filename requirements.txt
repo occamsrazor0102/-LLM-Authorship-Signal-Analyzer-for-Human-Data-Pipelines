@@ -1,27 +1,28 @@
-# Core dependencies
+# Core dependencies (matches pyproject.toml [project.dependencies])
 pandas
 openpyxl
 
-# API providers for DNA-GPT continuation analysis
-anthropic
-openai
+# Optional: API providers for DNA-GPT continuation analysis
+# Install with: pip install ".[api]"
+# anthropic
+# openai
 
-# Optional: improves sentence segmentation
+# Optional: improved sentence segmentation
+# Install with: pip install ".[nlp]"
 # spacy
-
-# Optional: semantic vector analysis (Layer 2.8)
 # sentence-transformers
 # scikit-learn
+# ftfy
 
 # Optional: local perplexity scoring
+# Install with: pip install ".[perplexity]"
 # transformers
 # torch
 
-# Optional: robust text encoding repair
-# ftfy
-
 # Optional: PDF input support
+# Install with: pip install ".[pdf]"
 # pypdf
 
 # Bundling as standalone executable
+# Install with: pip install ".[bundle]"
 # pyinstaller

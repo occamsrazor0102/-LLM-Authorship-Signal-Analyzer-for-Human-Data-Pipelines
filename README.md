@@ -17,7 +17,7 @@ The pipeline analyzes text across multiple independent layers, each targeting a 
 | Layer | Module | Description |
 |-------|--------|-------------|
 | **Preamble** | `analyzers/preamble.py` | Catches LLM output artifacts: assistant acknowledgments, artifact delivery frames, first-person creation claims, meta-design language |
-| **Fingerprint** | `analyzers/fingerprint.py` | 120-word tiered lexicon of LLM-preferred vocabulary (diagnostic only, not standalone trigger) |
+| **Fingerprint** | `analyzers/fingerprint.py` | 27-word diagnostic vocabulary supplemented by 16 typed lexicon pack families (diagnostic only, not standalone trigger) |
 | **Prompt Signature** | `analyzers/prompt_signature.py` | Structural patterns of LLM-generated prompts: Constraint Frame Density, Must-Frame Saturation Rate, meta-evaluation design language |
 | **Voice Dissonance** | `analyzers/voice_dissonance.py` | Measures contradiction between casual voice markers and technical specification density |
 | **Instruction Density** | `analyzers/instruction_density.py` | Counts formal-exhaustive specification patterns: imperatives, conditionals, binary specs |
@@ -38,14 +38,40 @@ Signals are organized into four independent scoring channels:
 | **Continuation** | `channels/continuation.py` | Continuation API or Continuation Local |
 | **Windowed** | `channels/windowed.py` | Sentence-window scoring |
 
+### Lexicon Pack System
+
+The pipeline includes 16 externalized vocabulary families organized by semantic category, each with independent weights and caps. Packs feed into specific layers:
+
+| Category | Packs | Target Layer |
+|----------|-------|-------------|
+| Constraint | obligation, prohibition, recommendation, conditional, cardinality, state | Prompt Signature |
+| Schema | schema_json, schema_types, data_fields, tabular | Voice Dissonance |
+| Exec-Spec | gherkin, rubric, acceptance | Prompt Signature |
+| Instruction | task_verbs, value_domain | Instruction Density |
+| Format | format_markup | Voice Dissonance |
+
+### Detection Modes
+
+| Mode | Primary Channels | Use Case |
+|------|-----------------|----------|
+| `task_prompt` | Prompt Structure, Continuation | Task prompts, evaluation items |
+| `generic_aigt` | All four channels | Reports, essays, expository text |
+| `auto` | Heuristic selection | Default — detects mode from text |
+
 ### Determination Levels
 
 | Level | Meaning | Action |
 |-------|---------|--------|
 | RED | Strong evidence of LLM generation | Flag for review, likely reject |
 | AMBER | Substantial evidence, high confidence | Flag for manual review |
+| MIXED | Conflicting strong signals across channels | Flag for manual review |
 | YELLOW | Minor signals or convergence pattern | Note for awareness, may be legitimate |
+| REVIEW | Weak sub-threshold signals worth noting | Optional manual review |
 | GREEN | No significant signals detected | Pass |
+
+### Conformal Calibration
+
+When baseline data is available, the pipeline applies conformal calibration to raw confidence scores. The `conformity_level` field indicates how typical a confidence score is among calibrated human-authored texts (1.0 = typical of human text, 0.01 = very unusual).
 
 ## Package Structure
 
@@ -95,6 +121,17 @@ run_detector                   # Thin CLI launcher
 ```
 
 ## Installation
+
+```bash
+pip install .                    # Core only (pandas, openpyxl)
+pip install ".[api]"             # + Anthropic/OpenAI for DNA-GPT continuation
+pip install ".[nlp]"             # + spaCy, sentence-transformers, scikit-learn
+pip install ".[perplexity]"      # + transformers/torch for perplexity scoring
+pip install ".[pdf]"             # + pypdf for PDF input
+pip install ".[all]"             # Everything
+```
+
+Or install dependencies individually:
 
 ```bash
 pip install openpyxl pandas
