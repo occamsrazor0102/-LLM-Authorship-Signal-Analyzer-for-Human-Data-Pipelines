@@ -11,6 +11,11 @@ PREAMBLE_PATTERNS = [
     (r"(?i)^\s*[\"']?(I'?ve |I have |I'?ll |let me )(created?|drafted?|prepared?|written|designed|built|put together)", "first_person_creation", "CRITICAL"),
     (r"(?i)(natural workplace style|sounds? like a real|human[- ]issued|reads? like a human)", "style_masking", "HIGH"),
     (r"(?i)notes on what I (fixed|changed|cleaned|updated|revised)", "editorial_meta", "HIGH"),
+    # Chain-of-thought leakage: reasoning model artifacts left in output
+    (r"<think>", "cot_leakage", "CRITICAL"),
+    (r"</think>", "cot_leakage", "CRITICAL"),
+    (r"(?i)\blet me (?:rethink|reconsider|recalculate|re-examine|think about this)\b", "cot_reasoning", "HIGH"),
+    (r"(?i)\bwait,?\s+(?:actually|no|let me)", "cot_self_correction", "HIGH"),
 ]
 
 

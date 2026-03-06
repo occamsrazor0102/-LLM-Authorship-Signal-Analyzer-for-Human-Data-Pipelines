@@ -1,10 +1,7 @@
 """Shared text utilities used across multiple modules."""
 
 import re
-from llm_detector.compat import HAS_SPACY
-
-if HAS_SPACY:
-    from llm_detector.compat import _nlp
+from llm_detector.compat import HAS_SPACY, get_nlp
 
 # Top-50 English function words (closed class, highly stable across registers)
 ENGLISH_FUNCTION_WORDS = frozenset([
@@ -22,7 +19,8 @@ ENGLISH_FUNCTION_WORDS = frozenset([
 def get_sentences(text):
     """Segment text into sentences using spacy sentencizer or regex fallback."""
     if HAS_SPACY:
-        doc = _nlp(text)
+        nlp = get_nlp()
+        doc = nlp(text)
         return [s.text for s in doc.sents]
     else:
         sents = re.split(r'(?<=[.!?])\s+', text)

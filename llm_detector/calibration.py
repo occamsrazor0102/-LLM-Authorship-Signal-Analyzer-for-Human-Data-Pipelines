@@ -64,12 +64,21 @@ def calibrate_from_baselines(jsonl_path):
 
 
 def apply_calibration(confidence, cal_table, domain=None, length_bin=None):
-    """Apply conformal calibration to a raw confidence score."""
+    """Apply conformal calibration to a raw confidence score.
+
+    Returns dict with:
+        conformity_level: Discretized measure of how typical this confidence
+            score is among calibrated human-authored texts. Values:
+            1.0  = highly typical of human text (low nonconformity)
+            0.10 = moderately unusual among human calibration set
+            0.05 = quite unusual among human calibration set
+            0.01 = very unusual — strong signal of non-human origin
+    """
     if cal_table is None:
         return {
             'raw_confidence': confidence,
             'calibrated_confidence': confidence,
-            'p_value': None,
+            'conformity_level': None,
             'stratum_used': 'uncalibrated',
         }
 
@@ -84,13 +93,13 @@ def apply_calibration(confidence, cal_table, domain=None, length_bin=None):
         stratum_label = 'global'
 
     if nc_score <= cal.get(0.01, 0):
-        p_value = 1.0
+        conformity_level = 1.0
     elif nc_score <= cal.get(0.05, 0):
-        p_value = 0.10
+        conformity_level = 0.10
     elif nc_score <= cal.get(0.10, 0):
-        p_value = 0.05
+        conformity_level = 0.05
     else:
-        p_value = 0.01
+        conformity_level = 0.01
 
     alpha_05 = cal.get(0.05, 0.5)
     if nc_score > alpha_05:
@@ -103,7 +112,7 @@ def apply_calibration(confidence, cal_table, domain=None, length_bin=None):
     return {
         'raw_confidence': round(confidence, 4),
         'calibrated_confidence': round(calibrated, 4),
-        'p_value': round(p_value, 4) if p_value is not None else None,
+        'conformity_level': round(conformity_level, 4) if conformity_level is not None else None,
         'stratum_used': stratum_label,
     }
 

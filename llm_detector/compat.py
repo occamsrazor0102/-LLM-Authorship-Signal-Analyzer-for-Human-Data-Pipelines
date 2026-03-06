@@ -3,9 +3,15 @@ Feature detection and optional dependency management.
 
 Centralizes all try/except ImportError blocks so other modules can check
 availability flags without repeating import logic.
+
+Models are lazily loaded on first use via getter functions to avoid
+slow imports when only checking flags or running --help.
 """
 
 import re
+import logging
+
+logger = logging.getLogger(__name__)
 
 # ── tkinter ──────────────────────────────────────────────────────────────────
 try:
@@ -17,83 +23,99 @@ except ImportError:
 
 # ── spaCy: lightweight sentencizer ──────────────────────────────────────────
 try:
-    import spacy
-    from spacy.lang.en import English
-    _nlp = English()
-    _nlp.add_pipe("sentencizer")
+    import spacy  # noqa: F401
     HAS_SPACY = True
 except ImportError:
     HAS_SPACY = False
-    print("INFO: spacy not installed. Sentence segmentation will use regex fallback.")
-except Exception as e:
-    HAS_SPACY = False
-    print(f"INFO: spacy sentencizer setup failed ({e}). Using regex fallback.")
+    logger.info("spacy not installed. Sentence segmentation will use regex fallback.")
+
+_nlp = None
+
+def get_nlp():
+    """Return spaCy sentencizer, initializing on first call."""
+    global _nlp
+    if _nlp is None and HAS_SPACY:
+        from spacy.lang.en import English
+        _nlp = English()
+        _nlp.add_pipe("sentencizer")
+    return _nlp
 
 # ── ftfy: robust text encoding repair ───────────────────────────────────────
 try:
-    import ftfy
+    import ftfy  # noqa: F401
     HAS_FTFY = True
 except ImportError:
     HAS_FTFY = False
 
 # ── sentence-transformers: semantic vector analysis ─────────────────────────
-HAS_SEMANTIC = False
+try:
+    from sentence_transformers import SentenceTransformer  # noqa: F401
+    from sklearn.metrics.pairwise import cosine_similarity  # noqa: F401
+    import numpy  # noqa: F401
+    HAS_SEMANTIC = True
+except ImportError:
+    HAS_SEMANTIC = False
+except Exception as e:
+    HAS_SEMANTIC = False
+    logger.info("sentence-transformers setup failed (%s). Semantic layer disabled.", e)
+
 _EMBEDDER = None
 _AI_CENTROIDS = None
 _HUMAN_CENTROIDS = None
 
-try:
-    from sentence_transformers import SentenceTransformer
-    from sklearn.metrics.pairwise import cosine_similarity as _cosine_similarity
-    import numpy as np
-
-    _EMBEDDER = SentenceTransformer('all-MiniLM-L6-v2')
-
-    _AI_ARCHETYPES = [
-        "As an AI language model, I cannot provide personal opinions.",
-        "Here is a comprehensive breakdown of the key factors to consider.",
-        "To address this challenge, we must consider multiple perspectives.",
-        "This thorough analysis demonstrates the critical importance of the topic.",
-        "Furthermore, it is essential to note that this approach ensures alignment.",
-        "In conclusion, by leveraging these strategies we can achieve optimal results.",
-    ]
-    _HUMAN_ARCHETYPES = [
-        "honestly idk maybe try restarting it lol",
-        "so I went ahead and just hacked together a quick script",
-        "tbh the whole thing is kinda janky but it works",
-        "yeah no that's totally wrong, here's what actually happened",
-        "I messed around with it for a bit and got something working",
-    ]
-    _AI_CENTROIDS = _EMBEDDER.encode(_AI_ARCHETYPES)
-    _HUMAN_CENTROIDS = _EMBEDDER.encode(_HUMAN_ARCHETYPES)
-    HAS_SEMANTIC = True
-except ImportError:
-    pass
-except Exception as e:
-    print(f"INFO: sentence-transformers setup failed ({e}). Semantic layer disabled.")
+def get_semantic_models():
+    """Return (embedder, ai_centroids, human_centroids), loading on first call."""
+    global _EMBEDDER, _AI_CENTROIDS, _HUMAN_CENTROIDS
+    if _EMBEDDER is None and HAS_SEMANTIC:
+        from sentence_transformers import SentenceTransformer
+        _EMBEDDER = SentenceTransformer('all-MiniLM-L6-v2')
+        _AI_ARCHETYPES = [
+            "As an AI language model, I cannot provide personal opinions.",
+            "Here is a comprehensive breakdown of the key factors to consider.",
+            "To address this challenge, we must consider multiple perspectives.",
+            "This thorough analysis demonstrates the critical importance of the topic.",
+            "Furthermore, it is essential to note that this approach ensures alignment.",
+            "In conclusion, by leveraging these strategies we can achieve optimal results.",
+        ]
+        _HUMAN_ARCHETYPES = [
+            "honestly idk maybe try restarting it lol",
+            "so I went ahead and just hacked together a quick script",
+            "tbh the whole thing is kinda janky but it works",
+            "yeah no that's totally wrong, here's what actually happened",
+            "I messed around with it for a bit and got something working",
+        ]
+        _AI_CENTROIDS = _EMBEDDER.encode(_AI_ARCHETYPES)
+        _HUMAN_CENTROIDS = _EMBEDDER.encode(_HUMAN_ARCHETYPES)
+    return _EMBEDDER, _AI_CENTROIDS, _HUMAN_CENTROIDS
 
 # ── transformers: local perplexity scoring ──────────────────────────────────
-HAS_PERPLEXITY = False
+try:
+    from transformers import GPT2LMHeadModel, GPT2TokenizerFast  # noqa: F401
+    import torch  # noqa: F401
+    HAS_PERPLEXITY = True
+except ImportError:
+    HAS_PERPLEXITY = False
+except Exception as e:
+    HAS_PERPLEXITY = False
+    logger.info("transformers/torch setup failed (%s). Perplexity scoring disabled.", e)
+
 _PPL_MODEL = None
 _PPL_TOKENIZER = None
 
-try:
-    from transformers import GPT2LMHeadModel, GPT2TokenizerFast
-    import torch as _torch
-
-    _PPL_MODEL_ID = 'distilgpt2'
-    _PPL_MODEL = GPT2LMHeadModel.from_pretrained(_PPL_MODEL_ID)
-    _PPL_TOKENIZER = GPT2TokenizerFast.from_pretrained(_PPL_MODEL_ID)
-    _PPL_MODEL.eval()
-    HAS_PERPLEXITY = True
-except ImportError:
-    pass
-except Exception as e:
-    print(f"INFO: transformers/torch setup failed ({e}). Perplexity scoring disabled.")
+def get_perplexity_model():
+    """Return (model, tokenizer), loading on first call."""
+    global _PPL_MODEL, _PPL_TOKENIZER
+    if _PPL_MODEL is None and HAS_PERPLEXITY:
+        from transformers import GPT2LMHeadModel, GPT2TokenizerFast
+        _PPL_MODEL_ID = 'distilgpt2'
+        _PPL_MODEL = GPT2LMHeadModel.from_pretrained(_PPL_MODEL_ID)
+        _PPL_TOKENIZER = GPT2TokenizerFast.from_pretrained(_PPL_MODEL_ID)
+        _PPL_MODEL.eval()
+    return _PPL_MODEL, _PPL_TOKENIZER
 
 # ── pypdf: PDF text extraction ──────────────────────────────────────────────
 try:
-    from pypdf import PdfReader
+    from pypdf import PdfReader  # noqa: F401
     HAS_PYPDF = True
 except ImportError:
     HAS_PYPDF = False
