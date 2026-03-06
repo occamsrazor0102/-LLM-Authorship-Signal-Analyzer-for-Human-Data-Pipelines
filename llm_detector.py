@@ -946,6 +946,11 @@ PREAMBLE_PATTERNS = [
     (r"(?i)^\s*[\"']?(I'?ve |I have |I'?ll |let me )(created?|drafted?|prepared?|written|designed|built|put together)", "first_person_creation", "CRITICAL"),
     (r"(?i)(natural workplace style|sounds? like a real|human[- ]issued|reads? like a human)", "style_masking", "HIGH"),
     (r"(?i)notes on what I (fixed|changed|cleaned|updated|revised)", "editorial_meta", "HIGH"),
+    # Chain-of-thought leakage: reasoning model artifacts left in output
+    (r"<think>", "cot_leakage", "CRITICAL"),
+    (r"</think>", "cot_leakage", "CRITICAL"),
+    (r"(?i)\blet me (?:rethink|reconsider|recalculate|re-examine|think about this)\b", "cot_reasoning", "HIGH"),
+    (r"(?i)\bwait,?\s+(?:actually|no|let me)", "cot_self_correction", "HIGH"),
 ]
 
 def run_preamble(text):
@@ -1304,40 +1309,62 @@ def run_perplexity(text):
 
     Returns dict with perplexity, determination, and confidence.
     """
+    _ppl_empty = {
+        'perplexity': 0.0, 'determination': None, 'confidence': 0.0,
+        'surprisal_variance': 0.0, 'surprisal_first_half_var': 0.0,
+        'surprisal_second_half_var': 0.0, 'volatility_decay_ratio': 1.0,
+    }
     if not HAS_PERPLEXITY:
-        return {
-            'perplexity': 0.0,
-            'determination': None,
-            'confidence': 0.0,
-            'reason': 'Perplexity scoring unavailable (transformers/torch not installed)',
-        }
+        return {**_ppl_empty, 'reason': 'Perplexity scoring unavailable (transformers/torch not installed)'}
 
     words = text.split()
     if len(words) < 50:
-        return {
-            'perplexity': 0.0,
-            'determination': None,
-            'confidence': 0.0,
-            'reason': 'Perplexity: text too short',
-        }
+        return {**_ppl_empty, 'reason': 'Perplexity: text too short'}
 
     encodings = _PPL_TOKENIZER(text, return_tensors='pt', truncation=True,
                                 max_length=1024)
     input_ids = encodings.input_ids
 
     if input_ids.size(1) < 10:
-        return {
-            'perplexity': 0.0,
-            'determination': None,
-            'confidence': 0.0,
-            'reason': 'Perplexity: too few tokens after encoding',
-        }
+        return {**_ppl_empty, 'reason': 'Perplexity: too few tokens after encoding'}
 
     with _torch.no_grad():
         outputs = _PPL_MODEL(input_ids, labels=input_ids)
         loss = outputs.loss
 
     ppl = _torch.exp(loss).item()
+
+    # ── Surprisal diversity & volatility decay (DivEye / "When AI Settles Down") ──
+    # Extract per-token losses for variance analysis
+    surprisal_variance = 0.0
+    volatility_decay_ratio = 1.0
+    first_half_var = 0.0
+    second_half_var = 0.0
+    try:
+        # Re-run with shift to get per-token losses
+        with _torch.no_grad():
+            logits = _PPL_MODEL(input_ids).logits
+        # Shift: predict token t+1 from position t
+        shift_logits = logits[:, :-1, :].contiguous()
+        shift_labels = input_ids[:, 1:].contiguous()
+        loss_fn = _torch.nn.CrossEntropyLoss(reduction='none')
+        per_token_loss = loss_fn(
+            shift_logits.view(-1, shift_logits.size(-1)),
+            shift_labels.view(-1),
+        )
+        losses = per_token_loss.float().cpu().numpy()
+        n_tokens = len(losses)
+
+        if n_tokens >= 10:
+            surprisal_variance = float(losses.var())
+            mid = n_tokens // 2
+            first_half_var = float(losses[:mid].var()) if mid > 1 else surprisal_variance
+            second_half_var = float(losses[mid:].var()) if (n_tokens - mid) > 1 else surprisal_variance
+            # Decay ratio: first_half_var / second_half_var
+            # AI text tends to "settle down" — variance drops in the second half
+            volatility_decay_ratio = (first_half_var / second_half_var) if second_half_var > 1e-6 else 1.0
+    except Exception:
+        pass  # Graceful fallback — variance features are supplementary
 
     if ppl <= 15.0:
         det = 'AMBER'
@@ -1357,6 +1384,10 @@ def run_perplexity(text):
         'determination': det,
         'confidence': conf,
         'reason': reason,
+        'surprisal_variance': round(surprisal_variance, 4),
+        'surprisal_first_half_var': round(first_half_var, 4),
+        'surprisal_second_half_var': round(second_half_var, 4),
+        'volatility_decay_ratio': round(volatility_decay_ratio, 4),
     }
 
 
@@ -3546,6 +3577,23 @@ def score_stylometric(fingerprint_score, self_sim, voice_dis=None, semantic=None
                 severity = 'YELLOW'
                 parts.append(f"PPL={ppl_val:.0f}(YELLOW)")
 
+    # Surprisal variance & volatility decay: supporting signal
+    # Low variance + high decay ratio signals AI-generated uniformity
+    if ppl:
+        s_var = ppl.get('surprisal_variance', 0.0)
+        v_decay = ppl.get('volatility_decay_ratio', 1.0)
+        if s_var > 0:
+            sub['surprisal_variance'] = s_var
+            sub['volatility_decay_ratio'] = v_decay
+            if severity != 'GREEN' and s_var > 0:
+                # Low variance reinforces existing AI signals
+                if s_var < 2.0 and v_decay > 1.5:
+                    score = min(score + 0.08, 1.0)
+                    parts.append(f"SurpVar={s_var:.2f}/Decay={v_decay:.2f}(boost)")
+                elif s_var < 3.0 and v_decay > 1.2:
+                    score = min(score + 0.04, 1.0)
+                    parts.append(f"SurpVar={s_var:.2f}/Decay={v_decay:.2f}(mild)")
+
     # Fingerprints add supporting weight if any stylometric signal is active
     if fingerprint_score >= 0.30 and severity != 'GREEN':
         score = min(score + 0.10, 1.0)
@@ -4042,6 +4090,10 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         'perplexity_value': ppl.get('perplexity', 0.0),
         'perplexity_determination': ppl.get('determination'),
         'perplexity_confidence': ppl.get('confidence', 0.0),
+        'surprisal_variance': ppl.get('surprisal_variance', 0.0),
+        'surprisal_first_half_var': ppl.get('surprisal_first_half_var', 0.0),
+        'surprisal_second_half_var': ppl.get('surprisal_second_half_var', 0.0),
+        'volatility_decay_ratio': ppl.get('volatility_decay_ratio', 1.0),
     })
 
     # Self-similarity (NSSI)

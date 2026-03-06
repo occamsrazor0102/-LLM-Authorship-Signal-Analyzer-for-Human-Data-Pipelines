@@ -227,14 +227,55 @@ def test_perplexity():
     r_short = run_perplexity(short)
     check("Short text: no determination", r_short['determination'] is None)
 
+    # Early return dicts should include variance fields
+    check("Short text: surprisal_variance=0", r_short['surprisal_variance'] == 0.0)
+    check("Short text: volatility_decay_ratio=1", r_short['volatility_decay_ratio'] == 1.0)
+
     if HAS_PERPLEXITY:
         r_normal = run_perplexity(CLINICAL_TEXT)
         check("Normal text: perplexity > 0", r_normal['perplexity'] > 0,
               f"got {r_normal['perplexity']}")
         check("Normal text: has reason", len(r_normal.get('reason', '')) > 0)
+        # Surprisal diversity features
+        check("Normal text: surprisal_variance > 0", r_normal['surprisal_variance'] > 0,
+              f"got {r_normal['surprisal_variance']}")
+        check("Normal text: volatility_decay_ratio > 0", r_normal['volatility_decay_ratio'] > 0,
+              f"got {r_normal['volatility_decay_ratio']}")
+        check("Normal text: has first_half_var", 'surprisal_first_half_var' in r_normal)
+        check("Normal text: has second_half_var", 'surprisal_second_half_var' in r_normal)
     else:
         print("  (transformers/torch not installed -- skipping model tests)")
         check("Unavailable: perplexity=0", r_short['perplexity'] == 0.0)
+
+
+def test_cot_leakage():
+    print("\n-- COT LEAKAGE DETECTION --")
+
+    # <think> tags — smoking gun for reasoning model artifacts
+    text_think = "Here is the analysis.\n<think>\nLet me consider the options.\n</think>\nThe answer is 42."
+    score, severity, hits = run_preamble(text_think)
+    hit_names = [h[0] for h in hits]
+    check("think tags: CRITICAL severity", severity == "CRITICAL")
+    check("think tags: cot_leakage in hits", "cot_leakage" in hit_names)
+    check("think tags: score == 0.99", score == 0.99)
+
+    # Self-correction phrases
+    text_correct = "The total revenue is $50M. Wait, actually let me recalculate that figure."
+    score2, severity2, hits2 = run_preamble(text_correct)
+    hit_names2 = [h[0] for h in hits2]
+    check("self-correction: detected", len(hits2) > 0)
+    check("self-correction: cot_self_correction in hits", "cot_self_correction" in hit_names2)
+
+    # Reasoning model phrases
+    text_reason = "Let me rethink the approach to this problem."
+    score3, severity3, hits3 = run_preamble(text_reason)
+    hit_names3 = [h[0] for h in hits3]
+    check("cot reasoning: detected", "cot_reasoning" in hit_names3)
+
+    # Clean text should not trigger
+    clean = "The quarterly report shows steady growth across all divisions."
+    score4, severity4, hits4 = run_preamble(clean)
+    check("clean text: no CoT hits", all(h[0] not in ('cot_leakage', 'cot_reasoning', 'cot_self_correction') for h in hits4))
 
 
 def test_feature_flags():
@@ -893,6 +934,7 @@ if __name__ == '__main__':
     # Analyzers
     test_semantic_resonance()
     test_perplexity()
+    test_cot_leakage()
 
     # Continuation local
     test_proxy_helpers()
