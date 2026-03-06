@@ -19,9 +19,15 @@ def _jaccard(a, b):
 
 
 _STRUCT_FEATURES = [
+    # Original v0.53 features
     'prompt_signature_composite', 'prompt_signature_cfd', 'prompt_signature_mfsr',
     'prompt_signature_must_rate', 'instruction_density_idi',
     'voice_dissonance_spec_score', 'voice_dissonance_voice_score',
+    # v0.58+ additions
+    'self_similarity_nssi_score', 'self_similarity_comp_ratio',
+    'self_similarity_hapax_ratio', 'self_similarity_sent_length_cv',
+    'window_max_score', 'window_mean_score',
+    'stylo_fw_ratio', 'stylo_ttr', 'stylo_sent_dispersion',
 ]
 
 

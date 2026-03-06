@@ -24,6 +24,8 @@ _BASELINE_FIELDS = [
     'window_hot_span', 'window_mixed_signal',
     'stylo_fw_ratio', 'stylo_sent_dispersion', 'stylo_ttr',
     'calibrated_confidence', 'p_value', 'calibration_stratum',
+    'pack_constraint_score', 'pack_exec_spec_score', 'pack_schema_score',
+    'pack_active_families', 'pack_prompt_boost', 'pack_idi_boost',
 ]
 
 

@@ -5,9 +5,11 @@ from llm_detector.normalize import normalize_text
 from llm_detector.language_gate import check_language_support
 from llm_detector.analyzers.preamble import run_preamble
 from llm_detector.analyzers.fingerprint import run_fingerprint
-from llm_detector.analyzers.prompt_signature import run_prompt_signature
-from llm_detector.analyzers.voice_dissonance import run_voice_dissonance
-from llm_detector.analyzers.instruction_density import run_instruction_density
+from llm_detector.lexicon.integration import (
+    run_prompt_signature_enhanced,
+    run_voice_dissonance_enhanced,
+    run_instruction_density_enhanced,
+)
 from llm_detector.analyzers.semantic_resonance import run_semantic_resonance
 from llm_detector.analyzers.self_similarity import run_self_similarity
 from llm_detector.analyzers.continuation_api import run_continuation_api
@@ -25,10 +27,10 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
                    ground_truth=None, language=None, domain=None,
                    mode='auto', cal_table=None):
     """Run full v0.61 pipeline on a single prompt. Returns result dict."""
-    word_count = len(text.split())
-
     # Normalization pre-pass
     normalized_text, norm_report = normalize_text(text)
+    word_count_raw = len(text.split())
+    word_count = len(normalized_text.split())
 
     # Fairness / language support gate
     lang_gate = check_language_support(normalized_text, word_count)
@@ -38,9 +40,13 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
     # Run all analyzers
     preamble_score, preamble_severity, preamble_hits = run_preamble(text_for_analysis)
     fingerprint_score, fingerprint_hits, fingerprint_rate = run_fingerprint(text_for_analysis)
-    prompt_sig = run_prompt_signature(text_for_analysis)
-    voice_dis = run_voice_dissonance(text_for_analysis)
-    instr_density = run_instruction_density(text_for_analysis)
+    prompt_sig = run_prompt_signature_enhanced(text_for_analysis)
+    voice_dis = run_voice_dissonance_enhanced(text_for_analysis)
+    instr_density = run_instruction_density_enhanced(
+        text_for_analysis,
+        constraint_active=(prompt_sig.get('pack_constraint_score', 0) > 0.08),
+        schema_active=(voice_dis.get('pack_schema_score', 0) > 0.05),
+    )
 
     self_sim = None
     if run_l3:
@@ -113,6 +119,7 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         'attempter': attempter,
         'stage': stage,
         'word_count': word_count,
+        'word_count_raw': word_count_raw,
         'determination': det,
         'reason': reason,
         'confidence': confidence,
@@ -184,6 +191,13 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         'window_hot_span': window_result.get('hot_span_length', 0),
         'window_n_windows': window_result.get('n_windows', 0),
         'window_mixed_signal': window_result.get('mixed_signal', False),
+        # Pack diagnostics
+        'pack_constraint_score': prompt_sig.get('pack_constraint_score', 0.0),
+        'pack_exec_spec_score': prompt_sig.get('pack_exec_spec_score', 0.0),
+        'pack_schema_score': voice_dis.get('pack_schema_score', 0.0),
+        'pack_active_families': prompt_sig.get('pack_active_families', 0),
+        'pack_prompt_boost': prompt_sig.get('pack_boost', 0.0),
+        'pack_idi_boost': instr_density.get('pack_idi_boost', 0.0),
         # Stylometric features
         'stylo_fw_ratio': stylo_features.get('function_word_ratio', 0.0),
         'stylo_sent_dispersion': stylo_features.get('sent_length_dispersion', 0.0),
