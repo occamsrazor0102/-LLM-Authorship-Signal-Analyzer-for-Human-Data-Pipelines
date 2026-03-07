@@ -100,6 +100,86 @@ Ten new signals added in v0.65, exploiting temporal uniformity and compressibili
 
 When baseline data is available, the pipeline applies conformal calibration to raw confidence scores. The `conformity_level` field indicates how typical a confidence score is among calibrated human-authored texts (1.0 = typical of human text, 0.01 = very unusual).
 
+### Memory System (BEET)
+
+The pipeline includes a persistent memory store (`.beet/` directory) that tracks submissions, attempter profiles, and confirmed labels across batches. This enables cross-batch similarity detection, attempter risk profiling, and empirical calibration from reviewer feedback.
+
+```bash
+# Run with memory enabled
+python -m llm_detector input.xlsx --memory .beet/
+
+# Confirm labels from human review
+python -m llm_detector --memory .beet/ --confirm task_001 ai
+python -m llm_detector --memory .beet/ --confirm task_002 human
+
+# View attempter risk report
+python -m llm_detector --memory .beet/ --risk-report
+```
+
+### ML Tools
+
+Three learning tools operate on confirmed labels to improve detection over time. All produce artifacts for human review — none modify the primary rule engine automatically.
+
+#### Shadow Model (Parallel Corroboration)
+
+An L1-penalized logistic regression trained on confirmed labels that runs alongside the rule engine. Flags *disagreements* — either rule-engine blind spots (model sees AI, rules say GREEN) or possible false positives (rules say RED, model sees human).
+
+```bash
+python -m llm_detector --memory .beet/ --rebuild-shadow
+```
+
+When active, shadow disagreements appear in pipeline output:
+
+```
+     ⚠️ SHADOW: Possible blind spot — learned model detects AI patterns that rule engine misses
+         Rule=GREEN, Model=92.3% AI
+```
+
+Requires >= 200 confirmed labels with >= 30 per class.
+
+#### Smoothed Log-Odds Lexicon Discovery
+
+Discovers vocabulary disproportionately used in confirmed AI text vs human text using Monroe et al. (2008) informative Dirichlet prior. Outputs candidates to a CSV for human review.
+
+```bash
+python -m llm_detector --memory .beet/ --discover-lexicon \
+    --labeled-corpus labeled_prompts.jsonl
+```
+
+Where `labeled_prompts.jsonl` contains `{"task_id": "...", "text": "..."}` lines.
+
+#### Versioned Semantic Centroid Rebuilder
+
+Recomputes AI and human semantic centroids from confirmed labeled text, replacing the hardcoded 5-sentence archetypes with data-driven centroids using k-means clustering.
+
+```bash
+python -m llm_detector --memory .beet/ --rebuild-centroids \
+    --labeled-corpus labeled_prompts.jsonl
+```
+
+#### Unified Rebuild
+
+Rebuild all learned artifacts in one command:
+
+```bash
+python -m llm_detector --memory .beet/ --rebuild-all \
+    --labeled-corpus labeled_prompts.jsonl
+```
+
+This runs calibration, shadow model, centroid rebuild, and lexicon discovery in sequence.
+
+| Operation | Needs `--labeled-corpus`? | Needs `--memory`? |
+|---|:---:|:---:|
+| Batch scoring | No | Optional |
+| Record batch to memory | No | Yes |
+| Cross-batch similarity | No | Yes |
+| Attempter profiling | No | Yes |
+| Confirm a label | No | Yes |
+| Rebuild calibration | No | Yes |
+| Rebuild shadow model | No | Yes |
+| Rebuild centroids | **Yes** | Yes |
+| Discover lexicon | **Yes** | Yes |
+
 ## Package Structure
 
 ```
@@ -115,6 +195,7 @@ llm_detector/                  # Main package
     calibration.py             # Conformal calibration
     baselines.py               # Baseline collection and analysis
     similarity.py              # Cross-submission similarity
+    memory.py                  # BEET memory store + ML tools
     io.py                      # File I/O (XLSX, CSV, PDF)
     cli.py                     # Command-line interface
     gui.py                     # Desktop GUI
@@ -143,6 +224,19 @@ llm_detector/                  # Main package
     lexicon/                   # Externalized detection vocabulary
         packs.py               # LexiconPack definitions & scoring engine
         integration.py         # Enhanced layer wrappers
+
+.beet/                         # Memory store (created by --memory)
+    config.json                # Store metadata and stats
+    submissions.jsonl          # All scored submissions
+    fingerprints.jsonl         # MinHash/structural fingerprints
+    attempters.jsonl           # Attempter risk profiles
+    confirmed.jsonl            # Human-confirmed ground truth labels
+    calibration.json           # Empirical calibration table
+    shadow_model.pkl           # Trained shadow classifier
+    shadow_disagreements.jsonl # Logged shadow model disagreements
+    centroids/                 # Versioned semantic centroids
+    lexicon_discovery/         # Lexicon candidate CSVs
+    calibration_history/       # Historical calibration snapshots
 
 tests/                         # Test suite
 run_detector                   # Thin CLI launcher
@@ -222,6 +316,15 @@ python -m llm_detector document.pdf
 | `--analyze-baselines JSONL` | Compute percentile distributions from accumulated data |
 | `--calibrate JSONL` | Build calibration table from labeled baselines |
 | `--cal-table JSON` | Path to calibration table JSON |
+| `--memory DIR` | Enable BEET memory store at given directory |
+| `--confirm TASK_ID LABEL` | Confirm ground truth label (ai/human) for a task |
+| `--risk-report` | Show attempter risk report from memory |
+| `--rebuild-calibration` | Rebuild calibration table from confirmed labels |
+| `--rebuild-shadow` | Rebuild shadow model from confirmed labels |
+| `--discover-lexicon` | Run log-odds lexicon discovery on confirmed labels |
+| `--rebuild-centroids` | Rebuild semantic centroids from confirmed labels |
+| `--rebuild-all` | Rebuild all learned artifacts at once |
+| `--labeled-corpus JSONL` | Path to JSONL with raw text (for lexicon/centroid tools) |
 
 ### Python API
 
@@ -266,6 +369,7 @@ python tests/test_windowed.py
 python tests/test_token_cohesiveness.py
 python tests/test_fusion.py
 python tests/test_normalize.py
+python tests/test_memory.py
 ```
 
 ## Design Principles
