@@ -26,7 +26,7 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
                    run_l3=True, api_key=None, dna_provider='anthropic',
                    dna_model=None, dna_samples=3,
                    ground_truth=None, language=None, domain=None,
-                   mode='auto', cal_table=None):
+                   mode='auto', cal_table=None, memory_store=None):
     """Run full v0.66 pipeline on a single prompt. Returns result dict."""
     # Normalization pre-pass
     normalized_text, norm_report = normalize_text(text)
@@ -357,5 +357,13 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         'surprisal_var_of_var': surprisal_traj.get('surprisal_var_of_var', 0.0),
         'surprisal_stationarity': surprisal_traj.get('surprisal_stationarity', 0.0),
     })
+
+    # Shadow model disagreement check (if memory store is active)
+    shadow_disagreement = None
+    if memory_store is not None:
+        shadow_disagreement = memory_store.check_shadow_disagreement(result)
+
+    result['shadow_disagreement'] = shadow_disagreement
+    result['shadow_ai_prob'] = (shadow_disagreement or {}).get('shadow_ai_prob')
 
     return result

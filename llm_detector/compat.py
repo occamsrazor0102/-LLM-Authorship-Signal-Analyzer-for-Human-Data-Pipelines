@@ -63,6 +63,24 @@ except Exception as e:
 _EMBEDDER = None
 _AI_CENTROIDS = None
 _HUMAN_CENTROIDS = None
+_EXTRA_CENTROID_PATHS = []
+
+
+def register_centroid_path(directory):
+    """Register an additional directory to search for centroid files.
+
+    Call this before the first analysis so that get_semantic_models()
+    picks up centroids from a custom --memory store directory.
+    Resets cached centroids so the new path takes effect.
+    """
+    global _AI_CENTROIDS, _HUMAN_CENTROIDS
+    centroid_file = os.path.join(str(directory), 'centroids', 'centroids_latest.npz')
+    if centroid_file not in _EXTRA_CENTROID_PATHS:
+        _EXTRA_CENTROID_PATHS.insert(0, centroid_file)
+        # Reset cached centroids so they reload from the new path
+        _AI_CENTROIDS = None
+        _HUMAN_CENTROIDS = None
+
 
 def get_semantic_models():
     """Return (embedder, ai_centroids, human_centroids), loading on first call.
