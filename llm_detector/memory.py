@@ -66,6 +66,11 @@ class MemoryStore:
         if not self.config_path.exists():
             self._save_config()
 
+        # Register this store's centroid directory so get_semantic_models()
+        # picks up data-derived centroids from custom --memory paths.
+        from llm_detector.compat import register_centroid_path
+        register_centroid_path(self.store_dir)
+
     # ── Config ────────────────────────────────────────────────────
 
     def _load_config(self):
@@ -681,9 +686,13 @@ class MemoryStore:
         confirmed = self._load_confirmed_labels()
         submissions = self._load_submissions_by_task_id()
 
-        labeled = []
+        # Deduplicate: keep only the latest confirmation per task_id
+        latest_by_tid = {}
         for conf in confirmed:
-            tid = conf['task_id']
+            latest_by_tid[conf['task_id']] = conf
+
+        labeled = []
+        for tid, conf in latest_by_tid.items():
             if tid in submissions:
                 record = submissions[tid].copy()
                 record['ground_truth'] = conf['ground_truth']
@@ -725,7 +734,7 @@ class MemoryStore:
         X_scaled = scaler.fit_transform(X)
 
         clf = LogisticRegression(
-            solver='liblinear', l1_ratio=1.0,
+            penalty='l1', solver='liblinear',
             class_weight='balanced', C=1.0, max_iter=1000,
         )
         clf.fit(X_scaled, y)
