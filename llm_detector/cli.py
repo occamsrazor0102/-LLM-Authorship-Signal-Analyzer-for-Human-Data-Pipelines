@@ -13,7 +13,10 @@ from llm_detector.calibration import (
     calibrate_from_baselines, save_calibration, load_calibration,
 )
 from llm_detector.baselines import analyze_baselines, collect_baselines
-from llm_detector.similarity import analyze_similarity, print_similarity_report
+from llm_detector.similarity import (
+    analyze_similarity, print_similarity_report,
+    apply_similarity_adjustments, save_similarity_store, cross_batch_similarity,
+)
 from llm_detector.io import load_xlsx, load_csv, load_pdf
 
 
@@ -130,6 +133,10 @@ def main():
                         help='Cost per prompt for financial impact estimate (default: $400)')
     parser.add_argument('--html-report', metavar='DIR',
                         help='Generate HTML reports for flagged submissions in DIR')
+    parser.add_argument('--similarity-store', metavar='JSONL',
+                        help='Path to persistent similarity fingerprint store (cross-batch)')
+    parser.add_argument('--instructions', metavar='FILE',
+                        help='Path to shared project instructions file (for similarity baseline)')
     args = parser.parse_args()
 
     if args.gui:
@@ -263,14 +270,46 @@ def main():
         for r in sorted(yellow, key=lambda x: x['confidence'], reverse=True)[:10]:
             print(f"    \U0001f7e1 {r['task_id'][:12]:12} {r['occupation'][:40]:40} | {r['reason'][:50]}")
 
+    # Load instruction text for similarity baseline (FEAT 15)
+    instruction_text = None
+    if args.instructions and os.path.exists(args.instructions):
+        with open(args.instructions, 'r') as f:
+            instruction_text = f.read()
+        print(f"  Loaded instruction template ({len(instruction_text)} chars) for similarity baseline")
+
     if not args.no_similarity and len(results) >= 2:
         sim_pairs = analyze_similarity(
             results, text_map,
             jaccard_threshold=args.similarity_threshold,
+            instruction_text=instruction_text,
         )
         print_similarity_report(sim_pairs)
+
+        # FEAT 13: Similarity feedback into determination
+        if sim_pairs:
+            results = apply_similarity_adjustments(results, sim_pairs, text_map)
+            upgrades = [r for r in results if 'similarity_upgrade' in r]
+            if upgrades:
+                det_counts = Counter(r['determination'] for r in results)
+                print(f"\n  SIMILARITY ADJUSTMENTS: {len(upgrades)} determinations upgraded")
+                for r in upgrades:
+                    su = r['similarity_upgrade']
+                    print(f"    {r['task_id'][:15]:15s} {su['original_determination']} -> "
+                          f"{su['upgraded_to']}  ({su['reason'][:60]})")
     else:
         sim_pairs = []
+
+    # FEAT 14: Cross-batch similarity store
+    if args.similarity_store:
+        cross_flags = cross_batch_similarity(
+            results, text_map, args.similarity_store
+        )
+        if cross_flags:
+            print(f"\n  CROSS-BATCH SIMILARITY: {len(cross_flags)} matches to previous batches")
+            for cf in cross_flags[:10]:
+                print(f"    {cf['current_id'][:15]} <-> {cf['historical_id'][:15]} "
+                      f"(MH={cf['minhash_similarity']:.2f}, batch={cf['historical_batch'][:10]})")
+        save_similarity_store(results, text_map, args.similarity_store)
 
     default_name = os.path.basename(args.input).rsplit('.', 1)[0] + '_pipeline_v066.csv'
     input_dir = os.path.dirname(os.path.abspath(args.input))
