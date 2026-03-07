@@ -44,6 +44,12 @@ def print_result(r, verbose=False):
         cal_str += f"  [{r.get('calibration_stratum', '?')}]"
         print(cal_str)
 
+    shadow = r.get('shadow_disagreement')
+    if shadow:
+        print(f"     \u26a0\ufe0f SHADOW: {shadow['interpretation']}")
+        print(f"         Rule={shadow['rule_determination']}, "
+              f"Model={shadow['shadow_ai_prob']:.1%} AI")
+
     if verbose or r['determination'] in ('RED', 'AMBER'):
         delta = r.get('norm_obfuscation_delta', 0)
         lang = r.get('lang_support_level', 'SUPPORTED')
@@ -157,12 +163,12 @@ def main():
                         help='Rebuild shadow model from confirmed labels in memory')
     parser.add_argument('--discover-lexicon', action='store_true',
                         help='Run log-odds lexicon discovery on confirmed labels')
-    parser.add_argument('--labeled-corpus', metavar='JSONL',
-                        help='Path to JSONL with raw text for lexicon discovery / centroid rebuild')
     parser.add_argument('--rebuild-centroids', action='store_true',
                         help='Rebuild semantic centroids from confirmed labels')
     parser.add_argument('--rebuild-all', action='store_true',
                         help='Rebuild calibration, shadow model, and centroids')
+    parser.add_argument('--labeled-corpus', metavar='JSONL',
+                        help='Path to JSONL with raw text for lexicon discovery and centroids')
     args = parser.parse_args()
 
     if args.gui:
@@ -213,9 +219,9 @@ def main():
 
     if args.rebuild_shadow:
         if store:
-            pkg = store.rebuild_shadow_model()
-            if pkg:
-                print(f"  Shadow model: AUC={pkg['cv_auc']:.3f}")
+            shadow = store.rebuild_shadow_model()
+            if shadow:
+                print(f"  Shadow model built: AUC={shadow['cv_auc']:.3f}")
         else:
             print("ERROR: --rebuild-shadow requires --memory DIR")
         return
@@ -253,22 +259,22 @@ def main():
 
         cal = store.rebuild_calibration()
         if cal:
-            print(f"  > Calibration: {cal['n_calibration']} samples")
+            print(f"  + Calibration: {cal['n_calibration']} samples")
         else:
-            print(f"  x Calibration: insufficient data")
+            print(f"  - Calibration: insufficient data")
 
         shadow = store.rebuild_shadow_model()
         if shadow:
-            print(f"  > Shadow model: AUC={shadow['cv_auc']:.3f}")
+            print(f"  + Shadow model: AUC={shadow['cv_auc']:.3f}")
         else:
-            print(f"  x Shadow model: insufficient labeled data")
+            print(f"  - Shadow model: insufficient labeled data")
 
         if args.labeled_corpus:
             centroids = store.rebuild_semantic_centroids(args.labeled_corpus)
             if centroids:
-                print(f"  > Centroids: separation={centroids['separation']:.4f}")
+                print(f"  + Centroids: separation={centroids['separation']:.4f}")
             else:
-                print(f"  x Centroids: insufficient labeled text")
+                print(f"  - Centroids: insufficient labeled text")
         else:
             print(f"  - Centroids: skipped (no --labeled-corpus)")
 
@@ -277,7 +283,7 @@ def main():
             n_new = sum(1 for c in candidates
                         if not c.get('already_in_fingerprints')
                         and not c.get('already_in_packs'))
-            print(f"  > Lexicon: {len(candidates)} candidates ({n_new} new)")
+            print(f"  + Lexicon: {len(candidates)} candidates ({n_new} new)")
         else:
             print(f"  - Lexicon: skipped (no --labeled-corpus)")
 
@@ -451,6 +457,18 @@ def main():
                 print(f"    {cf['current_id'][:15]} <-> {cf['historical_id'][:15]} "
                       f"(MH={cf['minhash_similarity']:.2f}, batch={cf['historical_batch'][:10]})")
         save_similarity_store(results, text_map, args.similarity_store)
+
+    # Shadow model disagreement check (if memory store has a trained model)
+    if store:
+        shadow_count = 0
+        for r in results:
+            disagreement = store.check_shadow_disagreement(r)
+            r['shadow_disagreement'] = disagreement
+            r['shadow_ai_prob'] = (disagreement or {}).get('shadow_ai_prob')
+            if disagreement:
+                shadow_count += 1
+        if shadow_count:
+            print(f"\n  SHADOW MODEL: {shadow_count} disagreements with rule engine")
 
     # Memory store: cross-batch similarity + record batch
     if store:

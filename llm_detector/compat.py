@@ -85,7 +85,7 @@ def register_centroid_path(directory):
 def get_semantic_models():
     """Return (embedder, ai_centroids, human_centroids), loading on first call.
 
-    Checks registered memory-store paths, then .beet/centroids/centroids_latest.npz,
+    Checks for data-derived centroids in .beet/centroids/centroids_latest.npz
     before falling back to hardcoded archetypes.
     """
     global _EMBEDDER, _AI_CENTROIDS, _HUMAN_CENTROIDS
@@ -95,11 +95,7 @@ def get_semantic_models():
 
         _EMBEDDER = SentenceTransformer('all-MiniLM-L6-v2')
 
-    if _AI_CENTROIDS is None and HAS_SEMANTIC:
-        import numpy as np
-
-        # Try data-derived centroids: registered paths first, then defaults
-        centroid_paths = list(_EXTRA_CENTROID_PATHS) + [
+        centroid_paths = [
             '.beet/centroids/centroids_latest.npz',
             os.path.expanduser('~/.beet/centroids/centroids_latest.npz'),
         ]
