@@ -343,6 +343,213 @@ def test_empty_store_queries():
         shutil.rmtree(tmpdir)
 
 
+def test_shadow_model_insufficient_data():
+    print("\n-- SHADOW MODEL: insufficient data --")
+    store, tmpdir = _make_store()
+    try:
+        # With no confirmed labels, should return None
+        result = store.rebuild_shadow_model()
+        check("returns None with no data", result is None)
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+def test_shadow_model_trains_with_enough_data():
+    print("\n-- SHADOW MODEL: trains with sufficient data --")
+    store, tmpdir = _make_store()
+    try:
+        # Need sklearn for this test
+        try:
+            import sklearn  # noqa: F401
+            import joblib  # noqa: F401
+            import numpy  # noqa: F401
+            import pandas  # noqa: F401
+        except ImportError:
+            check("sklearn available (SKIP)", True)
+            return
+
+        # Create 200+ labeled examples
+        results = []
+        text_map = {}
+        for i in range(250):
+            det = 'RED' if i < 125 else 'GREEN'
+            r = _make_result(f't{i}', f'worker_{i % 10}', 'analyst', det,
+                             confidence=0.9 if det == 'RED' else 0.2,
+                             prompt_signature_cfd=0.8 if det == 'RED' else 0.1,
+                             instruction_density_idi=15.0 if det == 'RED' else 2.0,
+                             voice_dissonance_vsd=20.0 if det == 'RED' else 3.0)
+            results.append(r)
+            text_map[f't{i}'] = f'text {i}'
+
+        store.record_batch(results, text_map)
+
+        # Confirm labels
+        for i in range(250):
+            gt = 'ai' if i < 125 else 'human'
+            store.record_confirmation(f't{i}', gt, verified_by='test')
+
+        pkg = store.rebuild_shadow_model()
+        check("returns package", pkg is not None)
+        if pkg:
+            check("has cv_auc", 'cv_auc' in pkg)
+            check("cv_auc > 0.5", pkg['cv_auc'] > 0.5, f"got {pkg['cv_auc']}")
+            check("has features list", len(pkg['features']) > 0)
+            check("n_samples == 250", pkg['n_samples'] == 250)
+            check("model file exists",
+                  (store.store_dir / 'shadow_model.pkl').exists())
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+def test_shadow_disagreement_no_model():
+    print("\n-- SHADOW DISAGREEMENT: no model --")
+    store, tmpdir = _make_store()
+    try:
+        result = _make_result('t1', 'alice', 'analyst', 'RED')
+        disagreement = store.check_shadow_disagreement(result)
+        check("returns None when no model", disagreement is None)
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+def test_lexicon_discovery_no_labels():
+    print("\n-- LEXICON DISCOVERY: no labels --")
+    store, tmpdir = _make_store()
+    try:
+        # Create a dummy corpus file
+        corpus_path = os.path.join(tmpdir, 'corpus.jsonl')
+        with open(corpus_path, 'w') as f:
+            f.write(json.dumps({'task_id': 't1', 'text': 'hello world'}) + '\n')
+
+        candidates = store.discover_lexicon_candidates(corpus_path)
+        check("returns empty with no labels", len(candidates) == 0)
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+def test_lexicon_discovery_with_data():
+    print("\n-- LEXICON DISCOVERY: with data --")
+    store, tmpdir = _make_store()
+    try:
+        # Create confirmed labels and corpus
+        ai_word = 'comprehensive'  # distinctly AI word
+        human_word = 'honestly'     # distinctly human word
+
+        # Record results and confirmations
+        results = []
+        text_map = {}
+        corpus_lines = []
+        for i in range(100):
+            is_ai = i < 50
+            tid = f't{i}'
+            if is_ai:
+                text = f'This is a {ai_word} analysis of the {ai_word} framework with {ai_word} coverage ' * 5
+            else:
+                text = f'{human_word} this thing is {human_word} pretty weird and {human_word} confusing stuff ' * 5
+            r = _make_result(tid, f'w{i}', 'analyst',
+                             'RED' if is_ai else 'GREEN')
+            results.append(r)
+            text_map[tid] = text
+            corpus_lines.append(json.dumps({'task_id': tid, 'text': text}))
+
+        store.record_batch(results, text_map)
+        for i in range(100):
+            gt = 'ai' if i < 50 else 'human'
+            store.record_confirmation(f't{i}', gt, verified_by='test')
+
+        corpus_path = os.path.join(tmpdir, 'corpus.jsonl')
+        with open(corpus_path, 'w') as f:
+            f.write('\n'.join(corpus_lines) + '\n')
+
+        candidates = store.discover_lexicon_candidates(corpus_path,
+                                                        min_count=5,
+                                                        log_odds_threshold=0.5)
+        check("found candidates", len(candidates) > 0)
+
+        # Check discovery dir created
+        discovery_dir = store.store_dir / 'lexicon_discovery'
+        check("discovery dir created", discovery_dir.exists())
+
+        if candidates:
+            words = [c['word'] for c in candidates]
+            check("comprehensive in candidates", ai_word in words,
+                  f"got {words[:5]}")
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+def test_centroid_rebuild_insufficient():
+    print("\n-- CENTROID REBUILD: insufficient data --")
+    store, tmpdir = _make_store()
+    try:
+        # Create a minimal corpus
+        corpus_path = os.path.join(tmpdir, 'corpus.jsonl')
+        with open(corpus_path, 'w') as f:
+            f.write(json.dumps({'task_id': 't1', 'text': 'hello'}) + '\n')
+
+        result = store.rebuild_semantic_centroids(corpus_path)
+        check("returns None with no data", result is None)
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+def test_attempter_shadow_model_flags():
+    print("\n-- ATTEMPTER: shadow model flags --")
+    store, tmpdir = _make_store()
+    try:
+        # Record results with shadow disagreement data
+        results = [
+            _make_result('t1', 'alice', 'analyst', 'GREEN',
+                         shadow_disagreement={
+                             'type': 'model_flags_rule_passes',
+                             'shadow_ai_prob': 0.95,
+                         }),
+            _make_result('t2', 'alice', 'analyst', 'GREEN',
+                         shadow_disagreement={
+                             'type': 'model_flags_rule_passes',
+                             'shadow_ai_prob': 0.88,
+                         }),
+        ]
+        text_map = {'t1': 'text one', 't2': 'text two'}
+        store.record_batch(results, text_map)
+
+        profiles = store._load_attempter_profiles()
+        check("alice has shadow_model_flags",
+              profiles['alice'].get('shadow_model_flags', 0) == 2,
+              f"got {profiles['alice'].get('shadow_model_flags')}")
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+def test_load_helpers():
+    print("\n-- LOAD HELPERS --")
+    store, tmpdir = _make_store()
+    try:
+        # Test _load_confirmed_labels
+        confirmed = store._load_confirmed_labels()
+        check("empty confirmed list", len(confirmed) == 0)
+
+        # Test _load_submissions_by_task_id
+        subs = store._load_submissions_by_task_id()
+        check("empty submissions dict", len(subs) == 0)
+
+        # Record some data
+        results = [_make_result('t1', 'alice', 'analyst', 'RED')]
+        text_map = {'t1': 'test text'}
+        store.record_batch(results, text_map)
+        store.record_confirmation('t1', 'ai', verified_by='test')
+
+        confirmed = store._load_confirmed_labels()
+        check("1 confirmed label", len(confirmed) == 1)
+        check("confirmed task_id", confirmed[0]['task_id'] == 't1')
+
+        subs = store._load_submissions_by_task_id()
+        check("1 submission", len(subs) == 1)
+        check("submission task_id", 't1' in subs)
+    finally:
+        shutil.rmtree(tmpdir)
+
+
 if __name__ == '__main__':
     print("=" * 70)
     print("  BEET MEMORY STORE TESTS")
@@ -359,6 +566,14 @@ if __name__ == '__main__':
     test_pre_batch_context()
     test_config_stats_updated()
     test_empty_store_queries()
+    test_shadow_model_insufficient_data()
+    test_shadow_model_trains_with_enough_data()
+    test_shadow_disagreement_no_model()
+    test_lexicon_discovery_no_labels()
+    test_lexicon_discovery_with_data()
+    test_centroid_rebuild_insufficient()
+    test_attempter_shadow_model_flags()
+    test_load_helpers()
 
     print(f"\n{'=' * 70}")
     print(f"  RESULTS: {PASSED} passed, {FAILED} failed")

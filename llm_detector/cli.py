@@ -82,6 +82,12 @@ def print_result(r, verbose=False):
             print(f"     DNA-GPT:          BScore={bscore:.4f}  (max={r.get('continuation_bscore_max', 0):.4f}, "
                   f"samples={r.get('continuation_n_samples', 0)}, det={det_str})")
 
+        shadow = r.get('shadow_disagreement')
+        if shadow:
+            print(f"     \u26a0\ufe0f SHADOW: {shadow['interpretation']}")
+            print(f"         Rule={shadow['rule_determination']}, "
+                  f"Model={shadow['shadow_ai_prob']:.1%} AI")
+
         cd = r.get('channel_details', {})
         if cd.get('channels'):
             print(f"     -- Channels --")
@@ -147,6 +153,16 @@ def main():
                         help='Print memory store summary')
     parser.add_argument('--rebuild-calibration', action='store_true',
                         help='Rebuild calibration table from confirmed labels in memory')
+    parser.add_argument('--rebuild-shadow', action='store_true',
+                        help='Rebuild shadow model from confirmed labels in memory')
+    parser.add_argument('--discover-lexicon', action='store_true',
+                        help='Run log-odds lexicon discovery on confirmed labels')
+    parser.add_argument('--labeled-corpus', metavar='JSONL',
+                        help='Path to JSONL with raw text for lexicon discovery / centroid rebuild')
+    parser.add_argument('--rebuild-centroids', action='store_true',
+                        help='Rebuild semantic centroids from confirmed labels')
+    parser.add_argument('--rebuild-all', action='store_true',
+                        help='Rebuild calibration, shadow model, and centroids')
     args = parser.parse_args()
 
     if args.gui:
@@ -193,6 +209,79 @@ def main():
                 print(f"  Calibration rebuilt: {cal['n_calibration']} labeled samples")
         else:
             print("ERROR: --rebuild-calibration requires --memory DIR")
+        return
+
+    if args.rebuild_shadow:
+        if store:
+            pkg = store.rebuild_shadow_model()
+            if pkg:
+                print(f"  Shadow model: AUC={pkg['cv_auc']:.3f}")
+        else:
+            print("ERROR: --rebuild-shadow requires --memory DIR")
+        return
+
+    if args.discover_lexicon:
+        if not store:
+            print("ERROR: --discover-lexicon requires --memory DIR")
+            return
+        if not args.labeled_corpus:
+            print("ERROR: --discover-lexicon requires --labeled-corpus")
+            return
+        store.discover_lexicon_candidates(args.labeled_corpus)
+        return
+
+    if args.rebuild_centroids:
+        if not store:
+            print("ERROR: --rebuild-centroids requires --memory DIR")
+            return
+        if not args.labeled_corpus:
+            print("ERROR: --rebuild-centroids requires --labeled-corpus")
+            return
+        result = store.rebuild_semantic_centroids(args.labeled_corpus)
+        if result:
+            print(f"  Centroid separation: {result['separation']:.4f}")
+        return
+
+    if args.rebuild_all:
+        if not store:
+            print("ERROR: --rebuild-all requires --memory DIR")
+            return
+
+        print(f"\n{'='*70}")
+        print(f"  REBUILDING ALL LEARNED ARTIFACTS")
+        print(f"{'='*70}")
+
+        cal = store.rebuild_calibration()
+        if cal:
+            print(f"  > Calibration: {cal['n_calibration']} samples")
+        else:
+            print(f"  x Calibration: insufficient data")
+
+        shadow = store.rebuild_shadow_model()
+        if shadow:
+            print(f"  > Shadow model: AUC={shadow['cv_auc']:.3f}")
+        else:
+            print(f"  x Shadow model: insufficient labeled data")
+
+        if args.labeled_corpus:
+            centroids = store.rebuild_semantic_centroids(args.labeled_corpus)
+            if centroids:
+                print(f"  > Centroids: separation={centroids['separation']:.4f}")
+            else:
+                print(f"  x Centroids: insufficient labeled text")
+        else:
+            print(f"  - Centroids: skipped (no --labeled-corpus)")
+
+        if args.labeled_corpus:
+            candidates = store.discover_lexicon_candidates(args.labeled_corpus)
+            n_new = sum(1 for c in candidates
+                        if not c.get('already_in_fingerprints')
+                        and not c.get('already_in_packs'))
+            print(f"  > Lexicon: {len(candidates)} candidates ({n_new} new)")
+        else:
+            print(f"  - Lexicon: skipped (no --labeled-corpus)")
+
+        print(f"\n{'='*70}")
         return
 
     if not args.api_key:
@@ -285,6 +374,7 @@ def main():
             dna_samples=args.dna_samples,
             mode=args.mode,
             cal_table=cal_table,
+            memory_store=store,
         )
         results.append(r)
         tid = task.get('task_id', f'_row{i}')

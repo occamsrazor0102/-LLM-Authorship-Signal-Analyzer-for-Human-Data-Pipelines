@@ -287,6 +287,13 @@ class MemoryStore:
             if channel_counts:
                 p['primary_detection_channel'] = channel_counts.most_common(1)[0][0]
 
+            # Track shadow model disagreements
+            model_flags = sum(1 for r in submissions
+                              if (r.get('shadow_disagreement') or {}).get('type')
+                              == 'model_flags_rule_passes')
+            if model_flags > 0:
+                p['shadow_model_flags'] = p.get('shadow_model_flags', 0) + model_flags
+
         self._save_attempter_profiles(profiles)
         self._config['total_attempters'] = len(profiles)
 
@@ -631,3 +638,451 @@ class MemoryStore:
                       f"[{s.get('determination', '?')}] "
                       f"conf={s.get('confidence', 0):.2f} "
                       f"{s.get('occupation', '')[:25]}")
+
+    # ── Shadow Model (Tool 1) ────────────────────────────────────
+
+    def _load_confirmed_labels(self):
+        """Load all confirmed labels."""
+        confirmed = []
+        if self.confirmed_path.exists():
+            with open(self.confirmed_path) as f:
+                for line in f:
+                    try:
+                        confirmed.append(json.loads(line.strip()))
+                    except json.JSONDecodeError:
+                        continue
+        return confirmed
+
+    def _load_submissions_by_task_id(self):
+        """Load submissions indexed by task_id."""
+        submissions = {}
+        if self.submissions_path.exists():
+            with open(self.submissions_path) as f:
+                for line in f:
+                    try:
+                        rec = json.loads(line.strip())
+                        tid = rec.get('task_id', '')
+                        if tid:
+                            submissions[tid] = rec
+                    except json.JSONDecodeError:
+                        continue
+        return submissions
+
+    def rebuild_shadow_model(self):
+        """Train shadow classifier from confirmed labels in memory.
+
+        Requires >= 200 confirmed labels with reasonable class balance
+        (at least 30 of each class). Uses L1-penalized logistic regression
+        for interpretability.
+
+        Saves model to .beet/shadow_model.pkl
+        Returns trained model package or None if insufficient data.
+        """
+        confirmed = self._load_confirmed_labels()
+        submissions = self._load_submissions_by_task_id()
+
+        labeled = []
+        for conf in confirmed:
+            tid = conf['task_id']
+            if tid in submissions:
+                record = submissions[tid].copy()
+                record['ground_truth'] = conf['ground_truth']
+                labeled.append(record)
+
+        if len(labeled) < 200:
+            print(f"  Shadow model: need >= 200 labeled examples, have {len(labeled)}")
+            return None
+
+        try:
+            import pandas as pd
+            from sklearn.linear_model import LogisticRegression
+            from sklearn.preprocessing import StandardScaler
+            from sklearn.model_selection import cross_val_score
+            import joblib
+            import numpy as np
+        except ImportError:
+            print("  Shadow model requires pandas, scikit-learn, joblib, numpy")
+            return None
+
+        df = pd.DataFrame(labeled)
+        ai_count = (df['ground_truth'] == 'ai').sum()
+        human_count = (df['ground_truth'] == 'human').sum()
+
+        if ai_count < 30 or human_count < 30:
+            print(f"  Shadow model: class imbalance too severe "
+                  f"(ai={ai_count}, human={human_count}, need >= 30 each)")
+            return None
+
+        feature_cols = [c for c in df.columns
+                        if df[c].dtype in ('float64', 'int64', 'float32')
+                        and c not in ('word_count_raw', 'ground_truth')
+                        and not c.startswith('_')]
+
+        X = df[feature_cols].fillna(0)
+        y = (df['ground_truth'] == 'ai').astype(int)
+
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+
+        clf = LogisticRegression(
+            solver='liblinear', l1_ratio=1.0,
+            class_weight='balanced', C=1.0, max_iter=1000,
+        )
+        clf.fit(X_scaled, y)
+
+        cv_scores = cross_val_score(clf, X_scaled, y, cv=5, scoring='roc_auc')
+        mean_auc = np.mean(cv_scores)
+
+        pkg = {
+            'model': clf,
+            'scaler': scaler,
+            'features': feature_cols,
+            'n_samples': len(df),
+            'n_ai': int(ai_count),
+            'n_human': int(human_count),
+            'cv_auc': round(float(mean_auc), 4),
+            'trained_at': datetime.now().isoformat(),
+        }
+
+        model_path = self.store_dir / 'shadow_model.pkl'
+        joblib.dump(pkg, model_path)
+
+        print(f"\n  Shadow model trained: {len(df)} samples, "
+              f"CV AUC={mean_auc:.3f}")
+        print(f"  {'Feature':<40} {'Coefficient':>12}")
+        print(f"  {'-'*52}")
+        coefs = sorted(zip(feature_cols, clf.coef_[0]),
+                       key=lambda x: -abs(x[1]))
+        for feat, coef in coefs:
+            if abs(coef) > 0.01:
+                direction = "-> AI" if coef > 0 else "-> Human"
+                print(f"  {feat:<40} {coef:>+8.4f}  {direction}")
+
+        n_active = sum(1 for _, c in coefs if abs(c) > 0.01)
+        n_zeroed = len(feature_cols) - n_active
+        print(f"\n  Active features: {n_active}/{len(feature_cols)} "
+              f"({n_zeroed} zeroed by L1 penalty)")
+
+        return pkg
+
+    def check_shadow_disagreement(self, result):
+        """Run shadow model on a pipeline result, return disagreement info.
+
+        Returns None if no disagreement, or a dict describing the discrepancy.
+        Only runs if a trained shadow model exists in the memory store.
+        """
+        model_path = self.store_dir / 'shadow_model.pkl'
+        if not model_path.exists():
+            return None
+
+        try:
+            import joblib
+            import numpy as np
+        except ImportError:
+            return None
+
+        if not hasattr(self, '_shadow_pkg'):
+            self._shadow_pkg = joblib.load(model_path)
+
+        pkg = self._shadow_pkg
+        feature_vec = [result.get(f, 0) for f in pkg['features']]
+        X = np.array([feature_vec])
+        X_scaled = pkg['scaler'].transform(X)
+        ai_prob = float(pkg['model'].predict_proba(X_scaled)[0][1])
+
+        rule_det = result.get('determination', 'GREEN')
+        rule_flagged = rule_det in ('RED', 'AMBER', 'MIXED')
+        model_flagged = ai_prob > 0.80
+
+        disagreement = None
+
+        if rule_flagged and not model_flagged:
+            disagreement = {
+                'type': 'rule_flags_model_passes',
+                'rule_determination': rule_det,
+                'shadow_ai_prob': round(ai_prob, 4),
+                'interpretation': 'Possible false positive — rule engine fires '
+                                'but learned model sees human patterns',
+            }
+        elif not rule_flagged and model_flagged:
+            disagreement = {
+                'type': 'model_flags_rule_passes',
+                'rule_determination': rule_det,
+                'shadow_ai_prob': round(ai_prob, 4),
+                'interpretation': 'Possible blind spot — learned model detects '
+                                'AI patterns that rule engine misses',
+            }
+
+        if disagreement:
+            log_record = {
+                'task_id': result.get('task_id', ''),
+                'attempter': result.get('attempter', ''),
+                'timestamp': datetime.now().isoformat(),
+                **disagreement,
+            }
+            log_path = self.store_dir / 'shadow_disagreements.jsonl'
+            with open(log_path, 'a') as f:
+                f.write(json.dumps(log_record) + '\n')
+
+        return disagreement
+
+    # ── Lexicon Discovery (Tool 2) ───────────────────────────────
+
+    def discover_lexicon_candidates(self, corpus_path, min_count=10,
+                                     log_odds_threshold=1.5):
+        """Discover AI-associated vocabulary via Smoothed Log-Odds.
+
+        Uses confirmed ground truth labels from memory joined with raw text
+        from the provided corpus file.
+
+        Args:
+            corpus_path: Path to JSONL with {"task_id": "...", "text": "..."}
+            min_count: Minimum total occurrences across both classes
+            log_odds_threshold: Minimum log-odds ratio to report
+
+        Saves candidates CSV to .beet/lexicon_discovery/
+        Returns list of candidate dicts.
+        """
+        from collections import Counter
+        import math
+        import csv
+
+        confirmed = {}
+        if self.confirmed_path.exists():
+            with open(self.confirmed_path) as f:
+                for line in f:
+                    try:
+                        rec = json.loads(line.strip())
+                        confirmed[rec['task_id']] = rec['ground_truth']
+                    except (json.JSONDecodeError, KeyError):
+                        continue
+
+        if not confirmed:
+            print("  Lexicon discovery: no confirmed labels in memory")
+            return []
+
+        corpus = {}
+        with open(corpus_path) as f:
+            for line in f:
+                try:
+                    rec = json.loads(line.strip())
+                    tid = rec.get('task_id', '')
+                    text = rec.get('text', rec.get('prompt', ''))
+                    if tid and text:
+                        corpus[tid] = text.lower()
+                except json.JSONDecodeError:
+                    continue
+
+        ai_words = []
+        human_words = []
+        for tid, label in confirmed.items():
+            text = corpus.get(tid, '')
+            if not text:
+                continue
+            words = [w for w in text.split() if w.isalpha() and len(w) > 2]
+            if label == 'ai':
+                ai_words.extend(words)
+            elif label == 'human':
+                human_words.extend(words)
+
+        if len(ai_words) < 500 or len(human_words) < 500:
+            print(f"  Lexicon discovery: insufficient text "
+                  f"(ai={len(ai_words)} words, human={len(human_words)} words)")
+            return []
+
+        ai_counts = Counter(ai_words)
+        human_counts = Counter(human_words)
+        vocab = set(ai_counts.keys()) | set(human_counts.keys())
+        n_ai = sum(ai_counts.values())
+        n_human = sum(human_counts.values())
+
+        alpha = 0.05
+        candidates = []
+
+        for word in vocab:
+            total_count = ai_counts[word] + human_counts[word]
+            if total_count < min_count:
+                continue
+
+            ai_rate = (ai_counts[word] + alpha) / (n_ai + alpha * len(vocab))
+            human_rate = (human_counts[word] + alpha) / (n_human + alpha * len(vocab))
+
+            log_odds = math.log(ai_rate / human_rate)
+
+            if log_odds > log_odds_threshold:
+                candidates.append({
+                    'word': word,
+                    'log_odds': round(log_odds, 3),
+                    'ai_freq': ai_counts[word],
+                    'human_freq': human_counts[word],
+                    'total_freq': total_count,
+                    'ai_rate_per_1k': round(ai_counts[word] / (n_ai / 1000), 2),
+                    'human_rate_per_1k': round(human_counts[word] / (n_human / 1000), 2),
+                    'already_in_fingerprints': word in self._get_existing_fingerprints(),
+                    'already_in_packs': word in self._get_existing_pack_keywords(),
+                })
+
+        candidates.sort(key=lambda c: -c['log_odds'])
+
+        discovery_dir = self.store_dir / 'lexicon_discovery'
+        discovery_dir.mkdir(exist_ok=True)
+        timestamp = datetime.now().strftime('%Y-%m-%d')
+        out_path = discovery_dir / f'candidates_{timestamp}.csv'
+
+        if candidates:
+            with open(out_path, 'w', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=candidates[0].keys())
+                writer.writeheader()
+                writer.writerows(candidates)
+
+        n_new = sum(1 for c in candidates
+                    if not c['already_in_fingerprints']
+                    and not c['already_in_packs'])
+
+        print(f"\n  Lexicon discovery: {len(candidates)} candidates "
+              f"({n_new} new, not in existing vocabulary)")
+        if candidates:
+            print(f"  Saved to {out_path}")
+            print(f"\n  Top 15 candidates:")
+            print(f"  {'Word':<25} {'Log-Odds':>9} {'AI/1k':>7} {'Hum/1k':>7} {'New?':>5}")
+            print(f"  {'-'*55}")
+            for c in candidates[:15]:
+                new = '*' if not c['already_in_fingerprints'] and not c['already_in_packs'] else ''
+                print(f"  {c['word']:<25} {c['log_odds']:>+8.3f} "
+                      f"{c['ai_rate_per_1k']:>7.1f} {c['human_rate_per_1k']:>7.1f} "
+                      f"{new:>5}")
+
+        return candidates
+
+    def _get_existing_fingerprints(self):
+        """Get current fingerprint words for duplicate detection."""
+        try:
+            from llm_detector.analyzers.fingerprint import FINGERPRINT_WORDS
+            return set(w.lower() for w in FINGERPRINT_WORDS)
+        except (ImportError, AttributeError):
+            return set()
+
+    def _get_existing_pack_keywords(self):
+        """Get all keywords from registered lexicon packs."""
+        try:
+            from llm_detector.lexicon.packs import PACK_REGISTRY
+            all_kw = set()
+            for pack in PACK_REGISTRY.values():
+                all_kw.update(k.lower() for k in pack.keywords)
+            return all_kw
+        except (ImportError, AttributeError):
+            return set()
+
+    # ── Semantic Centroid Rebuilder (Tool 3) ──────────────────────
+
+    def rebuild_semantic_centroids(self, corpus_path, min_per_class=50):
+        """Rebuild semantic centroids from confirmed labeled text.
+
+        Args:
+            corpus_path: Path to JSONL with {"task_id": "...", "text": "..."}
+            min_per_class: Minimum confirmed examples per class.
+
+        Saves versioned centroids to .beet/centroids/centroids_vXX.npz
+        Returns dict with centroid arrays or None.
+        """
+        try:
+            from sentence_transformers import SentenceTransformer
+            import numpy as np
+        except ImportError:
+            print("  Centroid rebuild requires sentence-transformers and numpy")
+            return None
+
+        confirmed = {}
+        if self.confirmed_path.exists():
+            with open(self.confirmed_path) as f:
+                for line in f:
+                    try:
+                        rec = json.loads(line.strip())
+                        confirmed[rec['task_id']] = rec['ground_truth']
+                    except (json.JSONDecodeError, KeyError):
+                        continue
+
+        ai_texts = []
+        human_texts = []
+        with open(corpus_path) as f:
+            for line in f:
+                try:
+                    rec = json.loads(line.strip())
+                    tid = rec.get('task_id', '')
+                    text = rec.get('text', rec.get('prompt', ''))
+                    if tid in confirmed and text:
+                        if confirmed[tid] == 'ai':
+                            ai_texts.append(text)
+                        elif confirmed[tid] == 'human':
+                            human_texts.append(text)
+                except json.JSONDecodeError:
+                    continue
+
+        if len(ai_texts) < min_per_class or len(human_texts) < min_per_class:
+            print(f"  Centroid rebuild: insufficient confirmed text "
+                  f"(ai={len(ai_texts)}, human={len(human_texts)}, "
+                  f"need >= {min_per_class} each)")
+            return None
+
+        print(f"  Computing centroids: {len(ai_texts)} AI, "
+              f"{len(human_texts)} human texts...")
+
+        embedder = SentenceTransformer('all-MiniLM-L6-v2')
+
+        ai_embeddings = embedder.encode(ai_texts, show_progress_bar=True)
+        human_embeddings = embedder.encode(human_texts, show_progress_bar=True)
+
+        ai_centroid = np.mean(ai_embeddings, axis=0, keepdims=True)
+        human_centroid = np.mean(human_embeddings, axis=0, keepdims=True)
+
+        n_clusters = min(5, len(ai_texts) // 20, len(human_texts) // 20)
+        n_clusters = max(1, n_clusters)
+
+        if n_clusters > 1:
+            from sklearn.cluster import KMeans
+            ai_km = KMeans(n_clusters=n_clusters, n_init=10, random_state=42)
+            ai_km.fit(ai_embeddings)
+            ai_multi_centroids = ai_km.cluster_centers_
+
+            human_km = KMeans(n_clusters=n_clusters, n_init=10, random_state=42)
+            human_km.fit(human_embeddings)
+            human_multi_centroids = human_km.cluster_centers_
+        else:
+            ai_multi_centroids = ai_centroid
+            human_multi_centroids = human_centroid
+
+        centroids_dir = self.store_dir / 'centroids'
+        centroids_dir.mkdir(exist_ok=True)
+        version = datetime.now().strftime('%Y%m%d')
+        out_path = centroids_dir / f'centroids_v{version}.npz'
+
+        np.savez(
+            out_path,
+            ai_centroid=ai_centroid,
+            human_centroid=human_centroid,
+            ai_multi=ai_multi_centroids,
+            human_multi=human_multi_centroids,
+            n_ai=len(ai_texts),
+            n_human=len(human_texts),
+            n_clusters=n_clusters,
+        )
+
+        import shutil
+        latest_path = centroids_dir / 'centroids_latest.npz'
+        shutil.copy2(out_path, latest_path)
+
+        print(f"  Centroids saved: {out_path}")
+        print(f"    AI: {len(ai_texts)} texts -> {n_clusters} centroid(s)")
+        print(f"    Human: {len(human_texts)} texts -> {n_clusters} centroid(s)")
+
+        from sklearn.metrics.pairwise import cosine_similarity
+        mean_sep = 1.0 - float(cosine_similarity(ai_centroid, human_centroid)[0][0])
+        print(f"    Centroid separation: {mean_sep:.4f} "
+              f"(higher = better discrimination)")
+
+        return {
+            'ai_centroids': ai_multi_centroids,
+            'human_centroids': human_multi_centroids,
+            'separation': mean_sep,
+            'path': str(out_path),
+        }
