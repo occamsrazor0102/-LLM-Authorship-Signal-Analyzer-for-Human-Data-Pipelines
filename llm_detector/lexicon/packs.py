@@ -655,6 +655,7 @@ class PackScore:
     raw_score: float = 0.0
     capped_score: float = 0.0
     matches: List[str] = field(default_factory=list)
+    spans: List[dict] = field(default_factory=list)
 
 
 def score_pack(text: str, pack_name: str, n_sentences: int = 1) -> PackScore:
@@ -666,7 +667,8 @@ def score_pack(text: str, pack_name: str, n_sentences: int = 1) -> PackScore:
         n_sentences: Sentence count for density normalization.
 
     Returns:
-        PackScore with hits, weighted score (density-normalized), and capped score.
+        PackScore with hits, weighted score (density-normalized), capped score,
+        and character-level spans for each match.
     """
     pack = PACK_REGISTRY[pack_name]
     compiled = _COMPILED_PACKS[pack_name]
@@ -674,25 +676,49 @@ def score_pack(text: str, pack_name: str, n_sentences: int = 1) -> PackScore:
 
     result = PackScore(pack_name=pack_name, category=pack.category)
 
-    # Pattern matching
+    # Pattern matching (finditer for span capture)
     for compiled_re, weight in compiled:
-        found = compiled_re.findall(text)
-        if found:
-            result.raw_hits += len(found)
-            result.weighted_hits += len(found) * weight
-            result.matches.extend(found[:3])  # Keep first 3 for diagnostics
+        for m in compiled_re.finditer(text):
+            result.raw_hits += 1
+            result.weighted_hits += weight
+            if len(result.matches) < 3:
+                result.matches.append(m.group())
+            result.spans.append({
+                'start': m.start(),
+                'end': m.end(),
+                'text': m.group()[:80],
+                'pack': pack_name,
+                'weight': weight,
+            })
 
-    # Keyword matching (fast path, no weight — counted separately)
+    # Keyword matching (finditer for span capture, no weight — counted separately)
     kw_re = _KEYWORD_RES.get(pack_name)
     if kw_re:
-        result.keyword_hits = len(kw_re.findall(text))
+        for m in kw_re.finditer(text):
+            result.keyword_hits += 1
+            result.spans.append({
+                'start': m.start(),
+                'end': m.end(),
+                'text': m.group(),
+                'pack': pack_name,
+                'weight': 0.0,
+                'type': 'keyword',
+            })
 
-    # Uppercase keyword matching (case-sensitive)
+    # Uppercase keyword matching (case-sensitive, finditer for span capture)
     uc_re = _UPPERCASE_RES.get(pack_name)
     if uc_re:
-        result.uppercase_hits = len(uc_re.findall(text))
-        # Uppercase normative forms get bonus weight
-        result.weighted_hits += result.uppercase_hits * 2.0
+        for m in uc_re.finditer(text):
+            result.uppercase_hits += 1
+            result.weighted_hits += 2.0
+            result.spans.append({
+                'start': m.start(),
+                'end': m.end(),
+                'text': m.group(),
+                'pack': pack_name,
+                'weight': 2.0,
+                'type': 'uppercase',
+            })
 
     # Density-normalized score: weighted_hits per sentence × family_weight
     density = result.weighted_hits / n_sents
@@ -725,37 +751,15 @@ def score_packs(text: str, pack_names: Optional[List[str]] = None,
 def score_pack_spans(text: str, pack_name: str) -> List[Tuple[int, int, str, str, float]]:
     """Return character-level spans for all regex/keyword hits in a pack.
 
-    Args:
-        text: The original (normalized) text.
-        pack_name: Key in PACK_REGISTRY.
+    Delegates to score_pack() and extracts span data from PackScore.spans.
 
     Returns:
         List of (start_char, end_char, matched_text, pack_name, weight) tuples,
         sorted by start_char.
     """
-    compiled = _COMPILED_PACKS[pack_name]
-    spans = []
-
-    # Pattern hits (with weights)
-    for compiled_re, weight in compiled:
-        for m in compiled_re.finditer(text):
-            spans.append((m.start(), m.end(), m.group(), pack_name, weight))
-
-    # Keyword hits (weight = 1.0 for plain keywords)
-    kw_re = _KEYWORD_RES.get(pack_name)
-    if kw_re:
-        for m in kw_re.finditer(text):
-            # Skip if already covered by a pattern span at same position
-            if not any(s[0] <= m.start() and s[1] >= m.end() for s in spans):
-                spans.append((m.start(), m.end(), m.group(), pack_name, 1.0))
-
-    # Uppercase keyword hits (weight = 2.0 for normative forms)
-    uc_re = _UPPERCASE_RES.get(pack_name)
-    if uc_re:
-        for m in uc_re.finditer(text):
-            if not any(s[0] <= m.start() and s[1] >= m.end() for s in spans):
-                spans.append((m.start(), m.end(), m.group(), pack_name, 2.0))
-
+    ps = score_pack(text, pack_name)
+    spans = [(s['start'], s['end'], s['text'], s['pack'], s['weight'])
+             for s in ps.spans]
     spans.sort(key=lambda s: s[0])
     return spans
 

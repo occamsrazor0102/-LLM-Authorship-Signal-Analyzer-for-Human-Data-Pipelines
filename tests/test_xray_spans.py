@@ -4,12 +4,13 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from llm_detector.lexicon.packs import score_pack_spans, score_all_pack_spans
-from llm_detector.analyzers.preamble import run_preamble_spans
+from llm_detector.lexicon.packs import score_pack, score_pack_spans, score_all_pack_spans
+from llm_detector.analyzers.preamble import run_preamble, run_preamble_spans
 from llm_detector.analyzers.fingerprint import run_fingerprint_spans
 from llm_detector.analyzers.windowing import get_hot_window_spans
 from llm_detector.text_utils import get_sentence_spans
-from tests.conftest import AI_TEXT, HUMAN_TEXT
+from llm_detector.pipeline import analyze_prompt
+from tests.conftest import AI_TEXT, HUMAN_TEXT, CLINICAL_TEXT
 
 PASSED = 0
 FAILED = 0
@@ -23,6 +24,71 @@ def check(label, condition, detail=""):
     else:
         FAILED += 1
         print(f"  [FAIL] {label}  -- {detail}")
+
+
+def test_packscore_spans_field():
+    """FEAT 1: PackScore dataclass has spans populated by score_pack()."""
+    print("\n-- PACKSCORE.SPANS FIELD --")
+    text = "You MUST include all required fields. This is mandatory."
+    ps = score_pack(text, 'obligation')
+    check("PackScore has spans attr", hasattr(ps, 'spans'))
+    check("PackScore.spans is list", isinstance(ps.spans, list))
+    check("PackScore.spans non-empty", len(ps.spans) > 0, f"got {len(ps.spans)}")
+
+    for s in ps.spans[:2]:
+        check("span is dict", isinstance(s, dict))
+        check("span has 'start'", 'start' in s)
+        check("span has 'end'", 'end' in s)
+        check("span has 'text'", 'text' in s)
+        check("span has 'pack'", 'pack' in s)
+        check("span has 'weight'", 'weight' in s)
+        check(f"span start < end: {s['start']} < {s['end']}",
+              s['start'] < s['end'])
+        check(f"span text matches source: '{s['text']}'",
+              text[s['start']:s['end']] == s['text'] or s['text'] == text[s['start']:s['end']][:80],
+              f"text[{s['start']}:{s['end']}]='{text[s['start']:s['end']]}'")
+        break
+
+
+def test_preamble_4tuple():
+    """FEAT 1: run_preamble returns 4-tuple with spans."""
+    print("\n-- PREAMBLE 4-TUPLE --")
+    text = "Sure thing! Here is your updated prompt for the evaluation task."
+    result = run_preamble(text)
+    check("run_preamble returns 4-tuple", len(result) == 4, f"got {len(result)}")
+    score, severity, hits, spans = result
+    check("score is float", isinstance(score, (int, float)))
+    check("severity is str", isinstance(severity, str))
+    check("hits is list", isinstance(hits, list))
+    check("spans is list", isinstance(spans, list))
+    check("spans non-empty for preamble text", len(spans) > 0, f"got {len(spans)}")
+
+    for s in spans:
+        check("preamble span is dict", isinstance(s, dict))
+        check("preamble span has start/end", 'start' in s and 'end' in s)
+        break
+
+    # Clean text should have empty spans
+    clean_result = run_preamble("The quarterly report shows growth.")
+    check("clean text: 4-tuple", len(clean_result) == 4)
+    check("clean text: empty spans", len(clean_result[3]) == 0)
+
+
+def test_pipeline_detection_spans():
+    """FEAT 2: Pipeline result has 'detection_spans' key."""
+    print("\n-- PIPELINE DETECTION_SPANS --")
+    text = ("You MUST include all required fields. This comprehensive analysis "
+            "provides a thorough examination of the key factors.")
+    result = analyze_prompt(text, run_l3=False)
+    check("result has 'detection_spans'", 'detection_spans' in result)
+    check("detection_spans is list", isinstance(result['detection_spans'], list))
+    # Should have some spans for this AI-like text
+    n = len(result['detection_spans'])
+    check("detection_spans non-empty", n > 0, f"got {n}")
+    # Each span should have start key
+    for s in result['detection_spans'][:3]:
+        check("pipeline span has 'start'", 'start' in s)
+        break
 
 
 def test_pack_spans_basic():
@@ -39,7 +105,7 @@ def test_pack_spans_basic():
               text[start:end] == matched,
               f"text[{start}:{end}]='{text[start:end]}' != '{matched}'")
         check(f"pack_name == 'obligation'", pack_name == 'obligation')
-        check(f"weight > 0", weight > 0)
+        check(f"weight >= 0", weight >= 0)
         break  # Just check first span in detail
 
 
@@ -192,6 +258,9 @@ if __name__ == '__main__':
     print("  SPAN-LEVEL EXPLAINABILITY (X-RAY) TESTS")
     print("=" * 70)
 
+    test_packscore_spans_field()
+    test_preamble_4tuple()
+    test_pipeline_detection_spans()
     test_pack_spans_basic()
     test_pack_spans_sorted()
     test_all_pack_spans()

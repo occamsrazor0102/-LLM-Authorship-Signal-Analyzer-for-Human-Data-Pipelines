@@ -89,7 +89,7 @@ def print_result(r, verbose=False):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='LLM Detection Pipeline v0.61')
+    parser = argparse.ArgumentParser(description='LLM Detection Pipeline v0.66')
     parser.add_argument('input', nargs='?', help='Input file (.xlsx, .csv, or .pdf)')
     parser.add_argument('--gui', action='store_true', help='Launch desktop GUI mode')
     parser.add_argument('--text', help='Analyze a single text string')
@@ -126,6 +126,10 @@ def main():
                         help='Build calibration table from labeled baseline JSONL and save to --cal-table')
     parser.add_argument('--cal-table', metavar='JSON',
                         help='Path to calibration table JSON (load for scoring, or save target for --calibrate)')
+    parser.add_argument('--cost-per-prompt', type=float, default=400.0,
+                        help='Cost per prompt for financial impact estimate (default: $400)')
+    parser.add_argument('--html-report', metavar='DIR',
+                        help='Generate HTML reports for flagged submissions in DIR')
     args = parser.parse_args()
 
     if args.gui:
@@ -205,7 +209,7 @@ def main():
 
     layer3_label = " + L3" if run_l3 else ""
     dna_label = " + DNA-GPT" if args.api_key else ""
-    print(f"Processing {len(tasks)} tasks through pipeline v0.61{layer3_label}{dna_label}...")
+    print(f"Processing {len(tasks)} tasks through pipeline v0.66{layer3_label}{dna_label}...")
 
     results = []
     text_map = {}
@@ -232,7 +236,7 @@ def main():
 
     det_counts = Counter(r['determination'] for r in results)
     print(f"\n{'='*90}")
-    print(f"  PIPELINE v0.61 RESULTS (n={len(results)})")
+    print(f"  PIPELINE v0.66 RESULTS (n={len(results)})")
     print(f"{'='*90}")
     all_dets = ['RED', 'AMBER', 'MIXED', 'YELLOW', 'REVIEW', 'GREEN']
     icons = {
@@ -268,7 +272,7 @@ def main():
     else:
         sim_pairs = []
 
-    default_name = os.path.basename(args.input).rsplit('.', 1)[0] + '_pipeline_v061.csv'
+    default_name = os.path.basename(args.input).rsplit('.', 1)[0] + '_pipeline_v066.csv'
     input_dir = os.path.dirname(os.path.abspath(args.input))
     output_path = args.output or os.path.join(input_dir, default_name)
 
@@ -289,6 +293,31 @@ def main():
 
     pd.DataFrame(flat).to_csv(output_path, index=False)
     print(f"\n  Results saved to: {output_path}")
+
+    # Attempter profiling and channel pattern summary
+    if len(results) >= 5:
+        from llm_detector.reporting import (
+            profile_attempters, print_attempter_report, channel_pattern_summary,
+        )
+        profiles = profile_attempters(results)
+        print_attempter_report(profiles)
+        channel_pattern_summary(results)
+
+    # Financial impact estimate
+    if len(results) >= 10:
+        from llm_detector.reporting import financial_impact, print_financial_report
+        impact = financial_impact(results, cost_per_prompt=args.cost_per_prompt)
+        print_financial_report(impact, cost_per_prompt=args.cost_per_prompt)
+
+    # HTML reports for flagged submissions
+    if args.html_report and flagged:
+        os.makedirs(args.html_report, exist_ok=True)
+        from llm_detector.html_report import generate_html_report
+        for r in flagged:
+            tid = r.get('task_id', 'unknown')[:20].replace('/', '_')
+            path = os.path.join(args.html_report, f"{tid}_{r['determination']}.html")
+            generate_html_report(text_map.get(r.get('task_id', ''), ''), r, path)
+        print(f"\n  HTML reports written to {args.html_report}/ ({len(flagged)} files)")
 
     if args.collect:
         collect_baselines(results, args.collect)

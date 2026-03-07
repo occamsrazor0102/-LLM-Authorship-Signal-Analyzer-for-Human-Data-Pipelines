@@ -84,7 +84,7 @@ def test_cot_leakage():
 
     # <think> tags — smoking gun for reasoning model artifacts
     text_think = "Here is the analysis.\n<think>\nLet me consider the options.\n</think>\nThe answer is 42."
-    score, severity, hits = run_preamble(text_think)
+    score, severity, hits, _spans = run_preamble(text_think)
     hit_names = [h[0] for h in hits]
     check("think tags: CRITICAL severity", severity == "CRITICAL")
     check("think tags: cot_leakage in hits", "cot_leakage" in hit_names)
@@ -92,20 +92,20 @@ def test_cot_leakage():
 
     # Self-correction phrases
     text_correct = "The total revenue is $50M. Wait, actually let me recalculate that figure."
-    score2, severity2, hits2 = run_preamble(text_correct)
+    score2, severity2, hits2, _spans2 = run_preamble(text_correct)
     hit_names2 = [h[0] for h in hits2]
     check("self-correction: detected", len(hits2) > 0)
     check("self-correction: cot_self_correction in hits", "cot_self_correction" in hit_names2)
 
     # Reasoning model phrases
     text_reason = "Let me rethink the approach to this problem."
-    score3, severity3, hits3 = run_preamble(text_reason)
+    score3, severity3, hits3, _spans3 = run_preamble(text_reason)
     hit_names3 = [h[0] for h in hits3]
     check("cot reasoning: detected", "cot_reasoning" in hit_names3)
 
     # Clean text should not trigger
     clean = "The quarterly report shows steady growth across all divisions."
-    score4, severity4, hits4 = run_preamble(clean)
+    score4, severity4, hits4, _spans4 = run_preamble(clean)
     check("clean text: no CoT hits", all(h[0] not in ('cot_leakage', 'cot_reasoning', 'cot_self_correction') for h in hits4))
 
 

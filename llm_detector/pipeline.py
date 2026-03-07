@@ -3,7 +3,7 @@
 from llm_detector.compat import HAS_SEMANTIC, HAS_PERPLEXITY
 from llm_detector.normalize import normalize_text
 from llm_detector.language_gate import check_language_support
-from llm_detector.analyzers.preamble import run_preamble, run_preamble_spans
+from llm_detector.analyzers.preamble import run_preamble
 from llm_detector.analyzers.fingerprint import run_fingerprint, run_fingerprint_spans
 from llm_detector.lexicon.integration import (
     run_prompt_signature_enhanced,
@@ -18,7 +18,6 @@ from llm_detector.analyzers.perplexity import run_perplexity
 from llm_detector.analyzers.token_cohesiveness import run_token_cohesiveness
 from llm_detector.analyzers.stylometry import mask_topical_content, extract_stylometric_features
 from llm_detector.analyzers.windowing import score_windows, score_surprisal_windows, get_hot_window_spans
-from llm_detector.lexicon.packs import score_all_pack_spans
 from llm_detector.fusion import determine
 from llm_detector.calibration import apply_calibration
 
@@ -28,7 +27,7 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
                    dna_model=None, dna_samples=3,
                    ground_truth=None, language=None, domain=None,
                    mode='auto', cal_table=None):
-    """Run full v0.65 pipeline on a single prompt. Returns result dict."""
+    """Run full v0.66 pipeline on a single prompt. Returns result dict."""
     # Normalization pre-pass
     normalized_text, norm_report = normalize_text(text)
     word_count_raw = len(text.split())
@@ -40,7 +39,7 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
     text_for_analysis = normalized_text
 
     # Run all analyzers
-    preamble_score, preamble_severity, preamble_hits = run_preamble(text_for_analysis)
+    preamble_score, preamble_severity, preamble_hits, preamble_spans = run_preamble(text_for_analysis)
     fingerprint_score, fingerprint_hits, fingerprint_rate = run_fingerprint(text_for_analysis)
     prompt_sig = run_prompt_signature_enhanced(text_for_analysis)
     voice_dis = run_voice_dissonance_enhanced(text_for_analysis)
@@ -80,26 +79,21 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
     # Windowed scoring
     window_result = score_windows(text_for_analysis)
 
-    # Span-level explainability ("X-Ray" view)
-    xray_spans = []
-    xray_spans.extend(
-        {'start': s, 'end': e, 'text': t, 'source': n, 'label': sev, 'type': 'preamble'}
-        for s, e, t, n, sev in run_preamble_spans(text_for_analysis)
-    )
-    xray_spans.extend(
+    # Detection spans — merged from all annotation sources
+    detection_spans = list(preamble_spans)
+    detection_spans.extend(
         {'start': s, 'end': e, 'text': t, 'source': 'fingerprint', 'label': w, 'type': 'fingerprint'}
         for s, e, t, _, w in run_fingerprint_spans(text_for_analysis)
     )
-    xray_spans.extend(
-        {'start': s, 'end': e, 'text': t, 'source': pn, 'label': pn, 'type': 'lexicon'}
-        for s, e, t, pn, _w in score_all_pack_spans(text_for_analysis)
-    )
+    detection_spans.extend(prompt_sig.get('pack_spans', []))
+    detection_spans.extend(voice_dis.get('pack_spans', []))
+    detection_spans.extend(instr_density.get('pack_spans', []))
     for hw in get_hot_window_spans(text_for_analysis):
-        xray_spans.append({
+        detection_spans.append({
             'start': hw[0], 'end': hw[1], 'text': '', 'source': 'hot_window',
             'label': f'score={hw[2]:.2f}', 'type': 'window',
         })
-    xray_spans.sort(key=lambda x: x['start'])
+    detection_spans.sort(key=lambda x: x.get('start', 0))
 
     # Evidence fusion
     det, reason, confidence, channel_details = determine(
@@ -126,7 +120,7 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
 
     # Audit trail
     audit_trail = {
-        'pipeline_version': 'v0.65',
+        'pipeline_version': 'v0.66',
         'mode_resolved': channel_details.get('mode', mode),
         'channels': channel_details.get('channels', {}),
         'fairness_gate': {
@@ -160,9 +154,9 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         'mode': channel_details.get('mode', mode),
         'channel_details': channel_details,
         'audit_trail': audit_trail,
-        'pipeline_version': 'v0.65',
-        # X-Ray spans
-        'xray_spans': xray_spans,
+        'pipeline_version': 'v0.66',
+        # Detection spans (v0.66 span-level annotation)
+        'detection_spans': detection_spans,
         # Normalization
         'norm_obfuscation_delta': norm_report.get('obfuscation_delta', 0.0),
         'norm_invisible_chars': norm_report.get('invisible_chars', 0),

@@ -21,7 +21,7 @@ def check(label, condition, detail=""):
 
 def test_think_tags():
     print("\n-- Think tag detection --")
-    score, sev, hits = run_preamble(
+    score, sev, hits, _spans = run_preamble(
         "<think>\nThe user wants a pharmacist task...\n</think>\n"
         "You are a board-certified pharmacist."
     )
@@ -33,7 +33,7 @@ def test_think_tags():
 
 def test_reasoning_tags():
     print("\n-- Reasoning tag detection --")
-    score, sev, hits = run_preamble(
+    score, sev, hits, _spans = run_preamble(
         "<reasoning>I need to design a complex scenario</reasoning>\n"
         "You are a senior data analyst."
     )
@@ -42,7 +42,7 @@ def test_reasoning_tags():
 
 def test_self_correction():
     print("\n-- Self-correction phrases --")
-    score, sev, hits = run_preamble(
+    score, sev, hits, _spans = run_preamble(
         "Wait, actually let me rethink the constraints for this task. "
         "You must process each CSV row and validate all fields."
     )
@@ -52,7 +52,7 @@ def test_self_correction():
 
 def test_no_false_positive_think():
     print("\n-- No false positive on 'think carefully' --")
-    score, sev, hits = run_preamble(
+    score, sev, hits, _spans = run_preamble(
         "Think carefully about edge cases when reviewing patient records. "
         "You are a clinical pharmacist reviewing medication orders."
     )
@@ -61,7 +61,7 @@ def test_no_false_positive_think():
 
 def test_no_false_positive_step():
     print("\n-- No false positive on legitimate numbered steps --")
-    score, sev, hits = run_preamble(
+    score, sev, hits, _spans = run_preamble(
         "Complete the following analysis in order:\n"
         "Step 1: Review the attached financial statements.\n"
         "Step 2: Identify discrepancies exceeding $10,000."
