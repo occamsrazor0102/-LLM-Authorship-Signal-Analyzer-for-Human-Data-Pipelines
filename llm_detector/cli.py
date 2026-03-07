@@ -137,11 +137,62 @@ def main():
                         help='Path to persistent similarity fingerprint store (cross-batch)')
     parser.add_argument('--instructions', metavar='FILE',
                         help='Path to shared project instructions file (for similarity baseline)')
+    parser.add_argument('--memory', metavar='DIR', default=None,
+                        help='Path to BEET memory store directory (enables cross-batch memory)')
+    parser.add_argument('--confirm', nargs=3, metavar=('TASK_ID', 'LABEL', 'REVIEWER'),
+                        help='Record a ground truth confirmation: --confirm task_001 ai reviewer_A')
+    parser.add_argument('--attempter-history', metavar='NAME',
+                        help='Show historical profile for an attempter')
+    parser.add_argument('--memory-summary', action='store_true',
+                        help='Print memory store summary')
+    parser.add_argument('--rebuild-calibration', action='store_true',
+                        help='Rebuild calibration table from confirmed labels in memory')
     args = parser.parse_args()
 
     if args.gui:
         from llm_detector.gui import launch_gui
         launch_gui()
+        return
+
+    # Memory store setup
+    store = None
+    if args.memory:
+        from llm_detector.memory import MemoryStore
+        store = MemoryStore(args.memory)
+
+    # Memory-only commands (early exit)
+    if args.memory_summary:
+        if store:
+            store.print_summary()
+        else:
+            print("ERROR: --memory-summary requires --memory DIR")
+        return
+
+    if args.confirm:
+        if store:
+            task_id, label, reviewer = args.confirm
+            if label not in ('ai', 'human'):
+                print(f"ERROR: label must be 'ai' or 'human', got '{label}'")
+                return
+            store.record_confirmation(task_id, label, verified_by=reviewer)
+        else:
+            print("ERROR: --confirm requires --memory DIR")
+        return
+
+    if args.attempter_history:
+        if store:
+            store.print_attempter_history(args.attempter_history)
+        else:
+            print("ERROR: --attempter-history requires --memory DIR")
+        return
+
+    if args.rebuild_calibration:
+        if store:
+            cal = store.rebuild_calibration()
+            if cal:
+                print(f"  Calibration rebuilt: {cal['n_calibration']} labeled samples")
+        else:
+            print("ERROR: --rebuild-calibration requires --memory DIR")
         return
 
     if not args.api_key:
@@ -310,6 +361,16 @@ def main():
                 print(f"    {cf['current_id'][:15]} <-> {cf['historical_id'][:15]} "
                       f"(MH={cf['minhash_similarity']:.2f}, batch={cf['historical_batch'][:10]})")
         save_similarity_store(results, text_map, args.similarity_store)
+
+    # Memory store: cross-batch similarity + record batch
+    if store:
+        cross_flags = store.cross_batch_similarity(results, text_map)
+        if cross_flags:
+            print(f"\n  CROSS-BATCH MEMORY: {len(cross_flags)} matches to previous submissions")
+            for cf in cross_flags[:5]:
+                print(f"    {cf['current_id'][:15]} <-> {cf['historical_id'][:15]} "
+                      f"(MH={cf['minhash_similarity']:.2f}, batch={cf['historical_batch'][:15]})")
+        store.record_batch(results, text_map)
 
     default_name = os.path.basename(args.input).rsplit('.', 1)[0] + '_pipeline_v066.csv'
     input_dir = os.path.dirname(os.path.abspath(args.input))
