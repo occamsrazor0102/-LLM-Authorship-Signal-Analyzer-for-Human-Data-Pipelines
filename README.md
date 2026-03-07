@@ -105,16 +105,58 @@ When baseline data is available, the pipeline applies conformal calibration to r
 The pipeline includes a persistent memory store (`.beet/` directory) that tracks submissions, attempter profiles, and confirmed labels across batches. This enables cross-batch similarity detection, attempter risk profiling, and empirical calibration from reviewer feedback.
 
 ```bash
-# Run with memory enabled
+# First batch — initializes memory
 python -m llm_detector input.xlsx --memory .beet/
 
+# Second batch — automatically compares against first
+python -m llm_detector input2.xlsx --memory .beet/
+
 # Confirm labels from human review
-python -m llm_detector --memory .beet/ --confirm task_001 ai
-python -m llm_detector --memory .beet/ --confirm task_002 human
+python -m llm_detector --memory .beet/ --confirm task_001 ai reviewer_A
+python -m llm_detector --memory .beet/ --confirm task_002 human reviewer_B
+
+# Check an attempter's history
+python -m llm_detector --memory .beet/ --attempter-history worker_42
 
 # View attempter risk report
 python -m llm_detector --memory .beet/ --risk-report
+
+# View memory summary
+python -m llm_detector --memory .beet/ --memory-summary
+
+# Rebuild calibration from confirmed labels
+python -m llm_detector --memory .beet/ --rebuild-calibration
+
+# Use rebuilt calibration for next batch
+python -m llm_detector input3.xlsx --memory .beet/ --cal-table .beet/calibration.json
 ```
+
+#### Attempter Risk Tiers
+
+The memory store assigns risk tiers to contributors based on flag rate and confirmation history:
+
+| Tier | Criteria |
+|------|----------|
+| **CRITICAL** | `confirmed_ai > 0` AND `flag_rate > 0.50` |
+| **HIGH** | `flag_rate > 0.30` OR `confirmed_ai > 0` |
+| **ELEVATED** | `flag_rate > 0.15` |
+| **NORMAL** | `flag_rate <= 0.15` |
+
+#### Memory Store Files
+
+| File | Purpose |
+|------|---------|
+| `config.json` | Store metadata: version, submission counts, occupations |
+| `submissions.jsonl` | All scored submissions with full feature vectors |
+| `fingerprints.jsonl` | MinHash + optional embedding vectors for similarity |
+| `attempters.jsonl` | Per-contributor aggregated history and risk profiles |
+| `confirmed.jsonl` | Human-verified ground truth labels (feedback loop) |
+| `calibration.json` | Current conformal calibration table |
+| `shadow_model.pkl` | Trained shadow classifier (from `--rebuild-shadow`) |
+| `shadow_disagreements.jsonl` | Logged rule/model disagreements for review |
+| `centroids/` | Versioned semantic centroids (from `--rebuild-centroids`) |
+| `lexicon_discovery/` | Lexicon candidate CSVs (from `--discover-lexicon`) |
+| `calibration_history/` | Historical calibration snapshots |
 
 ### ML Tools
 
@@ -167,6 +209,28 @@ python -m llm_detector --memory .beet/ --rebuild-all \
 ```
 
 This runs calibration, shadow model, centroid rebuild, and lexicon discovery in sequence.
+
+#### Feedback Loop
+
+The memory system creates a complete feedback cycle: batch scoring produces submissions and disagreement logs, human reviewers confirm labels, and rebuild commands update all learned artifacts for subsequent batches.
+
+```
+  Batch Run               Human Review            Rebuild
+  ─────────               ────────────            ───────
+  python -m llm_detector  Reviewer confirms       python -m llm_detector
+    input.xlsx            ground truth labels       --memory .beet/
+    --memory .beet/              │                  --rebuild-all
+           │                     ▼                  --labeled-corpus texts.jsonl
+           ▼              .beet/confirmed.jsonl            │
+  .beet/submissions.jsonl                                  ▼
+  .beet/fingerprints.jsonl ─────────────────> .beet/calibration.json
+  .beet/attempters.jsonl                      .beet/shadow_model.pkl
+  .beet/shadow_disagreements.jsonl            .beet/centroids/
+           │                                  .beet/lexicon_discovery/
+           └───── next batch uses updated artifacts ◄──────┘
+```
+
+The shadow model and calibration rebuild use scalar features from `submissions.jsonl` — they don't need raw text. Centroids and lexicon discovery operate on embeddings and word frequencies, so they require `--labeled-corpus`.
 
 | Operation | Needs `--labeled-corpus`? | Needs `--memory`? |
 |---|:---:|:---:|
@@ -316,9 +380,12 @@ python -m llm_detector document.pdf
 | `--analyze-baselines JSONL` | Compute percentile distributions from accumulated data |
 | `--calibrate JSONL` | Build calibration table from labeled baselines |
 | `--cal-table JSON` | Path to calibration table JSON |
+| `--html-report DIR` | Generate HTML report to directory |
+| `--instructions FILE` | Path to custom grading instructions file |
 | `--memory DIR` | Enable BEET memory store at given directory |
-| `--confirm TASK_ID LABEL` | Confirm ground truth label (ai/human) for a task |
-| `--risk-report` | Show attempter risk report from memory |
+| `--memory-summary` | Print memory store summary |
+| `--confirm TASK_ID LABEL REVIEWER` | Record ground truth confirmation |
+| `--attempter-history NAME` | Show historical profile for an attempter |
 | `--rebuild-calibration` | Rebuild calibration table from confirmed labels |
 | `--rebuild-shadow` | Rebuild shadow model from confirmed labels |
 | `--discover-lexicon` | Run log-odds lexicon discovery on confirmed labels |
@@ -348,11 +415,46 @@ print(result['voice_dissonance_vsd'])            # Voice-Specification Dissonanc
 print(result['prompt_signature_composite'])      # Prompt signature composite
 print(result['instruction_density_idi'])         # Instruction Density Index
 
+# Shadow model disagreement (when memory store is active)
+if result.get('shadow_disagreement'):
+    print(result['shadow_disagreement']['interpretation'])
+    print(result['shadow_disagreement']['shadow_ai_prob'])
+
 # Cross-submission similarity (batch mode)
 from llm_detector import analyze_similarity
 results = [analyze_prompt(t['prompt'], ...) for t in tasks]
 text_map = {r['task_id']: t['prompt'] for r, t in zip(results, tasks)}
 flags = analyze_similarity(results, text_map)
+```
+
+#### Memory Store API
+
+```python
+from llm_detector.memory import MemoryStore
+
+store = MemoryStore('.beet/')
+
+# Record a batch
+store.record_batch(results, text_map)
+
+# Query attempter history
+history = store.get_attempter_history('worker_42')
+print(history['profile']['risk_tier'])    # CRITICAL / HIGH / ELEVATED / NORMAL
+print(history['profile']['flag_rate'])    # 0.0 - 1.0
+
+# Cross-batch similarity
+cross_flags = store.cross_batch_similarity(results, text_map)
+
+# Record confirmed label
+store.record_confirmation('task_001', 'ai', verified_by='reviewer_A')
+
+# Rebuild learned artifacts
+store.rebuild_shadow_model()
+store.discover_lexicon_candidates('labeled_prompts.jsonl')
+store.rebuild_semantic_centroids('labeled_prompts.jsonl')
+
+# Run shadow model on a result
+disagreement = store.check_shadow_disagreement(result)
 ```
 
 ## Testing
@@ -383,6 +485,21 @@ python tests/test_memory.py
 **Diagnostic layers inform but don't trigger.** Fingerprint analysis participates in convergence and similarity analysis but doesn't fire standalone signals — the false positive rate on individual vocabulary items is too high.
 
 **Audit trail by default.** Every determination includes the primary signal, all supporting signals, and full layer-level diagnostics. Nothing is hidden from the reviewer.
+
+**ML tools advise, never decide.** The shadow model, lexicon discovery, and centroid rebuilder produce artifacts for human review. They never modify the primary rule engine automatically — the human reviewer remains the decision-maker in the feedback loop.
+
+## Release Roadmap
+
+| Version | Focus |
+|---------|-------|
+| v0.61 | Lexicon wiring, calibration fixes, test coverage |
+| v0.62 | CI, lazy loading, MIXED/REVIEW, naming, docs |
+| v0.63 | CoT leakage, DivEye variance, fingerprints |
+| v0.64 | Empirical calibration with labeled data |
+| v0.65a | Continuation/windowed/compressibility features |
+| v0.65b | Enhanced similarity (adaptive, semantic, cross-batch) |
+| v0.66 | Span annotation, attempter profiling, reporting, HTML |
+| **v0.67** | **Memory system + ML tools (shadow model, lexicon discovery, centroids)** |
 
 ## License
 
