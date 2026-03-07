@@ -343,6 +343,140 @@ def test_empty_store_queries():
         shutil.rmtree(tmpdir)
 
 
+def test_shadow_model_insufficient_data():
+    print("\n-- SHADOW MODEL: insufficient data --")
+    store, tmpdir = _make_store()
+    try:
+        # No confirmed labels at all
+        result = store.rebuild_shadow_model()
+        check("returns None with no data", result is None)
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+def test_shadow_disagreement_no_model():
+    print("\n-- SHADOW DISAGREEMENT: no model --")
+    store, tmpdir = _make_store()
+    try:
+        r = _make_result('t1', 'alice', 'analyst', 'RED')
+        disagreement = store.check_shadow_disagreement(r)
+        check("returns None when no model exists", disagreement is None)
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+def test_lexicon_discovery_no_labels():
+    print("\n-- LEXICON DISCOVERY: no labels --")
+    store, tmpdir = _make_store()
+    try:
+        # Create a dummy corpus file
+        corpus_path = os.path.join(tmpdir, 'corpus.jsonl')
+        with open(corpus_path, 'w') as f:
+            f.write(json.dumps({'task_id': 't1', 'text': 'some text here'}) + '\n')
+
+        candidates = store.discover_lexicon_candidates(corpus_path)
+        check("returns empty with no labels", len(candidates) == 0)
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+def test_lexicon_discovery_with_data():
+    print("\n-- LEXICON DISCOVERY: with labeled data --")
+    store, tmpdir = _make_store()
+    try:
+        # Create confirmed labels
+        for i in range(20):
+            with open(store.confirmed_path, 'a') as f:
+                label = 'ai' if i < 10 else 'human'
+                f.write(json.dumps({
+                    'task_id': f't{i}',
+                    'ground_truth': label,
+                }) + '\n')
+
+        # Create corpus with distinct vocabulary
+        corpus_path = os.path.join(tmpdir, 'corpus.jsonl')
+        with open(corpus_path, 'w') as f:
+            for i in range(10):
+                # AI texts: heavy on "comprehensive", "furthermore", "leverage"
+                ai_text = ' '.join(['comprehensive', 'furthermore', 'leverage',
+                                    'optimal', 'alignment'] * 20 +
+                                   ['the', 'and', 'for'] * 30)
+                f.write(json.dumps({
+                    'task_id': f't{i}',
+                    'text': ai_text,
+                }) + '\n')
+            for i in range(10, 20):
+                # Human texts: heavy on "honestly", "kinda", "stuff"
+                human_text = ' '.join(['honestly', 'kinda', 'stuff',
+                                       'yeah', 'lol'] * 20 +
+                                      ['the', 'and', 'for'] * 30)
+                f.write(json.dumps({
+                    'task_id': f't{i}',
+                    'text': human_text,
+                }) + '\n')
+
+        candidates = store.discover_lexicon_candidates(corpus_path, min_count=5)
+        check("found candidates", len(candidates) > 0, f"got {len(candidates)}")
+        if candidates:
+            check("top candidate is AI-associated",
+                  candidates[0]['log_odds'] > 0,
+                  f"got log_odds={candidates[0]['log_odds']}")
+            # Check CSV output was saved
+            discovery_dir = store.store_dir / 'lexicon_discovery'
+            csv_files = list(discovery_dir.glob('candidates_*.csv'))
+            check("CSV saved", len(csv_files) == 1, f"got {len(csv_files)} files")
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+def test_shadow_model_attempter_tracking():
+    print("\n-- SHADOW MODEL: attempter tracking --")
+    store, tmpdir = _make_store()
+    try:
+        results = [
+            _make_result('t1', 'alice', 'analyst', 'GREEN',
+                         shadow_disagreement={
+                             'type': 'model_flags_rule_passes',
+                             'rule_determination': 'GREEN',
+                             'shadow_ai_prob': 0.95,
+                         }),
+        ]
+        text_map = {'t1': 'text one'}
+        store.record_batch(results, text_map)
+
+        profiles = store._load_attempter_profiles()
+        check("shadow_model_flags tracked",
+              profiles['alice'].get('shadow_model_flags', 0) == 1,
+              f"got {profiles['alice'].get('shadow_model_flags')}")
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+def test_load_helpers():
+    print("\n-- LOAD HELPERS --")
+    store, tmpdir = _make_store()
+    try:
+        # Record some data and confirm it
+        results = [
+            _make_result('t1', 'alice', 'analyst', 'RED'),
+            _make_result('t2', 'bob', 'analyst', 'GREEN'),
+        ]
+        text_map = {'t1': 'text one', 't2': 'text two'}
+        store.record_batch(results, text_map)
+        store.record_confirmation('t1', 'ai', verified_by='reviewer')
+
+        confirmed = store._load_confirmed_labels()
+        check("confirmed labels loaded", len(confirmed) == 1)
+        check("confirmed task_id", confirmed[0]['task_id'] == 't1')
+
+        subs = store._load_submissions_by_task_id()
+        check("submissions loaded", len(subs) == 2)
+        check("t1 in submissions", 't1' in subs)
+        check("t2 in submissions", 't2' in subs)
+    finally:
+        shutil.rmtree(tmpdir)
+
+
 if __name__ == '__main__':
     print("=" * 70)
     print("  BEET MEMORY STORE TESTS")
@@ -359,6 +493,12 @@ if __name__ == '__main__':
     test_pre_batch_context()
     test_config_stats_updated()
     test_empty_store_queries()
+    test_shadow_model_insufficient_data()
+    test_shadow_disagreement_no_model()
+    test_lexicon_discovery_no_labels()
+    test_lexicon_discovery_with_data()
+    test_shadow_model_attempter_tracking()
+    test_load_helpers()
 
     print(f"\n{'=' * 70}")
     print(f"  RESULTS: {PASSED} passed, {FAILED} failed")

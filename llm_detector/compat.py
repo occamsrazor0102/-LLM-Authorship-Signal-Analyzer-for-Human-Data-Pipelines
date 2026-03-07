@@ -8,6 +8,7 @@ Models are lazily loaded on first use via getter functions to avoid
 slow imports when only checking flags or running --help.
 """
 
+import os
 import re
 import logging
 
@@ -64,28 +65,57 @@ _AI_CENTROIDS = None
 _HUMAN_CENTROIDS = None
 
 def get_semantic_models():
-    """Return (embedder, ai_centroids, human_centroids), loading on first call."""
+    """Return (embedder, ai_centroids, human_centroids), loading on first call.
+
+    Checks for data-derived centroids in .beet/centroids/centroids_latest.npz
+    before falling back to hardcoded archetypes.
+    """
     global _EMBEDDER, _AI_CENTROIDS, _HUMAN_CENTROIDS
     if _EMBEDDER is None and HAS_SEMANTIC:
         from sentence_transformers import SentenceTransformer
+        import numpy as np
+
         _EMBEDDER = SentenceTransformer('all-MiniLM-L6-v2')
-        _AI_ARCHETYPES = [
-            "As an AI language model, I cannot provide personal opinions.",
-            "Here is a comprehensive breakdown of the key factors to consider.",
-            "To address this challenge, we must consider multiple perspectives.",
-            "This thorough analysis demonstrates the critical importance of the topic.",
-            "Furthermore, it is essential to note that this approach ensures alignment.",
-            "In conclusion, by leveraging these strategies we can achieve optimal results.",
+
+        centroid_paths = [
+            '.beet/centroids/centroids_latest.npz',
+            os.path.expanduser('~/.beet/centroids/centroids_latest.npz'),
         ]
-        _HUMAN_ARCHETYPES = [
-            "honestly idk maybe try restarting it lol",
-            "so I went ahead and just hacked together a quick script",
-            "tbh the whole thing is kinda janky but it works",
-            "yeah no that's totally wrong, here's what actually happened",
-            "I messed around with it for a bit and got something working",
-        ]
-        _AI_CENTROIDS = _EMBEDDER.encode(_AI_ARCHETYPES)
-        _HUMAN_CENTROIDS = _EMBEDDER.encode(_HUMAN_ARCHETYPES)
+
+        loaded = False
+        for cpath in centroid_paths:
+            if os.path.exists(cpath):
+                try:
+                    data = np.load(cpath)
+                    if 'ai_multi' in data and data['ai_multi'].shape[0] > 1:
+                        _AI_CENTROIDS = data['ai_multi']
+                        _HUMAN_CENTROIDS = data['human_multi']
+                    else:
+                        _AI_CENTROIDS = data['ai_centroid']
+                        _HUMAN_CENTROIDS = data['human_centroid']
+                    loaded = True
+                    break
+                except Exception:
+                    continue
+
+        if not loaded:
+            _AI_ARCHETYPES = [
+                "As an AI language model, I cannot provide personal opinions.",
+                "Here is a comprehensive breakdown of the key factors to consider.",
+                "To address this challenge, we must consider multiple perspectives.",
+                "This thorough analysis demonstrates the critical importance of the topic.",
+                "Furthermore, it is essential to note that this approach ensures alignment.",
+                "In conclusion, by leveraging these strategies we can achieve optimal results.",
+            ]
+            _HUMAN_ARCHETYPES = [
+                "honestly idk maybe try restarting it lol",
+                "so I went ahead and just hacked together a quick script",
+                "tbh the whole thing is kinda janky but it works",
+                "yeah no that's totally wrong, here's what actually happened",
+                "I messed around with it for a bit and got something working",
+            ]
+            _AI_CENTROIDS = _EMBEDDER.encode(_AI_ARCHETYPES)
+            _HUMAN_CENTROIDS = _EMBEDDER.encode(_HUMAN_ARCHETYPES)
     return _EMBEDDER, _AI_CENTROIDS, _HUMAN_CENTROIDS
 
 # ── transformers: local perplexity scoring ──────────────────────────────────
