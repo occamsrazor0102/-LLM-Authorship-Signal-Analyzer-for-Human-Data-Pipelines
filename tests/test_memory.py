@@ -1,0 +1,366 @@
+"""Tests for BEET Historical Memory Store."""
+
+import sys
+import os
+import json
+import tempfile
+import shutil
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from llm_detector.memory import MemoryStore
+
+PASSED = 0
+FAILED = 0
+
+
+def check(label, condition, detail=""):
+    global PASSED, FAILED
+    if condition:
+        PASSED += 1
+        print(f"  [PASS] {label}")
+    else:
+        FAILED += 1
+        print(f"  [FAIL] {label}  -- {detail}")
+
+
+def _make_result(task_id, attempter, occupation, determination,
+                 confidence=0.8, **kwargs):
+    """Build a minimal pipeline result dict."""
+    r = {
+        'task_id': task_id,
+        'attempter': attempter,
+        'occupation': occupation,
+        'determination': determination,
+        'confidence': confidence,
+        'reason': 'test',
+        'word_count': 100,
+        'pipeline_version': 'v0.66',
+        'prompt_signature_composite': 0.5,
+        'prompt_signature_cfd': 0.3,
+        'prompt_signature_mfsr': 0.2,
+        'prompt_signature_must_rate': 0.1,
+        'instruction_density_idi': 5.0,
+        'voice_dissonance_spec_score': 3.0,
+        'voice_dissonance_voice_score': 0.5,
+        'voice_dissonance_vsd': 8.0,
+        'self_similarity_nssi_score': 0.3,
+        'self_similarity_comp_ratio': 0.4,
+        'self_similarity_hapax_ratio': 0.5,
+        'self_similarity_sent_length_cv': 0.3,
+        'window_max_score': 0.2,
+        'window_mean_score': 0.1,
+        'stylo_fw_ratio': 0.3,
+        'stylo_ttr': 0.5,
+        'stylo_sent_dispersion': 0.3,
+        'channel_details': {'channels': {}},
+    }
+    r.update(kwargs)
+    return r
+
+
+def _make_store():
+    """Create a temporary MemoryStore."""
+    tmpdir = tempfile.mkdtemp()
+    store_dir = os.path.join(tmpdir, '.beet')
+    return MemoryStore(store_dir), tmpdir
+
+
+def test_init_creates_directory():
+    print("\n-- INIT: creates directory --")
+    store, tmpdir = _make_store()
+    try:
+        check("store_dir exists", store.store_dir.exists())
+        check("config.json exists", store.config_path.exists())
+        check("calibration_history exists",
+              (store.store_dir / 'calibration_history').exists())
+        config = json.loads(store.config_path.read_text())
+        check("config has version", 'version' in config)
+        check("config total_submissions == 0", config['total_submissions'] == 0)
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+def test_record_batch_writes_submissions():
+    print("\n-- RECORD BATCH: submissions --")
+    store, tmpdir = _make_store()
+    try:
+        results = [
+            _make_result('t1', 'alice', 'analyst', 'RED'),
+            _make_result('t2', 'bob', 'analyst', 'GREEN'),
+        ]
+        text_map = {
+            't1': 'You must include all required fields in the output.',
+            't2': 'The quarterly report shows strong growth metrics.',
+        }
+        n = store.record_batch(results, text_map, batch_id='test_batch_1')
+        check("2 submissions written", n == 2, f"got {n}")
+        check("submissions.jsonl exists", store.submissions_path.exists())
+
+        records = []
+        with open(store.submissions_path) as f:
+            for line in f:
+                records.append(json.loads(line.strip()))
+        check("2 records in file", len(records) == 2, f"got {len(records)}")
+        check("task_id preserved", records[0]['task_id'] == 't1')
+        check("batch_id set", records[0]['batch_id'] == 'test_batch_1')
+        check("has timestamp", 'timestamp' in records[0])
+        check("has length_bin", 'length_bin' in records[0])
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+def test_record_batch_writes_fingerprints():
+    print("\n-- RECORD BATCH: fingerprints --")
+    store, tmpdir = _make_store()
+    try:
+        results = [_make_result('t1', 'alice', 'analyst', 'RED')]
+        text_map = {'t1': 'Some text for fingerprinting purposes here.'}
+        store.record_batch(results, text_map, batch_id='b1')
+
+        check("fingerprints.jsonl exists", store.fingerprints_path.exists())
+        with open(store.fingerprints_path) as f:
+            fp = json.loads(f.readline().strip())
+        check("has minhash_128", 'minhash_128' in fp)
+        check("minhash length 128", len(fp['minhash_128']) == 128,
+              f"got {len(fp.get('minhash_128', []))}")
+        check("has structural_vec", 'structural_vec' in fp)
+        check("has task_id", fp['task_id'] == 't1')
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+def test_attempter_profiles_updated():
+    print("\n-- ATTEMPTER PROFILES --")
+    store, tmpdir = _make_store()
+    try:
+        results = [
+            _make_result('t1', 'alice', 'analyst', 'RED'),
+            _make_result('t2', 'alice', 'analyst', 'GREEN'),
+            _make_result('t3', 'alice', 'analyst', 'AMBER'),
+        ]
+        text_map = {
+            't1': 'text one', 't2': 'text two', 't3': 'text three',
+        }
+        store.record_batch(results, text_map)
+
+        profiles = store._load_attempter_profiles()
+        check("alice profile exists", 'alice' in profiles)
+        p = profiles['alice']
+        check("total_submissions == 3", p['total_submissions'] == 3,
+              f"got {p['total_submissions']}")
+        check("flag_rate == 0.667", abs(p['flag_rate'] - 0.667) < 0.01,
+              f"got {p['flag_rate']}")
+        check("risk_tier HIGH (flag_rate > 0.30)", p['risk_tier'] == 'HIGH',
+              f"got {p['risk_tier']}")
+        check("has first_seen", 'first_seen' in p)
+        check("has last_seen", 'last_seen' in p)
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+def test_attempter_history_query():
+    print("\n-- ATTEMPTER HISTORY QUERY --")
+    store, tmpdir = _make_store()
+    try:
+        results = [
+            _make_result('t1', 'alice', 'analyst', 'RED'),
+            _make_result('t2', 'alice', 'analyst', 'GREEN'),
+        ]
+        text_map = {'t1': 'text one', 't2': 'text two'}
+        store.record_batch(results, text_map)
+
+        history = store.get_attempter_history('alice')
+        check("profile present", history['profile'] is not None)
+        check("submissions count == 2", len(history['submissions']) == 2,
+              f"got {len(history['submissions'])}")
+        check("confirmations empty initially", len(history['confirmations']) == 0)
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+def test_risk_report_ranking():
+    print("\n-- RISK REPORT RANKING --")
+    store, tmpdir = _make_store()
+    try:
+        # Batch 1: alice = 100% flag rate, bob = 0%
+        results = [
+            _make_result('t1', 'alice', 'analyst', 'RED'),
+            _make_result('t2', 'alice', 'analyst', 'RED'),
+            _make_result('t3', 'bob', 'analyst', 'GREEN'),
+            _make_result('t4', 'bob', 'analyst', 'GREEN'),
+        ]
+        text_map = {f't{i}': f'text {i}' for i in range(1, 5)}
+        store.record_batch(results, text_map)
+
+        report = store.get_attempter_risk_report(min_submissions=2)
+        check("2 attempters in report", len(report) == 2, f"got {len(report)}")
+        check("alice first (higher risk)", report[0]['attempter'] == 'alice',
+              f"got {report[0]['attempter']}")
+        check("alice tier HIGH", report[0]['risk_tier'] == 'HIGH',
+              f"got {report[0]['risk_tier']}")
+        check("bob tier NORMAL", report[1]['risk_tier'] == 'NORMAL',
+              f"got {report[1]['risk_tier']}")
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+def test_record_confirmation():
+    print("\n-- RECORD CONFIRMATION --")
+    store, tmpdir = _make_store()
+    try:
+        results = [_make_result('t1', 'alice', 'analyst', 'AMBER')]
+        text_map = {'t1': 'some text'}
+        store.record_batch(results, text_map)
+
+        store.record_confirmation('t1', 'ai', verified_by='reviewer_A',
+                                  notes='Clear GPT pattern')
+
+        check("confirmed.jsonl exists", store.confirmed_path.exists())
+        with open(store.confirmed_path) as f:
+            conf = json.loads(f.readline().strip())
+        check("ground_truth == ai", conf['ground_truth'] == 'ai')
+        check("verified_by set", conf['verified_by'] == 'reviewer_A')
+        check("has notes", conf['notes'] == 'Clear GPT pattern')
+        check("attempter captured", conf['attempter'] == 'alice')
+
+        # Check attempter profile updated
+        profiles = store._load_attempter_profiles()
+        check("confirmed_ai incremented", profiles['alice']['confirmed_ai'] == 1,
+              f"got {profiles['alice'].get('confirmed_ai')}")
+
+        # Config updated
+        config = json.loads(store.config_path.read_text())
+        check("total_confirmed == 1", config['total_confirmed'] == 1)
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+def test_cross_batch_similarity():
+    print("\n-- CROSS-BATCH SIMILARITY --")
+    store, tmpdir = _make_store()
+    try:
+        identical = "This is the exact same text used in both batches for testing."
+
+        # Batch 1
+        results1 = [_make_result('t1', 'alice', 'analyst', 'RED')]
+        store.record_batch(results1, {'t1': identical}, batch_id='batch_1')
+
+        # Batch 2 — same text, different attempter
+        results2 = [_make_result('t2', 'bob', 'analyst', 'GREEN')]
+        flags = store.cross_batch_similarity(results2, {'t2': identical})
+
+        check("cross-batch match found", len(flags) >= 1, f"got {len(flags)}")
+        if flags:
+            check("current_id == t2", flags[0]['current_id'] == 't2')
+            check("historical_id == t1", flags[0]['historical_id'] == 't1')
+            check("minhash_similarity == 1.0", flags[0]['minhash_similarity'] == 1.0,
+                  f"got {flags[0]['minhash_similarity']}")
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+def test_pre_batch_context():
+    print("\n-- PRE-BATCH CONTEXT --")
+    store, tmpdir = _make_store()
+    try:
+        # Record enough data for occupation baselines
+        results = [
+            _make_result(f't{i}', f'worker_{i}', 'pharmacist', 'GREEN',
+                         prompt_signature_cfd=0.2 + i * 0.01,
+                         instruction_density_idi=3.0 + i * 0.5)
+            for i in range(6)
+        ]
+        results[0]['determination'] = 'RED'
+        results[0]['attempter'] = 'flagged_worker'
+        text_map = {f't{i}': f'text {i}' for i in range(6)}
+        store.record_batch(results, text_map)
+
+        ctx = store.pre_batch_context(
+            attempter='flagged_worker', occupation='pharmacist')
+        check("has attempter_risk_tier", 'attempter_risk_tier' in ctx,
+              f"keys: {list(ctx.keys())}")
+        check("has occupation_n", 'occupation_n' in ctx,
+              f"keys: {list(ctx.keys())}")
+        if 'occupation_n' in ctx:
+            check("occupation_n >= 5", ctx['occupation_n'] >= 5,
+                  f"got {ctx['occupation_n']}")
+            check("has occupation_median_cfd", 'occupation_median_cfd' in ctx)
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+def test_config_stats_updated():
+    print("\n-- CONFIG STATS --")
+    store, tmpdir = _make_store()
+    try:
+        results = [
+            _make_result('t1', 'alice', 'analyst', 'RED'),
+            _make_result('t2', 'bob', 'writer', 'GREEN'),
+        ]
+        text_map = {'t1': 'text one', 't2': 'text two'}
+        store.record_batch(results, text_map)
+
+        config = json.loads(store.config_path.read_text())
+        check("total_submissions == 2", config['total_submissions'] == 2,
+              f"got {config['total_submissions']}")
+        check("total_batches == 1", config['total_batches'] == 1,
+              f"got {config['total_batches']}")
+        check("total_attempters == 2", config['total_attempters'] == 2,
+              f"got {config['total_attempters']}")
+        check("occupations include analyst", 'analyst' in config['occupations'])
+        check("occupations include writer", 'writer' in config['occupations'])
+
+        # Second batch
+        results2 = [_make_result('t3', 'carol', 'nurse', 'YELLOW')]
+        store.record_batch(results2, {'t3': 'text three'})
+        config2 = json.loads(store.config_path.read_text())
+        check("total_submissions == 3", config2['total_submissions'] == 3)
+        check("total_batches == 2", config2['total_batches'] == 2)
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+def test_empty_store_queries():
+    print("\n-- EMPTY STORE QUERIES --")
+    store, tmpdir = _make_store()
+    try:
+        history = store.get_attempter_history('nonexistent')
+        check("no profile for nonexistent", history['profile'] is None)
+        check("no submissions", len(history['submissions']) == 0)
+
+        report = store.get_attempter_risk_report()
+        check("empty risk report", len(report) == 0)
+
+        baselines = store.get_occupation_baselines('unknown_occ')
+        check("empty baselines", len(baselines) == 0)
+
+        flags = store.cross_batch_similarity([], {})
+        check("empty cross-batch", len(flags) == 0)
+
+        ctx = store.pre_batch_context(attempter='nobody', occupation='nothing')
+        check("empty context", ctx == {})
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+if __name__ == '__main__':
+    print("=" * 70)
+    print("  BEET MEMORY STORE TESTS")
+    print("=" * 70)
+
+    test_init_creates_directory()
+    test_record_batch_writes_submissions()
+    test_record_batch_writes_fingerprints()
+    test_attempter_profiles_updated()
+    test_attempter_history_query()
+    test_risk_report_ranking()
+    test_record_confirmation()
+    test_cross_batch_similarity()
+    test_pre_batch_context()
+    test_config_stats_updated()
+    test_empty_store_queries()
+
+    print(f"\n{'=' * 70}")
+    print(f"  RESULTS: {PASSED} passed, {FAILED} failed")
+    print(f"{'=' * 70}")
+    sys.exit(1 if FAILED else 0)

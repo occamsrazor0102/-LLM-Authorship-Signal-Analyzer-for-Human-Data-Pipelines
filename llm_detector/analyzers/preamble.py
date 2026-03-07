@@ -30,15 +30,24 @@ PREAMBLE_PATTERNS = [
 
 
 def run_preamble(text):
-    """Detect LLM preamble artifacts. Returns (score, severity, hits)."""
+    """Detect LLM preamble artifacts. Returns (score, severity, hits, spans)."""
     first_500 = text[:500]
     hits = []
+    spans = []
     severity = 'NONE'
 
     for pat, name, sev in PREAMBLE_PATTERNS:
         search_text = first_500 if name in ('assistant_ack', 'artifact_delivery', 'first_person_creation', 'cot_leakage') else text
-        if re.search(pat, search_text):
+        match = re.search(pat, search_text)
+        if match:
             hits.append((name, sev))
+            spans.append({
+                'start': match.start(),
+                'end': match.end(),
+                'text': match.group()[:80],
+                'pattern': name,
+                'severity': sev,
+            })
             if sev == 'CRITICAL':
                 severity = 'CRITICAL'
             elif sev == 'HIGH' and severity not in ('CRITICAL',):
@@ -47,4 +56,15 @@ def run_preamble(text):
                 severity = 'MEDIUM'
 
     score = {'CRITICAL': 0.99, 'HIGH': 0.75, 'MEDIUM': 0.50, 'NONE': 0.0}[severity]
-    return score, severity, hits
+    return score, severity, hits, spans
+
+
+def run_preamble_spans(text):
+    """Return character-level spans for preamble pattern hits.
+
+    Thin wrapper around run_preamble() for backward compatibility.
+    Returns list of (start_char, end_char, matched_text, pattern_name, severity).
+    """
+    _, _, _, spans = run_preamble(text)
+    return [(s['start'], s['end'], s['text'], s['pattern'], s['severity'])
+            for s in spans]

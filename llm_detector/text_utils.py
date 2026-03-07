@@ -25,3 +25,23 @@ def get_sentences(text):
     else:
         sents = re.split(r'(?<=[.!?])\s+', text)
         return [s for s in sents if s.strip()]
+
+
+def get_sentence_spans(text):
+    """Segment text into sentences with character offsets.
+
+    Returns list of (sentence_text, start_char, end_char) tuples.
+    """
+    if HAS_SPACY:
+        nlp = get_nlp()
+        doc = nlp(text)
+        return [(s.text, s.start_char, s.end_char) for s in doc.sents]
+    else:
+        spans = []
+        for m in re.finditer(r'[^.!?]*[.!?]+\s*|[^.!?]+$', text):
+            t = m.group().strip()
+            if t:
+                spans.append((t, m.start(), m.start() + len(t)))
+        if not spans and text.strip():
+            spans.append((text.strip(), 0, len(text.strip())))
+        return spans

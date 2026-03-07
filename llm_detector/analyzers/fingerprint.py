@@ -27,3 +27,14 @@ def run_fingerprint(text):
     rate = hits / max(word_count / 1000, 1)
     score = min(rate / 5.0, 1.0)
     return score, hits, rate
+
+
+def run_fingerprint_spans(text):
+    """Return character-level spans for fingerprint word hits.
+
+    Returns list of (start_char, end_char, matched_text, 'fingerprint', word).
+    """
+    spans = []
+    for m in _FINGERPRINT_RE.finditer(text):
+        spans.append((m.start(), m.end(), m.group(), 'fingerprint', m.group().lower()))
+    return spans

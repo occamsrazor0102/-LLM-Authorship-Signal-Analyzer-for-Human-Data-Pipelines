@@ -50,11 +50,11 @@ def test_pdf_loading():
         check("No pypdf: returns empty list", tasks == [])
 
 
-def test_pipeline_v061():
-    print("\n-- FULL PIPELINE v0.65 INTEGRATION --")
+def test_pipeline_v066():
+    print("\n-- FULL PIPELINE v0.66 INTEGRATION --")
 
     text = CLINICAL_TEXT * 3
-    r = analyze_prompt(text, task_id='v061_test', run_l3=True, mode='auto')
+    r = analyze_prompt(text, task_id='v066_test', run_l3=True, mode='auto')
 
     # v0.61 fields present (using new descriptive names)
     check("semantic_resonance_ai_score in result", 'semantic_resonance_ai_score' in r)
@@ -67,7 +67,7 @@ def test_pipeline_v061():
 
     # Audit trail
     at = r.get('audit_trail', {})
-    check("audit_trail version is v0.65", at.get('pipeline_version') == 'v0.65',
+    check("audit_trail version is v0.66", at.get('pipeline_version') == 'v0.66',
           f"got {at.get('pipeline_version')}")
     check("audit_trail has semantic_available", 'semantic_available' in at)
     check("audit_trail has perplexity_available", 'perplexity_available' in at)
@@ -134,7 +134,7 @@ if __name__ == '__main__':
     print("=" * 70)
 
     test_pdf_loading()
-    test_pipeline_v061()
+    test_pipeline_v066()
     test_pipeline_with_local_proxy()
 
     print(f"\n{'=' * 70}")

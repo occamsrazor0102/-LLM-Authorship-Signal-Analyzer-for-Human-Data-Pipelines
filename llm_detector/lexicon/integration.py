@@ -94,6 +94,13 @@ def run_prompt_signature_enhanced(text: str, base_result: Optional[dict] = None)
 
     enhanced_composite = min(legacy_composite + pack_boost, 1.0)
 
+    # Collect spans from all packs with hits
+    all_pack_spans = []
+    for s in all_pack_scores.values():
+        if s.raw_hits > 0:
+            all_pack_spans.extend(s.spans)
+    all_pack_spans.sort(key=lambda x: x['start'])
+
     result = dict(base_result)
     result.update({
         'composite': enhanced_composite,
@@ -112,6 +119,7 @@ def run_prompt_signature_enhanced(text: str, base_result: Optional[dict] = None)
             for name, s in all_pack_scores.items()
             if s.raw_hits > 0
         },
+        'pack_spans': all_pack_spans,
     })
 
     return result
@@ -157,6 +165,13 @@ def run_voice_dissonance_enhanced(text: str, base_result: Optional[dict] = None)
         and n_words >= 150
     )
 
+    # Collect spans from all packs with hits
+    all_pack_spans = []
+    for s in all_pack_scores.values():
+        if s.raw_hits > 0:
+            all_pack_spans.extend(s.spans)
+    all_pack_spans.sort(key=lambda x: x['start'])
+
     result = dict(base_result)
     result.update({
         'spec_score': round(enhanced_spec, 2),
@@ -177,6 +192,7 @@ def run_voice_dissonance_enhanced(text: str, base_result: Optional[dict] = None)
             for name, s in all_pack_scores.items()
             if s.raw_hits > 0
         },
+        'pack_spans': all_pack_spans,
     })
 
     return result
@@ -216,6 +232,13 @@ def run_instruction_density_enhanced(text: str, base_result: Optional[dict] = No
     legacy_idi = base_result.get('idi', 0.0)
     enhanced_idi = legacy_idi + pack_idi_boost
 
+    # Collect spans from all packs with hits
+    all_pack_spans = []
+    for s in idi_scores.values():
+        if s.raw_hits > 0:
+            all_pack_spans.extend(s.spans)
+    all_pack_spans.sort(key=lambda x: x['start'])
+
     result = dict(base_result)
     result.update({
         'idi': round(enhanced_idi, 1),
@@ -233,6 +256,7 @@ def run_instruction_density_enhanced(text: str, base_result: Optional[dict] = No
             for name, s in idi_scores.items()
             if s.raw_hits > 0
         },
+        'pack_spans': all_pack_spans,
     })
 
     return result

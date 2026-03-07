@@ -655,6 +655,7 @@ class PackScore:
     raw_score: float = 0.0
     capped_score: float = 0.0
     matches: List[str] = field(default_factory=list)
+    spans: List[dict] = field(default_factory=list)
 
 
 def score_pack(text: str, pack_name: str, n_sentences: int = 1) -> PackScore:
@@ -666,7 +667,8 @@ def score_pack(text: str, pack_name: str, n_sentences: int = 1) -> PackScore:
         n_sentences: Sentence count for density normalization.
 
     Returns:
-        PackScore with hits, weighted score (density-normalized), and capped score.
+        PackScore with hits, weighted score (density-normalized), capped score,
+        and character-level spans for each match.
     """
     pack = PACK_REGISTRY[pack_name]
     compiled = _COMPILED_PACKS[pack_name]
@@ -674,25 +676,49 @@ def score_pack(text: str, pack_name: str, n_sentences: int = 1) -> PackScore:
 
     result = PackScore(pack_name=pack_name, category=pack.category)
 
-    # Pattern matching
+    # Pattern matching (finditer for span capture)
     for compiled_re, weight in compiled:
-        found = compiled_re.findall(text)
-        if found:
-            result.raw_hits += len(found)
-            result.weighted_hits += len(found) * weight
-            result.matches.extend(found[:3])  # Keep first 3 for diagnostics
+        for m in compiled_re.finditer(text):
+            result.raw_hits += 1
+            result.weighted_hits += weight
+            if len(result.matches) < 3:
+                result.matches.append(m.group())
+            result.spans.append({
+                'start': m.start(),
+                'end': m.end(),
+                'text': m.group()[:80],
+                'pack': pack_name,
+                'weight': weight,
+            })
 
-    # Keyword matching (fast path, no weight — counted separately)
+    # Keyword matching (finditer for span capture, no weight — counted separately)
     kw_re = _KEYWORD_RES.get(pack_name)
     if kw_re:
-        result.keyword_hits = len(kw_re.findall(text))
+        for m in kw_re.finditer(text):
+            result.keyword_hits += 1
+            result.spans.append({
+                'start': m.start(),
+                'end': m.end(),
+                'text': m.group(),
+                'pack': pack_name,
+                'weight': 0.0,
+                'type': 'keyword',
+            })
 
-    # Uppercase keyword matching (case-sensitive)
+    # Uppercase keyword matching (case-sensitive, finditer for span capture)
     uc_re = _UPPERCASE_RES.get(pack_name)
     if uc_re:
-        result.uppercase_hits = len(uc_re.findall(text))
-        # Uppercase normative forms get bonus weight
-        result.weighted_hits += result.uppercase_hits * 2.0
+        for m in uc_re.finditer(text):
+            result.uppercase_hits += 1
+            result.weighted_hits += 2.0
+            result.spans.append({
+                'start': m.start(),
+                'end': m.end(),
+                'text': m.group(),
+                'pack': pack_name,
+                'weight': 2.0,
+                'type': 'uppercase',
+            })
 
     # Density-normalized score: weighted_hits per sentence × family_weight
     density = result.weighted_hits / n_sents
@@ -716,6 +742,45 @@ def score_packs(text: str, pack_names: Optional[List[str]] = None,
     """
     names = pack_names or list(PACK_REGISTRY.keys())
     return {name: score_pack(text, name, n_sentences) for name in names}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SPAN-LEVEL EXPLAINABILITY ("X-RAY" VIEW)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def score_pack_spans(text: str, pack_name: str) -> List[Tuple[int, int, str, str, float]]:
+    """Return character-level spans for all regex/keyword hits in a pack.
+
+    Delegates to score_pack() and extracts span data from PackScore.spans.
+
+    Returns:
+        List of (start_char, end_char, matched_text, pack_name, weight) tuples,
+        sorted by start_char.
+    """
+    ps = score_pack(text, pack_name)
+    spans = [(s['start'], s['end'], s['text'], s['pack'], s['weight'])
+             for s in ps.spans]
+    spans.sort(key=lambda s: s[0])
+    return spans
+
+
+def score_all_pack_spans(text: str, pack_names: Optional[List[str]] = None
+                         ) -> List[Tuple[int, int, str, str, float]]:
+    """Return merged character-level spans across multiple packs.
+
+    Args:
+        text: The original (normalized) text.
+        pack_names: Pack names to scan. If None, scans all registered packs.
+
+    Returns:
+        Sorted list of (start_char, end_char, matched_text, pack_name, weight).
+    """
+    names = pack_names or list(PACK_REGISTRY.keys())
+    all_spans = []
+    for name in names:
+        all_spans.extend(score_pack_spans(text, name))
+    all_spans.sort(key=lambda s: s[0])
+    return all_spans
 
 
 def get_packs_for_layer(target_layer: str) -> List[str]:
