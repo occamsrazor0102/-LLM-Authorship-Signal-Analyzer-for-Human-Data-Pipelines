@@ -388,13 +388,8 @@ class DetectorGUI:
             mode=self.mode_var.get(),
             cal_table=self.cal_table,
             disabled_channels=self._get_disabled_channels(),
+            memory_store=self.memory_store,
         )
-
-        # Shadow model check
-        if self.memory_store:
-            disagreement = self.memory_store.check_shadow_disagreement(result)
-            result['shadow_disagreement'] = disagreement
-            result['shadow_ai_prob'] = (disagreement or {}).get('shadow_ai_prob')
 
         self.results = [result]
         self.text_map = {}
@@ -457,6 +452,7 @@ class DetectorGUI:
                 mode=self.mode_var.get(),
                 cal_table=self.cal_table,
                 disabled_channels=disabled,
+                memory_store=self.memory_store,
             )
             results.append(r)
             tid = task.get('task_id', f'_row{i}')
@@ -468,15 +464,9 @@ class DetectorGUI:
             else:
                 self._append(f"[{i+1}/{n}] {self._format_result_brief(r)}\n")
 
-        # Shadow model checks
+        # Shadow model summary (disagreements set by pipeline via memory_store)
         if self.memory_store:
-            shadow_count = 0
-            for r in results:
-                disagreement = self.memory_store.check_shadow_disagreement(r)
-                r['shadow_disagreement'] = disagreement
-                r['shadow_ai_prob'] = (disagreement or {}).get('shadow_ai_prob')
-                if disagreement:
-                    shadow_count += 1
+            shadow_count = sum(1 for r in results if r.get('shadow_disagreement'))
             if shadow_count:
                 self._append(f"\nSHADOW MODEL: {shadow_count} disagreements\n")
 
@@ -655,12 +645,21 @@ class DetectorGUI:
             lines.append("     -- Channels --")
             for ch_name, ch_info in cd['channels'].items():
                 sev = ch_info.get('severity', 'GREEN')
-                if sev != 'GREEN':
+                disabled = ch_info.get('disabled', False)
+                data_ok = ch_info.get('data_sufficient', True)
+                if sev != 'GREEN' or disabled or not data_ok:
                     eligible = 'Y' if ch_info.get('mode_eligible') else 'o'
+                    tags = []
+                    if disabled:
+                        tags.append('[disabled]')
+                    if not data_ok:
+                        tags.append('[insufficient data]')
+                    tag_str = ' '.join(tags)
                     lines.append(
                         f"     {eligible} {ch_name:18s} {sev:6s} "
                         f"score={ch_info.get('score', 0):.2f}  "
-                        f"{ch_info.get('explanation', '')[:60]}")
+                        f"{ch_info.get('explanation', '')[:50]}"
+                        f"{'  ' + tag_str if tag_str else ''}")
 
         if cd.get('short_text_adjustment'):
             lines.append(
