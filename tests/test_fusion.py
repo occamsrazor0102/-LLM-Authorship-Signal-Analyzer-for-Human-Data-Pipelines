@@ -159,6 +159,75 @@ def test_channel_ablation():
     check("Disabled channel marked in details",
           cd2['channels']['prompt_structure'].get('disabled') is True)
 
+    # Disable all channels — should produce GREEN or REVIEW
+    det3, _, _, cd3 = determine(0, 'NONE', prompt_sig, voice_dis, instr_density, 300,
+                                 mode='task_prompt',
+                                 disabled_channels=['prompt_structure', 'stylometric',
+                                                    'continuation', 'windowed'])
+    check("All disabled -> GREEN/REVIEW", det3 in ('GREEN', 'REVIEW'), f"got {det3}")
+    check("disabled_channels listed", len(cd3.get('disabled_channels', [])) == 4)
+
+
+def test_short_text_adjustment():
+    print("\n-- SHORT-TEXT CHANNEL WEIGHT ADJUSTMENT --")
+
+    l25_low = {'composite': 0.05, 'framing_completeness': 0, 'cfd': 0.01,
+               'mfsr': 0, 'must_rate': 0, 'distinct_frames': 0,
+               'conditional_density': 0, 'meta_design_hits': 0,
+               'contractions': 0, 'numbered_criteria': 0}
+    l26_none = {'voice_gated': False, 'vsd': 0, 'voice_score': 0,
+                'spec_score': 0, 'contractions': 5, 'hedges': 3,
+                'casual_markers': 3, 'misspellings': 0, 'camel_cols': 0,
+                'calcs': 0}
+    l27_none = {'idi': 2.0, 'imperatives': 0, 'conditionals': 0,
+                'binary_specs': 0, 'missing_refs': 0, 'flag_count': 0}
+
+    # Normal text (300 words): no short-text adjustment
+    _, _, _, cd_normal = determine(0, 'NONE', l25_low, l26_none, l27_none, 300,
+                                    mode='generic_aigt')
+    check("Normal text: no short_text_adjustment",
+          cd_normal.get('short_text_adjustment') == False)
+
+    # Short text (50 words): short_text_adjustment should activate
+    _, _, _, cd_short = determine(0, 'NONE', l25_low, l26_none, l27_none, 50,
+                                   mode='generic_aigt')
+    check("Short text: short_text_adjustment active",
+          cd_short.get('short_text_adjustment') == True or
+          cd_short.get('active_channels', 4) <= 2)
+    check("active_channels tracked", 'active_channels' in cd_short)
+
+
+def test_attack_type_derivation():
+    print("\n-- ATTACK TYPE DERIVATION --")
+    from llm_detector.baselines import derive_attack_type
+
+    # No attack
+    r_none = {'norm_homoglyphs': 0, 'norm_invisible_chars': 0, 'norm_obfuscation_delta': 0}
+    check("No attack -> 'none'", derive_attack_type(r_none) == 'none')
+
+    # Homoglyph only
+    r_homo = {'norm_homoglyphs': 5, 'norm_invisible_chars': 0, 'norm_obfuscation_delta': 0.03}
+    check("Homoglyph -> 'homoglyph'", derive_attack_type(r_homo) == 'homoglyph')
+
+    # Zero-width only
+    r_zw = {'norm_homoglyphs': 0, 'norm_invisible_chars': 10, 'norm_obfuscation_delta': 0.05}
+    check("Zero-width -> 'zero_width'", derive_attack_type(r_zw) == 'zero_width')
+
+    # Combined
+    r_combined = {'norm_homoglyphs': 3, 'norm_invisible_chars': 5, 'norm_obfuscation_delta': 0.08}
+    check("Combined -> 'combined'", derive_attack_type(r_combined) == 'combined')
+
+    # Encoding (delta only, no specific type)
+    r_enc = {'norm_homoglyphs': 0, 'norm_invisible_chars': 0, 'norm_obfuscation_delta': 0.04}
+    check("Encoding -> 'encoding'", derive_attack_type(r_enc) == 'encoding')
+
+    # Below encoding threshold
+    r_low = {'norm_homoglyphs': 0, 'norm_invisible_chars': 0, 'norm_obfuscation_delta': 0.01}
+    check("Low delta -> 'none'", derive_attack_type(r_low) == 'none')
+
+    # Missing fields (graceful)
+    check("Missing fields -> 'none'", derive_attack_type({}) == 'none')
+
 
 if __name__ == '__main__':
     print("=" * 70)
@@ -169,6 +238,8 @@ if __name__ == '__main__':
     test_determine_with_new_signals()
     test_short_text_no_false_convergence()
     test_channel_ablation()
+    test_short_text_adjustment()
+    test_attack_type_derivation()
 
     print(f"\n{'=' * 70}")
     print(f"RESULTS: {PASSED} passed, {FAILED} failed")

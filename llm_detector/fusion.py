@@ -51,21 +51,23 @@ def determine(preamble_score, preamble_severity, prompt_sig, voice_dis,
     ch_window = score_windowed(window_result=kwargs.get('window_result'))
 
     channels = [ch_prompt, ch_style, ch_cont, ch_window]
+
+    _disabled = set(disabled_channels or [])
+
     channel_details = {
         'mode': mode,
+        'disabled_channels': sorted(_disabled) if _disabled else [],
         'channels': {ch.channel: {
             'score': ch.score, 'severity': ch.severity,
-            'explanation': ch.explanation, 'mode_eligible': mode in ch.mode_eligibility,
+            'explanation': f'{ch.channel} disabled (ablation)' if ch.channel in _disabled else ch.explanation,
+            'mode_eligible': mode in ch.mode_eligibility,
             'data_sufficient': ch.data_sufficient,
+            'disabled': ch.channel in _disabled,
         } for ch in channels},
     }
 
     # Channel ablation: remove disabled channels from fusion
-    _disabled = set(disabled_channels or [])
     if _disabled:
-        for ch_name in _disabled:
-            if ch_name in channel_details['channels']:
-                channel_details['channels'][ch_name]['disabled'] = True
         channels = [ch for ch in channels if ch.channel not in _disabled]
 
     # Fairness severity cap
@@ -119,9 +121,23 @@ def determine(preamble_score, preamble_severity, prompt_sig, voice_dis,
     combined_reason = ' + '.join(top_explanations) if top_explanations else 'No significant signals'
     top_score = max((ch.score for ch in all_active), default=0.0)
 
+    # Short-text active channel accounting
+    n_active_channels = sum(1 for ch in channels if ch.score > 0 or ch.severity != 'GREEN')
+    short_text = word_count > 0 and word_count < 100
+    short_text_penalty = 0.15 if (short_text and n_active_channels <= 2) else 0.0
+    channel_details['active_channels'] = n_active_channels
+    channel_details['short_text_adjustment'] = bool(short_text_penalty)
+
     # RED: strong primary + supporting, or two AMBER+ channels
     if n_primary_red >= 1 and n_yellow_plus >= 2:
         det, reason, conf = _apply_cap('RED', combined_reason, top_score)
+        return det, reason, conf, channel_details
+
+    # Short-text relaxation: 1 RED + 1 yellow is enough when few channels can run
+    if short_text_penalty and n_primary_red >= 1 and n_yellow_plus >= 1:
+        det, reason, conf = _apply_cap(
+            'RED', f"{combined_reason} [short-text relaxed]",
+            min(top_score - short_text_penalty, 0.75))
         return det, reason, conf, channel_details
 
     if n_primary_amber >= 2:
