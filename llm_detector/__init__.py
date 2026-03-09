@@ -1,5 +1,5 @@
 """
-LLM-Generated Task Prompt Detection Pipeline v0.61
+LLM-Generated Task Prompt Detection Pipeline v0.66
 ===================================================
 Multi-layer stylometric detection pipeline for identifying LLM-generated
 or LLM-assisted task prompts in human data collection workflows.
@@ -18,7 +18,7 @@ Package structure:
     gui.py         - Desktop GUI
 """
 
-__version__ = '0.61.0'
+__version__ = '0.66.0'
 
 # Core pipeline
 from llm_detector.pipeline import analyze_prompt
