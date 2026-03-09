@@ -527,16 +527,41 @@ class DetectorGUI:
                                  f"(MH={cf['minhash_similarity']:.2f})\n", 'DIM')
             self._memory_store.record_batch(results, text_map)
 
-        # Attempter profiling
+        # Yellow alerts
+        yellow = [r for r in results if r['determination'] == 'YELLOW']
+        if yellow:
+            self._append(f"\nYELLOW ({len(yellow)} minor signals):\n", 'YELLOW')
+            for r in sorted(yellow, key=lambda x: x.get('confidence', 0), reverse=True)[:10]:
+                self._append(f"  {r.get('task_id', '')[:12]:12s} {r.get('occupation', '')[:40]:40s} | "
+                             f"{r.get('reason', '')[:50]}\n", 'DIM')
+
+        # Attempter profiling & channel pattern summary
         if len(results) >= 5:
             try:
-                from llm_detector.reporting import profile_attempters, financial_impact
+                from llm_detector.reporting import (
+                    profile_attempters, channel_pattern_summary,
+                )
                 profiles = profile_attempters(results)
                 if profiles:
                     self._append(f"\nAttempter profiles: {len(profiles)} attempters\n", 'HEADER')
                     for p in profiles[:5]:
                         self._append(f"  {p['attempter'][:20]:20s} submissions={p['n_submissions']} "
                                      f"flag_rate={p['flag_rate']:.0f}%\n")
+            except Exception:
+                pass
+
+            try:
+                import io, sys
+                buf = io.StringIO()
+                old_stdout = sys.stdout
+                sys.stdout = buf
+                try:
+                    channel_pattern_summary(results)
+                finally:
+                    sys.stdout = old_stdout
+                summary_text = buf.getvalue()
+                if summary_text.strip():
+                    self._append(f"\n{summary_text}", 'DIM')
             except Exception:
                 pass
 
