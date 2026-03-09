@@ -52,6 +52,20 @@ class DetectorGUI:
         self.disable_continuation = tk.BooleanVar(value=False)
         self.disable_windowed = tk.BooleanVar(value=False)
 
+        # Similarity store & instructions
+        self.sim_store_var = tk.StringVar()
+        self.instructions_var = tk.StringVar()
+        self.cost_var = tk.StringVar(value='400')
+
+        # Memory management
+        self.confirm_task_var = tk.StringVar()
+        self.confirm_label_var = tk.StringVar(value='ai')
+        self.confirm_reviewer_var = tk.StringVar()
+        self.corpus_path_var = tk.StringVar()
+
+        # Batch state
+        self.sim_pairs = []
+
         self._build_layout()
 
     def _build_layout(self):
@@ -202,6 +216,8 @@ class DetectorGUI:
                    command=self._browse_cal).pack(side=tk.LEFT, padx=4)
         ttk.Button(cal_row, text='Load',
                    command=self._load_calibration).pack(side=tk.LEFT)
+        ttk.Button(cal_row, text='Build from JSONL',
+                   command=self._build_calibration).pack(side=tk.LEFT, padx=4)
 
         # Similarity
         sim_frame = ttk.LabelFrame(parent, text='Similarity Analysis',
@@ -214,6 +230,32 @@ class DetectorGUI:
         ttk.Label(sim_row, text='Threshold:').pack(side=tk.LEFT, padx=(16, 4))
         ttk.Entry(sim_row, textvariable=self.sim_threshold_var, width=6).pack(
             side=tk.LEFT)
+
+        sim_row2 = ttk.Frame(sim_frame)
+        sim_row2.pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(sim_row2, text='Similarity store (JSONL):').pack(
+            side=tk.LEFT)
+        ttk.Entry(sim_row2, textvariable=self.sim_store_var).pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=4)
+        ttk.Button(sim_row2, text='Browse',
+                   command=self._browse_sim_store).pack(side=tk.LEFT)
+
+        sim_row3 = ttk.Frame(sim_frame)
+        sim_row3.pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(sim_row3, text='Instructions file:').pack(side=tk.LEFT)
+        ttk.Entry(sim_row3, textvariable=self.instructions_var).pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=4)
+        ttk.Button(sim_row3, text='Browse',
+                   command=self._browse_instructions).pack(side=tk.LEFT)
+
+        # Financial
+        fin_frame = ttk.LabelFrame(parent, text='Financial Impact', padding=8)
+        fin_frame.pack(fill=tk.X, pady=(0, 8))
+        fin_row = ttk.Frame(fin_frame)
+        fin_row.pack(fill=tk.X)
+        ttk.Label(fin_row, text='Cost per prompt ($):').pack(side=tk.LEFT)
+        ttk.Entry(fin_row, textvariable=self.cost_var, width=8).pack(
+            side=tk.LEFT, padx=4)
 
         # Memory Store
         mem_frame = ttk.LabelFrame(parent, text='Memory Store (BEET)',
@@ -243,6 +285,8 @@ class DetectorGUI:
                    command=self._export_baselines).pack(side=tk.LEFT, padx=4)
         ttk.Button(actions, text='Refresh Reports',
                    command=self._refresh_reports).pack(side=tk.LEFT, padx=4)
+        ttk.Button(actions, text='Analyze Baselines',
+                   command=self._analyze_baselines_ui).pack(side=tk.LEFT, padx=4)
 
         # Attempter history row
         hist_row = ttk.Frame(parent)
@@ -253,6 +297,52 @@ class DetectorGUI:
             side=tk.LEFT, padx=4)
         ttk.Button(hist_row, text='Show',
                    command=self._show_attempter_history).pack(side=tk.LEFT)
+
+        # Memory management
+        mem_mgmt = ttk.LabelFrame(parent, text='Memory Management', padding=8)
+        mem_mgmt.pack(fill=tk.X, pady=(0, 8))
+
+        # Confirmation row
+        conf_row = ttk.Frame(mem_mgmt)
+        conf_row.pack(fill=tk.X, pady=2)
+        ttk.Label(conf_row, text='Task ID:').pack(side=tk.LEFT)
+        ttk.Entry(conf_row, textvariable=self.confirm_task_var, width=16).pack(
+            side=tk.LEFT, padx=4)
+        ttk.Label(conf_row, text='Label:').pack(side=tk.LEFT)
+        ttk.Combobox(conf_row, textvariable=self.confirm_label_var,
+                     values=['ai', 'human'], width=8,
+                     state='readonly').pack(side=tk.LEFT, padx=4)
+        ttk.Label(conf_row, text='Reviewer:').pack(side=tk.LEFT)
+        ttk.Entry(conf_row, textvariable=self.confirm_reviewer_var,
+                  width=12).pack(side=tk.LEFT, padx=4)
+        ttk.Button(conf_row, text='Confirm',
+                   command=self._record_confirmation).pack(side=tk.LEFT, padx=4)
+
+        # Summary + rebuild row
+        rebuild_row = ttk.Frame(mem_mgmt)
+        rebuild_row.pack(fill=tk.X, pady=2)
+        ttk.Button(rebuild_row, text='Memory Summary',
+                   command=self._show_memory_summary).pack(side=tk.LEFT, padx=4)
+        ttk.Button(rebuild_row, text='Rebuild Calibration',
+                   command=self._rebuild_calibration).pack(side=tk.LEFT, padx=4)
+        ttk.Button(rebuild_row, text='Rebuild Shadow',
+                   command=self._rebuild_shadow).pack(side=tk.LEFT, padx=4)
+        ttk.Button(rebuild_row, text='Rebuild All',
+                   command=self._rebuild_all).pack(side=tk.LEFT, padx=4)
+
+        # Corpus row (for centroids + lexicon)
+        corpus_row = ttk.Frame(mem_mgmt)
+        corpus_row.pack(fill=tk.X, pady=2)
+        ttk.Label(corpus_row, text='Labeled corpus (JSONL):').pack(
+            side=tk.LEFT)
+        ttk.Entry(corpus_row, textvariable=self.corpus_path_var).pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=4)
+        ttk.Button(corpus_row, text='Browse',
+                   command=self._browse_corpus).pack(side=tk.LEFT, padx=4)
+        ttk.Button(corpus_row, text='Rebuild Centroids',
+                   command=self._rebuild_centroids).pack(side=tk.LEFT, padx=4)
+        ttk.Button(corpus_row, text='Discover Lexicon',
+                   command=self._discover_lexicon).pack(side=tk.LEFT, padx=4)
 
         # Report output
         report_frame = ttk.Frame(parent)
@@ -283,6 +373,24 @@ class DetectorGUI:
         path = filedialog.askdirectory()
         if path:
             self.memory_dir_var.set(path)
+
+    def _browse_sim_store(self):
+        path = filedialog.askopenfilename(
+            filetypes=[('JSONL', '*.jsonl'), ('All', '*.*')])
+        if path:
+            self.sim_store_var.set(path)
+
+    def _browse_instructions(self):
+        path = filedialog.askopenfilename(
+            filetypes=[('Text', '*.txt *.md'), ('All', '*.*')])
+        if path:
+            self.instructions_var.set(path)
+
+    def _browse_corpus(self):
+        path = filedialog.askopenfilename(
+            filetypes=[('JSONL', '*.jsonl'), ('All', '*.*')])
+        if path:
+            self.corpus_path_var.set(path)
 
     def _clear_output(self):
         self.output.delete('1.0', tk.END)
@@ -348,6 +456,36 @@ class DetectorGUI:
             strata = len(self.cal_table.get('strata', {}))
             messagebox.showinfo('Calibration',
                                 f'Loaded: {n} records, {strata} strata')
+        except Exception as e:
+            messagebox.showerror('Calibration Error', str(e))
+
+    def _build_calibration(self):
+        jsonl_path = filedialog.askopenfilename(
+            title='Select labeled baseline JSONL',
+            filetypes=[('JSONL', '*.jsonl'), ('All', '*.*')])
+        if not jsonl_path:
+            return
+        try:
+            from llm_detector.calibration import calibrate_from_baselines, save_calibration
+            cal = calibrate_from_baselines(jsonl_path)
+            if cal is None:
+                messagebox.showerror('Calibration',
+                                     'Insufficient labeled human data (need >=20)')
+                return
+            cal_path = filedialog.asksaveasfilename(
+                title='Save calibration table',
+                defaultextension='.json',
+                initialfile=os.path.basename(jsonl_path).replace('.jsonl', '_calibration.json'),
+                filetypes=[('JSON', '*.json'), ('All', '*.*')])
+            if not cal_path:
+                return
+            save_calibration(cal, cal_path)
+            self.cal_table = cal
+            self.cal_path_var.set(cal_path)
+            n = cal.get('n_calibration', '?')
+            strata = len(cal.get('strata', {}))
+            messagebox.showinfo('Calibration',
+                                f'Built and saved: {n} records, {strata} strata')
         except Exception as e:
             messagebox.showerror('Calibration Error', str(e))
 
@@ -470,15 +608,24 @@ class DetectorGUI:
             if shadow_count:
                 self._append(f"\nSHADOW MODEL: {shadow_count} disagreements\n")
 
+        # Load instruction text for similarity baseline
+        instruction_text = None
+        instr_path = self.instructions_var.get().strip()
+        if instr_path and os.path.exists(instr_path):
+            with open(instr_path, 'r') as f:
+                instruction_text = f.read()
+
         # Similarity analysis
         sim_threshold = float(self.sim_threshold_var.get() or 0.40)
+        sim_pairs = []
         if self.similarity_var.get() and len(results) >= 2:
             try:
                 from llm_detector.similarity import (
                     analyze_similarity, apply_similarity_adjustments,
                 )
                 sim_pairs = analyze_similarity(
-                    results, text_map, jaccard_threshold=sim_threshold)
+                    results, text_map, jaccard_threshold=sim_threshold,
+                    instruction_text=instruction_text)
                 if sim_pairs:
                     results = apply_similarity_adjustments(
                         results, sim_pairs, text_map)
@@ -487,6 +634,39 @@ class DetectorGUI:
                         self._append(
                             f"  {p['id_a'][:15]} <-> {p['id_b'][:15]} "
                             f"(J={p['jaccard']:.2f})\n")
+                    upgrades = [r for r in results if 'similarity_upgrade' in r]
+                    if upgrades:
+                        self._append(
+                            f"\n  SIMILARITY ADJUSTMENTS: "
+                            f"{len(upgrades)} determinations upgraded\n")
+                        for r in upgrades:
+                            su = r['similarity_upgrade']
+                            self._append(
+                                f"    {r.get('task_id', '')[:15]:15s} "
+                                f"{su['original_determination']} -> "
+                                f"{su['upgraded_to']}  ({su['reason'][:60]})\n")
+            except Exception:
+                pass
+        self.sim_pairs = sim_pairs
+
+        # Similarity store (cross-batch fingerprints)
+        sim_store = self.sim_store_var.get().strip()
+        if sim_store:
+            try:
+                from llm_detector.similarity import (
+                    cross_batch_similarity, save_similarity_store,
+                )
+                cross_flags = cross_batch_similarity(results, text_map, sim_store)
+                if cross_flags:
+                    self._append(
+                        f"\nCROSS-BATCH SIMILARITY: "
+                        f"{len(cross_flags)} matches to previous batches\n")
+                    for cf in cross_flags[:10]:
+                        self._append(
+                            f"  {cf['current_id'][:15]} <-> "
+                            f"{cf['historical_id'][:15]} "
+                            f"(MH={cf['minhash_similarity']:.2f})\n")
+                save_similarity_store(results, text_map, sim_store)
             except Exception:
                 pass
 
@@ -519,6 +699,16 @@ class DetectorGUI:
                 pct = ct / len(results) * 100
                 self._append(
                     f"  {icons.get(det, ' ')} {det:>8}: {ct:>4} ({pct:.1f}%)\n")
+
+        # Yellow submissions list
+        yellow = [r for r in results if r['determination'] == 'YELLOW']
+        if yellow:
+            self._append(f"\n  YELLOW ({len(yellow)} minor signals):\n")
+            for r in sorted(yellow, key=lambda x: x['confidence'], reverse=True)[:10]:
+                self._append(
+                    f"    {r.get('task_id', '')[:12]:12} "
+                    f"{r.get('occupation', '')[:40]:40} | "
+                    f"{r.get('reason', '')[:50]}\n")
 
     # ── Result Formatting ────────────────────────────────────────
 
@@ -602,6 +792,9 @@ class DetectorGUI:
             f"         meta={r.get('prompt_signature_meta_design', 0)} "
             f"FC={r.get('prompt_signature_framing', 0)}/3 "
             f"must={r.get('prompt_signature_must_rate', 0):.3f}/sent")
+        lines.append(
+            f"         contractions={r.get('prompt_signature_contractions', 0)} "
+            f"numbered_criteria={r.get('prompt_signature_numbered_criteria', 0)}")
 
         lines.append(
             f"     IDI:              "
@@ -609,6 +802,7 @@ class DetectorGUI:
             f"(imp={r.get('instruction_density_imperatives', 0)} "
             f"cond={r.get('instruction_density_conditionals', 0)} "
             f"Y/N={r.get('instruction_density_binary_specs', 0)} "
+            f"MISS={r.get('instruction_density_missing_refs', 0)} "
             f"flag={r.get('instruction_density_flag_count', 0)})")
 
         lines.append(
@@ -616,6 +810,14 @@ class DetectorGUI:
             f"{r.get('voice_dissonance_vsd', 0):.1f}  "
             f"(voice={r.get('voice_dissonance_voice_score', 0):.1f} "
             f"x spec={r.get('voice_dissonance_spec_score', 0):.1f})")
+        lines.append(
+            f"         gated={'YES' if r.get('voice_dissonance_voice_gated') else 'no'} "
+            f"casual={r.get('voice_dissonance_casual_markers', 0)} "
+            f"typos={r.get('voice_dissonance_misspellings', 0)}")
+        lines.append(
+            f"         cols={r.get('voice_dissonance_camel_cols', 0)} "
+            f"calcs={r.get('voice_dissonance_calcs', 0)} "
+            f"hedges={r.get('voice_dissonance_hedges', 0)}")
 
         if r.get('ssi_triggered'):
             lines.append(
@@ -629,6 +831,16 @@ class DetectorGUI:
                 f"     NSSI:             {nssi_score:.3f}  "
                 f"({r.get('self_similarity_nssi_signals', 0)} signals, "
                 f"det={nssi_det or 'n/a'})")
+            lines.append(
+                f"         formulaic={r.get('self_similarity_formulaic_density', 0):.3f} "
+                f"power_adj={r.get('self_similarity_power_adj_density', 0):.3f} "
+                f"demo={r.get('self_similarity_demonstrative_density', 0):.3f} "
+                f"trans={r.get('self_similarity_transition_density', 0):.3f}")
+            lines.append(
+                f"         sent_cv={r.get('self_similarity_sent_length_cv', 0):.3f} "
+                f"comp_ratio={r.get('self_similarity_comp_ratio', 0):.3f} "
+                f"hapax={r.get('self_similarity_hapax_ratio', 0):.3f} "
+                f"(unique={r.get('self_similarity_unique_words', 0)})")
 
         bscore = r.get('continuation_bscore', 0.0)
         dna_det = r.get('continuation_determination')
@@ -682,11 +894,19 @@ class DetectorGUI:
         try:
             import pandas as pd
             flat = []
+            # Build similarity lookup for similarity_flags column
+            sim_lookup = defaultdict(list)
+            for p in self.sim_pairs:
+                sim_lookup[p['id_a']].append(f"{p['id_b']}(J={p['jaccard']:.2f})")
+                sim_lookup[p['id_b']].append(f"{p['id_a']}(J={p['jaccard']:.2f})")
             for r in self.results:
                 row = {k: v for k, v in r.items()
-                       if k not in ('preamble_details', 'detection_spans',
-                                    'audit_trail', 'channel_details')}
+                       if k not in ('preamble_details', 'detection_spans')}
                 row['preamble_details'] = str(r.get('preamble_details', []))
+                row['audit_trail'] = str(r.get('audit_trail', []))
+                row['channel_details'] = str(r.get('channel_details', {}))
+                tid = row.get('task_id', '')
+                row['similarity_flags'] = '; '.join(sim_lookup.get(tid, []))
                 flat.append(row)
             pd.DataFrame(flat).to_csv(path, index=False)
             messagebox.showinfo('Export', f'Saved {len(flat)} results to {path}')
@@ -706,6 +926,203 @@ class DetectorGUI:
             from llm_detector.baselines import collect_baselines
             n = collect_baselines(self.results, path)
             messagebox.showinfo('Baselines', f'{n} records appended to {path}')
+        except Exception as e:
+            messagebox.showerror('Baselines Error', str(e))
+
+    # ── Memory Management ────────────────────────────────────────
+
+    def _record_confirmation(self):
+        if not self.memory_store:
+            messagebox.showinfo('Confirm', 'Connect a memory store in Settings first.')
+            return
+        task_id = self.confirm_task_var.get().strip()
+        label = self.confirm_label_var.get()
+        reviewer = self.confirm_reviewer_var.get().strip()
+        if not task_id:
+            messagebox.showinfo('Confirm', 'Enter a task ID.')
+            return
+        if label not in ('ai', 'human'):
+            messagebox.showinfo('Confirm', "Label must be 'ai' or 'human'.")
+            return
+        try:
+            self.memory_store.record_confirmation(task_id, label, verified_by=reviewer)
+            messagebox.showinfo('Confirm', f"Recorded: {task_id} = {label}")
+        except Exception as e:
+            messagebox.showerror('Confirm Error', str(e))
+
+    def _show_memory_summary(self):
+        if not self.memory_store:
+            messagebox.showinfo('Summary', 'Connect a memory store in Settings first.')
+            return
+        try:
+            import json
+            config = json.loads(self.memory_store.config_path.read_text())
+            self.report_output.delete('1.0', tk.END)
+            self._report_append(f"{'='*60}\n")
+            self._report_append(f"  MEMORY STORE SUMMARY\n")
+            self._report_append(f"{'='*60}\n")
+            self._report_append(f"  Directory:      {self.memory_store.base_dir}\n")
+            self._report_append(f"  Submissions:    {config.get('total_submissions', 0)}\n")
+            self._report_append(f"  Batches:        {config.get('total_batches', 0)}\n")
+            self._report_append(f"  Attempters:     {config.get('total_attempters', 0)}\n")
+            self._report_append(f"  Confirmed:      {config.get('total_confirmed', 0)}\n")
+            occs = config.get('occupations', [])
+            if occs:
+                self._report_append(f"  Occupations:    {', '.join(occs[:10])}\n")
+            self._report_append(f"  Last updated:   {config.get('last_update', '?')}\n")
+        except Exception as e:
+            self._report_append(f"Error: {e}\n")
+
+    def _rebuild_calibration(self):
+        if not self.memory_store:
+            messagebox.showinfo('Rebuild', 'Connect a memory store in Settings first.')
+            return
+        try:
+            cal = self.memory_store.rebuild_calibration()
+            if cal:
+                self.cal_table = cal
+                messagebox.showinfo('Rebuild',
+                                    f"Calibration rebuilt: {cal['n_calibration']} samples")
+            else:
+                messagebox.showinfo('Rebuild', 'Insufficient data for calibration.')
+        except Exception as e:
+            messagebox.showerror('Rebuild Error', str(e))
+
+    def _rebuild_shadow(self):
+        if not self.memory_store:
+            messagebox.showinfo('Rebuild', 'Connect a memory store in Settings first.')
+            return
+        try:
+            shadow = self.memory_store.rebuild_shadow_model()
+            if shadow:
+                messagebox.showinfo('Rebuild',
+                                    f"Shadow model built: AUC={shadow['cv_auc']:.3f}")
+            else:
+                messagebox.showinfo('Rebuild', 'Insufficient labeled data for shadow model.')
+        except Exception as e:
+            messagebox.showerror('Rebuild Error', str(e))
+
+    def _rebuild_centroids(self):
+        if not self.memory_store:
+            messagebox.showinfo('Rebuild', 'Connect a memory store in Settings first.')
+            return
+        corpus = self.corpus_path_var.get().strip()
+        if not corpus or not os.path.exists(corpus):
+            messagebox.showinfo('Rebuild', 'Select a labeled corpus JSONL file.')
+            return
+        try:
+            result = self.memory_store.rebuild_semantic_centroids(corpus)
+            if result:
+                messagebox.showinfo('Rebuild',
+                                    f"Centroids rebuilt: separation={result['separation']:.4f}")
+            else:
+                messagebox.showinfo('Rebuild', 'Insufficient labeled text for centroids.')
+        except Exception as e:
+            messagebox.showerror('Rebuild Error', str(e))
+
+    def _discover_lexicon(self):
+        if not self.memory_store:
+            messagebox.showinfo('Lexicon', 'Connect a memory store in Settings first.')
+            return
+        corpus = self.corpus_path_var.get().strip()
+        if not corpus or not os.path.exists(corpus):
+            messagebox.showinfo('Lexicon', 'Select a labeled corpus JSONL file.')
+            return
+        try:
+            candidates = self.memory_store.discover_lexicon_candidates(corpus)
+            n_new = sum(1 for c in candidates
+                        if not c.get('already_in_fingerprints')
+                        and not c.get('already_in_packs'))
+            messagebox.showinfo('Lexicon',
+                                f"{len(candidates)} candidates ({n_new} new)")
+        except Exception as e:
+            messagebox.showerror('Lexicon Error', str(e))
+
+    def _rebuild_all(self):
+        if not self.memory_store:
+            messagebox.showinfo('Rebuild', 'Connect a memory store in Settings first.')
+            return
+        self.report_output.delete('1.0', tk.END)
+        self._report_append(f"{'='*60}\n")
+        self._report_append(f"  REBUILDING ALL LEARNED ARTIFACTS\n")
+        self._report_append(f"{'='*60}\n")
+
+        try:
+            cal = self.memory_store.rebuild_calibration()
+            if cal:
+                self.cal_table = cal
+                self._report_append(f"  + Calibration: {cal['n_calibration']} samples\n")
+            else:
+                self._report_append(f"  - Calibration: insufficient data\n")
+        except Exception as e:
+            self._report_append(f"  - Calibration: error ({e})\n")
+
+        try:
+            shadow = self.memory_store.rebuild_shadow_model()
+            if shadow:
+                self._report_append(f"  + Shadow model: AUC={shadow['cv_auc']:.3f}\n")
+            else:
+                self._report_append(f"  - Shadow model: insufficient labeled data\n")
+        except Exception as e:
+            self._report_append(f"  - Shadow model: error ({e})\n")
+
+        corpus = self.corpus_path_var.get().strip()
+        if corpus and os.path.exists(corpus):
+            try:
+                centroids = self.memory_store.rebuild_semantic_centroids(corpus)
+                if centroids:
+                    self._report_append(
+                        f"  + Centroids: separation={centroids['separation']:.4f}\n")
+                else:
+                    self._report_append(f"  - Centroids: insufficient labeled text\n")
+            except Exception as e:
+                self._report_append(f"  - Centroids: error ({e})\n")
+
+            try:
+                candidates = self.memory_store.discover_lexicon_candidates(corpus)
+                n_new = sum(1 for c in candidates
+                            if not c.get('already_in_fingerprints')
+                            and not c.get('already_in_packs'))
+                self._report_append(
+                    f"  + Lexicon: {len(candidates)} candidates ({n_new} new)\n")
+            except Exception as e:
+                self._report_append(f"  - Lexicon: error ({e})\n")
+        else:
+            self._report_append(f"  - Centroids: skipped (no labeled corpus)\n")
+            self._report_append(f"  - Lexicon: skipped (no labeled corpus)\n")
+
+        self._report_append(f"\n{'='*60}\n")
+
+    def _analyze_baselines_ui(self):
+        jsonl_path = filedialog.askopenfilename(
+            title='Select baseline JSONL',
+            filetypes=[('JSONL', '*.jsonl'), ('All', '*.*')])
+        if not jsonl_path:
+            return
+        try:
+            from llm_detector.baselines import analyze_baselines
+            rows = analyze_baselines(jsonl_path)
+            self.report_output.delete('1.0', tk.END)
+            if not rows:
+                self._report_append('No baseline records found.\n')
+                return
+            self._report_append(f"{'='*60}\n")
+            self._report_append(f"  BASELINE ANALYSIS ({len(rows)} records)\n")
+            self._report_append(f"{'='*60}\n")
+            for row in rows[:50]:
+                parts = [f"{k}={v}" for k, v in row.items()]
+                self._report_append(f"  {', '.join(parts[:6])}\n")
+
+            # Offer CSV export
+            save = messagebox.askyesno('Baselines',
+                                       f'Loaded {len(rows)} records. Export to CSV?')
+            if save:
+                csv_path = filedialog.asksaveasfilename(
+                    defaultextension='.csv',
+                    filetypes=[('CSV', '*.csv'), ('All', '*.*')])
+                if csv_path:
+                    analyze_baselines(jsonl_path, output_csv=csv_path)
+                    messagebox.showinfo('Baselines', f'CSV saved to {csv_path}')
         except Exception as e:
             messagebox.showerror('Baselines Error', str(e))
 
@@ -770,7 +1187,8 @@ class DetectorGUI:
         if len(self.results) >= 10:
             try:
                 from llm_detector.reporting import financial_impact
-                impact = financial_impact(self.results)
+                cost = float(self.cost_var.get() or 400)
+                impact = financial_impact(self.results, cost_per_prompt=cost)
                 self._report_append(f"\n{'='*60}\n")
                 self._report_append("  FINANCIAL IMPACT ESTIMATE\n")
                 self._report_append(f"{'='*60}\n")
