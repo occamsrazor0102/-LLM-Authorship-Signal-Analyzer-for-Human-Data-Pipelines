@@ -52,28 +52,23 @@ def determine(preamble_score, preamble_severity, prompt_sig, voice_dis,
 
     channels = [ch_prompt, ch_style, ch_cont, ch_window]
 
-    # Channel ablation: replace disabled channels with GREEN no-ops
-    disabled_channels = disabled_channels or set()
-    if disabled_channels:
-        _CH_INDEX = {'prompt_structure': 0, 'stylometric': 1,
-                     'continuation': 2, 'windowed': 3}
-        for ch_name in disabled_channels:
-            idx = _CH_INDEX.get(ch_name)
-            if idx is not None:
-                channels[idx] = ChannelResult(
-                    channels[idx].channel, 0.0, 'GREEN',
-                    f'{ch_name} disabled (ablation)',
-                    mode_eligibility=channels[idx].mode_eligibility,
-                )
+    _disabled = set(disabled_channels or [])
 
     channel_details = {
         'mode': mode,
-        'disabled_channels': sorted(disabled_channels) if disabled_channels else [],
+        'disabled_channels': sorted(_disabled) if _disabled else [],
         'channels': {ch.channel: {
             'score': ch.score, 'severity': ch.severity,
-            'explanation': ch.explanation, 'mode_eligible': mode in ch.mode_eligibility,
+            'explanation': f'{ch.channel} disabled (ablation)' if ch.channel in _disabled else ch.explanation,
+            'mode_eligible': mode in ch.mode_eligibility,
+            'data_sufficient': ch.data_sufficient,
+            'disabled': ch.channel in _disabled,
         } for ch in channels},
     }
+
+    # Channel ablation: remove disabled channels from fusion
+    if _disabled:
+        channels = [ch for ch in channels if ch.channel not in _disabled]
 
     # Fairness severity cap
     severity_cap = None
@@ -104,16 +99,16 @@ def determine(preamble_score, preamble_severity, prompt_sig, voice_dis,
         primary_channels = channels
         supporting_channels = []
 
-    # Evidence fusion
+    # Evidence fusion — only count channels with sufficient data for convergence
     all_active = sorted(
-        [ch for ch in channels if ch.severity != 'GREEN'],
+        [ch for ch in channels if ch.severity != 'GREEN' and ch.data_sufficient],
         key=lambda c: c.sev_level, reverse=True,
     )
     primary_active = sorted(
-        [ch for ch in primary_channels if ch.severity != 'GREEN'],
+        [ch for ch in primary_channels if ch.severity != 'GREEN' and ch.data_sufficient],
         key=lambda c: c.sev_level, reverse=True,
     )
-    support_active = [ch for ch in supporting_channels if ch.severity != 'GREEN']
+    support_active = [ch for ch in supporting_channels if ch.severity != 'GREEN' and ch.data_sufficient]
 
     n_red = sum(1 for ch in all_active if ch.severity == 'RED')
     n_amber_plus = sum(1 for ch in all_active if ch.sev_level >= 2)
@@ -176,13 +171,6 @@ def determine(preamble_score, preamble_severity, prompt_sig, voice_dis,
         det, reason, conf = _apply_cap('AMBER', f"{combined_reason} [multi-channel convergence]", min(top_score, 0.60))
         if ch_window.sub_signals.get('mixed_signal') and ch_window.severity != 'GREEN':
             return 'MIXED', f"{reason} [windowed variance suggests hybrid text]", min(conf, 0.55), channel_details
-        return det, reason, conf, channel_details
-
-    # Short-text convergence relaxation: single channel convergence when few active
-    if short_text_penalty and convergence_count >= 1:
-        det, reason, conf = _apply_cap(
-            'AMBER', f"{combined_reason} [short-text convergence relaxed]",
-            min(top_score - short_text_penalty, 0.55))
         return det, reason, conf, channel_details
 
     # Supporting channels at AMBER in task_prompt mode

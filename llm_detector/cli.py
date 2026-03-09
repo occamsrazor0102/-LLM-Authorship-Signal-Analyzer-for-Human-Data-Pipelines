@@ -88,6 +88,12 @@ def print_result(r, verbose=False):
             print(f"     DNA-GPT:          BScore={bscore:.4f}  (max={r.get('continuation_bscore_max', 0):.4f}, "
                   f"samples={r.get('continuation_n_samples', 0)}, det={det_str})")
 
+        shadow = r.get('shadow_disagreement')
+        if shadow:
+            print(f"     \u26a0\ufe0f SHADOW: {shadow['interpretation']}")
+            print(f"         Rule={shadow['rule_determination']}, "
+                  f"Model={shadow['shadow_ai_prob']:.1%} AI")
+
         cd = r.get('channel_details', {})
         if cd.get('channels'):
             print(f"     -- Channels --")
@@ -134,6 +140,9 @@ def main():
     parser.add_argument('--mode', default='auto', choices=['task_prompt', 'generic_aigt', 'auto'],
                         help='Detection mode: task_prompt (prompt-structure primary), '
                              'generic_aigt (all channels), auto (heuristic). Default: auto')
+    parser.add_argument('--disable-channel', nargs='+', default=[],
+                        choices=['prompt_structure', 'stylometry', 'continuation', 'windowing'],
+                        help='Disable specific fusion channels for ablation experiments')
     parser.add_argument('--calibrate', metavar='JSONL',
                         help='Build calibration table from labeled baseline JSONL and save to --cal-table')
     parser.add_argument('--cal-table', metavar='JSON',
@@ -389,6 +398,7 @@ def main():
             dna_samples=args.dna_samples,
             mode=args.mode,
             cal_table=cal_table,
+            memory_store=store,
             disabled_channels=disabled_channels,
         )
         results.append(r)

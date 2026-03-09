@@ -26,7 +26,8 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
                    run_l3=True, api_key=None, dna_provider='anthropic',
                    dna_model=None, dna_samples=3,
                    ground_truth=None, language=None, domain=None,
-                   mode='auto', cal_table=None, disabled_channels=None):
+                   mode='auto', cal_table=None, memory_store=None,
+                   disabled_channels=None):
     """Run full v0.66 pipeline on a single prompt. Returns result dict."""
     # Normalization pre-pass
     normalized_text, norm_report = normalize_text(text)
@@ -162,6 +163,7 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         'norm_obfuscation_delta': norm_report.get('obfuscation_delta', 0.0),
         'norm_invisible_chars': norm_report.get('invisible_chars', 0),
         'norm_homoglyphs': norm_report.get('homoglyphs', 0),
+        'norm_attack_types': norm_report.get('attack_types', []),
         # Fairness gate
         'lang_support_level': lang_gate.get('support_level', 'SUPPORTED'),
         'lang_fw_coverage': lang_gate.get('function_word_coverage', 0.0),
@@ -260,6 +262,8 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         'surprisal_first_half_var': ppl.get('surprisal_first_half_var', 0.0),
         'surprisal_second_half_var': ppl.get('surprisal_second_half_var', 0.0),
         'volatility_decay_ratio': ppl.get('volatility_decay_ratio', 1.0),
+        'binoculars_score': ppl.get('binoculars_score', 0.0),
+        'binoculars_determination': ppl.get('binoculars_determination'),
     })
 
     # Self-similarity (NSSI)
@@ -358,5 +362,13 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         'surprisal_var_of_var': surprisal_traj.get('surprisal_var_of_var', 0.0),
         'surprisal_stationarity': surprisal_traj.get('surprisal_stationarity', 0.0),
     })
+
+    # Shadow model disagreement check (if memory store is active)
+    shadow_disagreement = None
+    if memory_store is not None:
+        shadow_disagreement = memory_store.check_shadow_disagreement(result)
+
+    result['shadow_disagreement'] = shadow_disagreement
+    result['shadow_ai_prob'] = (shadow_disagreement or {}).get('shadow_ai_prob')
 
     return result

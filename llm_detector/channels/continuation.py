@@ -9,6 +9,7 @@ def score_continuation(cont_result):
     score = 0.0
     severity = 'GREEN'
     parts = []
+    has_data = cont_result is not None
 
     if cont_result and cont_result.get('determination'):
         dna_det = cont_result['determination']
@@ -43,4 +44,5 @@ def score_continuation(cont_result):
         'continuation', score, severity, explanation,
         mode_eligibility=['task_prompt', 'generic_aigt'],
         sub_signals=sub,
+        data_sufficient=has_data,
     )

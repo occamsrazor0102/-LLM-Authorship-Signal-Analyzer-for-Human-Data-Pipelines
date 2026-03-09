@@ -78,43 +78,94 @@ def test_determine_with_new_signals():
           f"got {len(cd.get('channels', {}))}")
 
 
+def test_short_text_no_false_convergence():
+    print("\n-- SHORT TEXT: no false convergence from data-insufficient channels --")
+
+    # Single YELLOW prompt_structure signal, with word_count=60 (too short for
+    # continuation, NSSI, etc.). Should stay YELLOW, not escalate to AMBER
+    # via convergence with zero-score channels that couldn't run.
+    prompt_sig = {'composite': 0.25, 'framing_completeness': 1, 'cfd': 0.3,
+                  'mfsr': 0.2, 'must_rate': 0.1, 'distinct_frames': 2,
+                  'conditional_density': 0.1, 'meta_design_hits': 0,
+                  'contractions': 0, 'numbered_criteria': 0,
+                  'pack_constraint_score': 0, 'pack_exec_spec_score': 0,
+                  'pack_boost': 0, 'pack_active_families': 0, 'pack_spans': []}
+    voice_dis = {'voice_gated': False, 'vsd': 5, 'voice_score': 0.3,
+                 'spec_score': 2, 'contractions': 2, 'hedges': 1,
+                 'casual_markers': 1, 'misspellings': 0, 'camel_cols': 0,
+                 'calcs': 0, 'pack_schema_score': 0, 'pack_spans': []}
+    instr_density = {'idi': 3.0, 'imperatives': 1, 'conditionals': 0,
+                     'binary_specs': 0, 'missing_refs': 0, 'flag_count': 0,
+                     'pack_idi_boost': 0, 'pack_spans': []}
+
+    det, reason, conf, cd = determine(
+        0, 'NONE', prompt_sig, voice_dis, instr_density, word_count=60,
+        mode='auto',
+        self_sim=None,       # Can't run: needs 200+ words
+        cont_result=None,    # Can't run: needs 80+ words
+        semantic=None,
+        ppl=None,
+        tocsin=None,
+    )
+
+    check("Short text stays YELLOW (not escalated)", det in ('YELLOW', 'GREEN', 'REVIEW'),
+          f"got {det}")
+    check("Short text does not reach AMBER", det != 'AMBER',
+          f"got {det} — false convergence with data-insufficient channels")
+
+    # Verify data_sufficient is tracked in channel_details
+    cont_info = cd['channels'].get('continuation', {})
+    check("continuation marked data_sufficient=False",
+          cont_info.get('data_sufficient') is False,
+          f"got {cont_info.get('data_sufficient')}")
+
+    style_info = cd['channels'].get('stylometry', {})
+    check("stylometry marked data_sufficient=False (no sub-signals)",
+          style_info.get('data_sufficient') is False,
+          f"got {style_info.get('data_sufficient')}")
+
+
 def test_channel_ablation():
     print("\n-- CHANNEL ABLATION --")
 
-    l25_sig = {'composite': 0.45, 'framing_completeness': 3, 'cfd': 0.4,
-               'mfsr': 0.3, 'must_rate': 0.2, 'distinct_frames': 5,
-               'conditional_density': 0.3, 'meta_design_hits': 2,
-               'contractions': 0, 'numbered_criteria': 0}
-    l26_high = {'voice_gated': False, 'vsd': 12, 'voice_score': 0,
-                'spec_score': 12, 'contractions': 0, 'hedges': 0,
-                'casual_markers': 0, 'misspellings': 0, 'camel_cols': 0,
-                'calcs': 0}
-    l27_high = {'idi': 10.0, 'imperatives': 5, 'conditionals': 3,
-                'binary_specs': 2, 'missing_refs': 1, 'flag_count': 3}
+    # A prompt that triggers prompt_structure channel at YELLOW
+    prompt_sig = {'composite': 0.30, 'framing_completeness': 2, 'cfd': 0.4,
+                  'mfsr': 0.3, 'must_rate': 0.2, 'distinct_frames': 3,
+                  'conditional_density': 0.1, 'meta_design_hits': 0,
+                  'contractions': 0, 'numbered_criteria': 0,
+                  'pack_constraint_score': 0, 'pack_exec_spec_score': 0,
+                  'pack_boost': 0, 'pack_active_families': 0, 'pack_spans': []}
+    voice_dis = {'voice_gated': False, 'vsd': 3, 'voice_score': 0.2,
+                 'spec_score': 1, 'contractions': 0, 'hedges': 0,
+                 'casual_markers': 0, 'misspellings': 0, 'camel_cols': 0,
+                 'calcs': 0, 'pack_schema_score': 0, 'pack_spans': []}
+    instr_density = {'idi': 2.0, 'imperatives': 0, 'conditionals': 0,
+                     'binary_specs': 0, 'missing_refs': 0, 'flag_count': 0,
+                     'pack_idi_boost': 0, 'pack_spans': []}
 
-    # Without ablation — should produce some signal
-    det1, _, _, cd1 = determine(0.6, 'HIGH', l25_sig, l26_high, l27_high, 300,
-                                 mode='task_prompt')
-    check("No ablation produces signal", det1 != 'GREEN', f"got {det1}")
-    check("disabled_channels empty", cd1.get('disabled_channels') == [])
+    # Without ablation: should be YELLOW
+    det1, _, _, _ = determine(
+        0, 'NONE', prompt_sig, voice_dis, instr_density, 200,
+        mode='auto',
+    )
+    check("Without ablation: YELLOW", det1 == 'YELLOW', f"got {det1}")
 
-    # Disable prompt_structure
-    det2, _, _, cd2 = determine(0.6, 'HIGH', l25_sig, l26_high, l27_high, 300,
-                                 mode='task_prompt',
-                                 disabled_channels={'prompt_structure'})
-    check("prompt_structure disabled in details",
-          'prompt_structure' in cd2.get('disabled_channels', []))
-    check("prompt_structure channel is GREEN",
-          cd2['channels']['prompt_structure']['severity'] == 'GREEN')
-    check("prompt_structure shows ablation label",
-          'ablation' in cd2['channels']['prompt_structure']['explanation'])
+    # With prompt_structure disabled: should be GREEN
+    det2, _, _, cd2 = determine(
+        0, 'NONE', prompt_sig, voice_dis, instr_density, 200,
+        mode='auto', disabled_channels=['prompt_structure'],
+    )
+    check("With prompt_structure disabled: GREEN", det2 == 'GREEN', f"got {det2}")
+    check("Disabled channel marked in details",
+          cd2['channels']['prompt_structure'].get('disabled') is True)
 
     # Disable all channels — should produce GREEN or REVIEW
-    det3, _, _, cd3 = determine(0, 'NONE', l25_sig, l26_high, l27_high, 300,
+    det3, _, _, cd3 = determine(0, 'NONE', prompt_sig, voice_dis, instr_density, 300,
                                  mode='task_prompt',
-                                 disabled_channels={'prompt_structure', 'stylometric',
-                                                    'continuation', 'windowed'})
+                                 disabled_channels=['prompt_structure', 'stylometric',
+                                                    'continuation', 'windowed'])
     check("All disabled -> GREEN/REVIEW", det3 in ('GREEN', 'REVIEW'), f"got {det3}")
+    check("disabled_channels listed", len(cd3.get('disabled_channels', [])) == 4)
 
 
 def test_short_text_adjustment():
@@ -185,6 +236,7 @@ if __name__ == '__main__':
 
     test_stylometry_integration()
     test_determine_with_new_signals()
+    test_short_text_no_false_convergence()
     test_channel_ablation()
     test_short_text_adjustment()
     test_attack_type_derivation()

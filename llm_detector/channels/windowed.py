@@ -11,6 +11,7 @@ def score_windowed(window_result=None):
             'Windowing: insufficient text for windows',
             mode_eligibility=['generic_aigt'],
             sub_signals={},
+            data_sufficient=False,
         )
 
     sub = {

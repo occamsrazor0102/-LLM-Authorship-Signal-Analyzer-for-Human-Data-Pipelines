@@ -63,6 +63,24 @@ except Exception as e:
 _EMBEDDER = None
 _AI_CENTROIDS = None
 _HUMAN_CENTROIDS = None
+_EXTRA_CENTROID_PATHS = []
+
+
+def register_centroid_path(directory):
+    """Register an additional directory to search for centroid files.
+
+    Call this before the first analysis so that get_semantic_models()
+    picks up centroids from a custom --memory store directory.
+    Resets cached centroids so the new path takes effect.
+    """
+    global _AI_CENTROIDS, _HUMAN_CENTROIDS
+    centroid_file = os.path.join(str(directory), 'centroids', 'centroids_latest.npz')
+    if centroid_file not in _EXTRA_CENTROID_PATHS:
+        _EXTRA_CENTROID_PATHS.insert(0, centroid_file)
+        # Reset cached centroids so they reload from the new path
+        _AI_CENTROIDS = None
+        _HUMAN_CENTROIDS = None
+
 
 def get_semantic_models():
     """Return (embedder, ai_centroids, human_centroids), loading on first call.
@@ -142,6 +160,20 @@ def get_perplexity_model():
         _PPL_TOKENIZER = GPT2TokenizerFast.from_pretrained(_PPL_MODEL_ID)
         _PPL_MODEL.eval()
     return _PPL_MODEL, _PPL_TOKENIZER
+
+# ── Binoculars: contrastive LM scoring (observer model) ─────────────────────
+HAS_BINOCULARS = HAS_PERPLEXITY  # Same deps, just needs second model
+
+_BINO_MODEL = None
+
+def get_binoculars_model():
+    """Return GPT-2 base observer model for contrastive scoring, loading on first call."""
+    global _BINO_MODEL
+    if _BINO_MODEL is None and HAS_BINOCULARS:
+        from transformers import GPT2LMHeadModel
+        _BINO_MODEL = GPT2LMHeadModel.from_pretrained('gpt2')
+        _BINO_MODEL.eval()
+    return _BINO_MODEL
 
 # ── pypdf: PDF text extraction ──────────────────────────────────────────────
 try:

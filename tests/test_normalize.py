@@ -50,12 +50,52 @@ def test_ftfy_normalization():
     check("Invisible chars counted", report_zw['invisible_chars'] >= 1)
 
 
+def test_attack_type_tagging():
+    print("\n-- ATTACK TYPE TAGGING --")
+
+    # Clean text: no attack types
+    clean = "This is a normal sentence."
+    _, report = normalize_text(clean)
+    check("attack_types field present", 'attack_types' in report)
+    check("clean text has no attack types", report['attack_types'] == [],
+          f"got {report['attack_types']}")
+
+    # Zero-width invisible chars
+    zw_text = "hel\u200blo wor\u200cld"
+    _, report_zw = normalize_text(zw_text)
+    check("invisible_char in attack_types",
+          'invisible_char' in report_zw['attack_types'],
+          f"got {report_zw['attack_types']}")
+
+    # Homoglyph (Cyrillic 'a')
+    homoglyph_text = "\u0430pple is a fruit"
+    _, report_hg = normalize_text(homoglyph_text)
+    check("homoglyph in attack_types",
+          'homoglyph' in report_hg['attack_types'],
+          f"got {report_hg['attack_types']}")
+
+    # Interspacing
+    spaced_text = "t h i s i s spaced out text normally"
+    _, report_sp = normalize_text(spaced_text)
+    check("interspacing in attack_types",
+          'interspacing' in report_sp['attack_types'],
+          f"got {report_sp['attack_types']}")
+
+    # Multiple attacks combined
+    multi_text = "\u0430pple\u200b h e l l o"
+    _, report_multi = normalize_text(multi_text)
+    check("multiple attack types detected",
+          len(report_multi['attack_types']) >= 2,
+          f"got {report_multi['attack_types']}")
+
+
 if __name__ == '__main__':
     print("=" * 70)
     print("Normalization Tests")
     print("=" * 70)
 
     test_ftfy_normalization()
+    test_attack_type_tagging()
 
     print(f"\n{'=' * 70}")
     print(f"RESULTS: {PASSED} passed, {FAILED} failed")
