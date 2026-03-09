@@ -90,6 +90,8 @@ class DetectorGUI:
         self._build_memory_tab(notebook)
         # Tab 4: Calibration & Baselines
         self._build_calibration_tab(notebook)
+        # Tab 5: Reports
+        self._build_reports_tab(notebook)
 
         # Status bar
         ttk.Label(self.root, textvariable=self.status_var).pack(anchor='w', padx=10, pady=(0, 6))
@@ -325,7 +327,7 @@ class DetectorGUI:
     # ── Helpers ───────────────────────────────────────────────────────
 
     def _browse_file(self):
-        path = filedialog.askopenfilename(filetypes=[('Data files', '*.csv *.xlsx *.xlsm'), ('All files', '*.*')])
+        path = filedialog.askopenfilename(filetypes=[('Data files', '*.csv *.xlsx *.xlsm *.pdf'), ('All files', '*.*')])
         if path:
             self.file_var.set(path)
 
@@ -361,6 +363,14 @@ class DetectorGUI:
             return float(self.cost_var.get())
         except ValueError:
             return 400.0
+
+    def _get_api_key(self):
+        key = self.api_key_var.get().strip()
+        if not key:
+            env_var = ('ANTHROPIC_API_KEY' if self.provider_var.get() == 'anthropic'
+                       else 'OPENAI_API_KEY')
+            key = os.environ.get(env_var, '')
+        return key or None
 
     def _get_sim_threshold(self):
         try:
@@ -430,7 +440,7 @@ class DetectorGUI:
     def _build_analyze_kwargs(self):
         kwargs = {
             'run_l3': not self.no_layer3_var.get(),
-            'api_key': self.api_key_var.get().strip() or None,
+            'api_key': self._get_api_key(),
             'dna_provider': self.provider_var.get(),
             'dna_model': self.dna_model_var.get().strip() or None,
             'dna_samples': self._get_dna_samples(),
@@ -448,6 +458,13 @@ class DetectorGUI:
             return
         kwargs = self._build_analyze_kwargs()
         result = analyze_prompt(text, **kwargs)
+
+        # Shadow model check
+        if self._memory_store:
+            disagreement = self._memory_store.check_shadow_disagreement(result)
+            result['shadow_disagreement'] = disagreement
+            result['shadow_ai_prob'] = (disagreement or {}).get('shadow_ai_prob')
+
         self._last_results = [result]
         self._last_text_map = {'_single': text}
         self._display_result(result)
@@ -470,6 +487,13 @@ class DetectorGUI:
                               prompt_col=self.prompt_col_var.get().strip() or 'prompt')
         elif ext == '.csv':
             tasks = load_csv(path, prompt_col=self.prompt_col_var.get().strip() or 'prompt')
+        elif ext == '.pdf':
+            if not HAS_PYPDF:
+                self.root.after(0, lambda: messagebox.showerror(
+                    'Missing dependency', 'PDF support requires pypdf: pip install pypdf'))
+                return
+            from llm_detector.io import load_pdf
+            tasks = load_pdf(path)
         else:
             self.root.after(0, lambda: messagebox.showerror('Unsupported file', f'Unsupported: {ext}'))
             return
@@ -501,6 +525,18 @@ class DetectorGUI:
             counts[r['determination']] += 1
             self._append(f"[{i}/{len(tasks)}] ")
             self._display_result(r)
+
+        # Shadow model checks
+        if self._memory_store:
+            shadow_count = 0
+            for r in results:
+                disagreement = self._memory_store.check_shadow_disagreement(r)
+                r['shadow_disagreement'] = disagreement
+                r['shadow_ai_prob'] = (disagreement or {}).get('shadow_ai_prob')
+                if disagreement:
+                    shadow_count += 1
+            if shadow_count:
+                self._append(f"\nShadow model: {shadow_count} disagreements\n", 'ALERT')
 
         self._last_results = results
         self._last_text_map = text_map
@@ -942,6 +978,121 @@ class DetectorGUI:
         finally:
             sys.stdout = old_stdout
         self._append(buf.getvalue())
+
+
+    # ── Tab 5: Reports ─────────────────────────────────────────────────
+
+    def _build_reports_tab(self, notebook):
+        tab = ttk.Frame(notebook, padding=8)
+        notebook.add(tab, text='  Reports  ')
+
+        actions = ttk.Frame(tab)
+        actions.pack(fill=tk.X, pady=(0, 8))
+        ttk.Button(actions, text='Refresh Reports',
+                   command=self._refresh_reports).pack(side=tk.LEFT, padx=4)
+        ttk.Button(actions, text='Export Baselines',
+                   command=self._export_baselines).pack(side=tk.LEFT, padx=4)
+
+        report_frame = ttk.Frame(tab)
+        report_frame.pack(fill=tk.BOTH, expand=True)
+        self.report_output = tk.Text(report_frame, wrap=tk.WORD,
+                                     font=('Consolas', 10))
+        scrollbar = ttk.Scrollbar(report_frame, orient=tk.VERTICAL,
+                                  command=self.report_output.yview)
+        self.report_output.configure(yscrollcommand=scrollbar.set)
+        self.report_output.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+    def _report_append(self, text):
+        self.root.after(0, lambda: (
+            self.report_output.insert(tk.END, text),
+            self.report_output.see(tk.END)))
+
+    def _refresh_reports(self):
+        self.report_output.delete('1.0', tk.END)
+        if not self._last_results:
+            self._report_append('No results available. Run a batch analysis first.\n')
+            return
+
+        results = self._last_results
+        counts = Counter(r['determination'] for r in results)
+        self._report_append(f"{'=' * 60}\n")
+        self._report_append(f"  BATCH SUMMARY (n={len(results)})\n")
+        self._report_append(f"{'=' * 60}\n")
+        for det in ['RED', 'AMBER', 'MIXED', 'YELLOW', 'REVIEW', 'GREEN']:
+            ct = counts.get(det, 0)
+            if ct > 0:
+                pct = ct / len(results) * 100
+                self._report_append(f"  {det:>8}: {ct:>4} ({pct:.1f}%)\n")
+
+        # Attempter profiling
+        if len(results) >= 5:
+            try:
+                from llm_detector.reporting import profile_attempters
+                profiles = profile_attempters(results)
+                if profiles:
+                    self._report_append(f"\n{'=' * 60}\n")
+                    self._report_append("  ATTEMPTER RISK PROFILES\n")
+                    self._report_append(f"{'=' * 60}\n")
+                    for p in profiles[:20]:
+                        self._report_append(
+                            f"  {p['attempter'][:20]:20s} "
+                            f"n={p['n_submissions']:>3} "
+                            f"flag={p['flag_rate']:.0f}% "
+                            f"conf={p.get('mean_confidence', 0):.2f}\n")
+            except Exception:
+                pass
+
+        # Channel pattern summary
+        flagged = [r for r in results
+                   if r['determination'] in ('RED', 'AMBER', 'MIXED')]
+        if flagged:
+            self._report_append(f"\n{'=' * 60}\n")
+            self._report_append("  CHANNEL PATTERNS (flagged submissions)\n")
+            self._report_append(f"{'=' * 60}\n")
+            channel_counts = Counter()
+            for r in flagged:
+                cd = r.get('channel_details', {}).get('channels', {})
+                for ch_name, info in cd.items():
+                    if info.get('severity') not in ('GREEN', None):
+                        channel_counts[ch_name] += 1
+            for ch, ct in channel_counts.most_common():
+                self._report_append(f"  {ch:20s}: {ct} flags\n")
+
+        # Financial impact
+        if len(results) >= 10:
+            try:
+                from llm_detector.reporting import financial_impact
+                impact = financial_impact(results, cost_per_prompt=self._get_cost())
+                self._report_append(f"\n{'=' * 60}\n")
+                self._report_append("  FINANCIAL IMPACT ESTIMATE\n")
+                self._report_append(f"{'=' * 60}\n")
+                self._report_append(
+                    f"  Total submissions:     {impact['total_submissions']}\n")
+                self._report_append(
+                    f"  Flag rate:             {impact['flag_rate']:.1%}\n")
+                self._report_append(
+                    f"  Waste estimate:        ${impact['waste_estimate']:,.0f}\n")
+                self._report_append(
+                    f"  Projected annual:      ${impact.get('projected_annual_waste', 0):,.0f}\n")
+            except Exception:
+                pass
+
+    def _export_baselines(self):
+        if not self._last_results:
+            messagebox.showinfo('Export', 'No results to export. Run analysis first.')
+            return
+        path = filedialog.asksaveasfilename(
+            defaultextension='.jsonl',
+            filetypes=[('JSONL', '*.jsonl'), ('All', '*.*')])
+        if not path:
+            return
+        try:
+            from llm_detector.baselines import collect_baselines
+            collect_baselines(self._last_results, path)
+            messagebox.showinfo('Baselines', f'Results appended to {path}')
+        except Exception as e:
+            messagebox.showerror('Baselines Error', str(e))
 
 
 def launch_gui():
