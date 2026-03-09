@@ -107,6 +107,19 @@ def normalize_text(text):
 
     obfuscation_delta = changes / original_len
 
+    # Classify detected evasion attack types for per-attack analysis
+    attack_types = []
+    if invisible_count > 0:
+        attack_types.append('invisible_char')
+    if homoglyph_count > 0:
+        attack_types.append('homoglyph')
+    if interspacing_spans > 0:
+        attack_types.append('interspacing')
+    if ftfy_applied:
+        attack_types.append('encoding')
+    if ws_collapsed:
+        attack_types.append('whitespace')
+
     return text, {
         'obfuscation_delta': round(obfuscation_delta, 4),
         'invisible_chars': invisible_count,
@@ -114,4 +127,5 @@ def normalize_text(text):
         'interspacing_spans': interspacing_spans,
         'whitespace_collapsed': ws_collapsed,
         'ftfy_applied': ftfy_applied,
+        'attack_types': attack_types,
     }

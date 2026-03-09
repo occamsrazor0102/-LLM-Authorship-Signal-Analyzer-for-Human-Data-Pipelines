@@ -161,6 +161,20 @@ def get_perplexity_model():
         _PPL_MODEL.eval()
     return _PPL_MODEL, _PPL_TOKENIZER
 
+# ── Binoculars: contrastive LM scoring (observer model) ─────────────────────
+HAS_BINOCULARS = HAS_PERPLEXITY  # Same deps, just needs second model
+
+_BINO_MODEL = None
+
+def get_binoculars_model():
+    """Return GPT-2 base observer model for contrastive scoring, loading on first call."""
+    global _BINO_MODEL
+    if _BINO_MODEL is None and HAS_BINOCULARS:
+        from transformers import GPT2LMHeadModel
+        _BINO_MODEL = GPT2LMHeadModel.from_pretrained('gpt2')
+        _BINO_MODEL.eval()
+    return _BINO_MODEL
+
 # ── pypdf: PDF text extraction ──────────────────────────────────────────────
 try:
     from pypdf import PdfReader  # noqa: F401

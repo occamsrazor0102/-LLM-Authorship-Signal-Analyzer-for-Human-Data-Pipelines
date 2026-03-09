@@ -121,6 +121,25 @@ def score_stylometric(fingerprint_score, self_sim, voice_dis=None, semantic=None
             score = min(score + 0.05, 1.0)
             parts.append(f"TOCSIN=YELLOW(supporting)")
 
+    # Binoculars contrastive LM ratio: supporting signal
+    if ppl and ppl.get('binoculars_determination'):
+        bino_det = ppl['binoculars_determination']
+        bino_score = ppl.get('binoculars_score', 0)
+        sub['binoculars_score'] = bino_score
+
+        if bino_det == 'AMBER':
+            if severity in ('RED', 'AMBER'):
+                score = min(score + 0.10, 1.0)
+                parts.append(f"Bino={bino_score:.2f}(AMBER,boost)")
+            else:
+                score = max(score, ppl.get('confidence', 0.55))
+                severity = max(severity, 'AMBER',
+                               key=lambda s: ChannelResult.SEV_ORDER.get(s, 0))
+                parts.append(f"Bino={bino_score:.2f}(AMBER)")
+        elif bino_det == 'YELLOW' and severity != 'GREEN':
+            score = min(score + 0.05, 1.0)
+            parts.append(f"Bino={bino_score:.2f}(YELLOW,supporting)")
+
     # Fingerprints add supporting weight if any stylometric signal is active
     if fingerprint_score >= 0.30 and severity != 'GREEN':
         score = min(score + 0.10, 1.0)
@@ -128,8 +147,13 @@ def score_stylometric(fingerprint_score, self_sim, voice_dis=None, semantic=None
 
     explanation = f"Stylometry: {', '.join(parts)}" if parts else 'Stylometry: no signals'
 
+    # Mark data_sufficient=False when no analyzers could run
+    # (no NSSI, no semantic, no perplexity, no TOCSIN produced results)
+    has_data = bool(sub)
+
     return ChannelResult(
         'stylometry', score, severity, explanation,
         mode_eligibility=['generic_aigt'],
         sub_signals=sub,
+        data_sufficient=has_data,
     )
