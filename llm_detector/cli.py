@@ -127,7 +127,7 @@ def main():
                         help='Skip Layer 3 entirely (NSSI + DNA-GPT)')
     parser.add_argument('--disable-channel', metavar='CHANNELS',
                         help='Comma-separated channel names to disable for ablation: '
-                             'prompt_structure, stylometric, continuation, windowed')
+                             'prompt_structure, stylometry, continuation, windowing')
     parser.add_argument('--api-key', metavar='KEY',
                         help='API key for DNA-GPT continuation analysis. Falls back to '
                              'ANTHROPIC_API_KEY or OPENAI_API_KEY env var.')
@@ -140,9 +140,6 @@ def main():
     parser.add_argument('--mode', default='auto', choices=['task_prompt', 'generic_aigt', 'auto'],
                         help='Detection mode: task_prompt (prompt-structure primary), '
                              'generic_aigt (all channels), auto (heuristic). Default: auto')
-    parser.add_argument('--disable-channel', nargs='+', default=[],
-                        choices=['prompt_structure', 'stylometry', 'continuation', 'windowing'],
-                        help='Disable specific fusion channels for ablation experiments')
     parser.add_argument('--calibrate', metavar='JSONL',
                         help='Build calibration table from labeled baseline JSONL and save to --cal-table')
     parser.add_argument('--cal-table', metavar='JSON',
@@ -332,7 +329,7 @@ def main():
     disabled_channels = set()
     if args.disable_channel:
         disabled_channels = {c.strip() for c in args.disable_channel.split(',')}
-        valid = {'prompt_structure', 'stylometric', 'continuation', 'windowed'}
+        valid = {'prompt_structure', 'stylometry', 'continuation', 'windowing'}
         invalid = disabled_channels - valid
         if invalid:
             print(f"WARNING: Unknown channel names: {invalid}. Valid: {valid}")

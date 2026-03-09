@@ -69,7 +69,7 @@ def collect_baselines(results, output_path):
             record = {k: r.get(k) for k in _BASELINE_FIELDS}
             record['attack_type'] = derive_attack_type(record)
             record['_timestamp'] = timestamp
-            record['_version'] = 'v0.65'
+            record['_version'] = 'v0.66'
             wc = r.get('word_count', 0)
             if wc < 100:
                 record['length_bin'] = 'short'

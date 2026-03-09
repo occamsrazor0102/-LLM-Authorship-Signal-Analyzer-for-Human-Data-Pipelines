@@ -162,8 +162,8 @@ def test_channel_ablation():
     # Disable all channels — should produce GREEN or REVIEW
     det3, _, _, cd3 = determine(0, 'NONE', prompt_sig, voice_dis, instr_density, 300,
                                  mode='task_prompt',
-                                 disabled_channels=['prompt_structure', 'stylometric',
-                                                    'continuation', 'windowed'])
+                                 disabled_channels=['prompt_structure', 'stylometry',
+                                                    'continuation', 'windowing'])
     check("All disabled -> GREEN/REVIEW", det3 in ('GREEN', 'REVIEW'), f"got {det3}")
     check("disabled_channels listed", len(cd3.get('disabled_channels', [])) == 4)
 
