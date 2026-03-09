@@ -47,10 +47,13 @@ jobs:
         include:
           - os: ubuntu-latest
             artifact: llm-detector-linux
+            ext: ""
           - os: macos-latest
             artifact: llm-detector-macos
+            ext: ""
           - os: windows-latest
             artifact: llm-detector-windows
+            ext: ".exe"
 
     runs-on: ${{ matrix.os }}
 
@@ -66,25 +69,37 @@ jobs:
           python -m pip install --upgrade pip
           pip install ".[bundle]"
 
-      - name: Build with PyInstaller
-        run: pyinstaller llm_detector.spec
+      - name: Build single-file executable
+        run: pyinstaller llm_detector.spec --noconfirm --clean
+        env:
+          ONEFILE: "1"
 
-      - name: Archive build (Unix)
+      - name: Verify executable exists (Unix)
         if: runner.os != 'Windows'
-        run: tar -czf ${{ matrix.artifact }}.tar.gz -C dist llm-detector
+        run: |
+          test -f dist/llm-detector || { echo "Build failed"; exit 1; }
+          file dist/llm-detector
 
-      - name: Archive build (Windows)
+      - name: Verify executable exists (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: Compress-Archive -Path dist/llm-detector -DestinationPath ${{ matrix.artifact }}.zip
+        run: |
+          if (-not (Test-Path dist/llm-detector.exe)) { Write-Error "Build failed"; exit 1 }
+          Get-Item dist/llm-detector.exe
 
-      - name: Upload artifact
+      - name: Upload artifact (Unix)
+        if: runner.os != 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: |
-            ${{ matrix.artifact }}.tar.gz
-            ${{ matrix.artifact }}.zip
+          path: dist/llm-detector
+
+      - name: Upload artifact (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/llm-detector.exe
 
   release:
     needs: build
@@ -96,11 +111,18 @@ jobs:
         with:
           merge-multiple: true
 
+      - name: Rename artifacts for release
+        run: |
+          mv llm-detector-linux/llm-detector  llm-detector-linux-x86_64    2>/dev/null || mv llm-detector llm-detector-linux-x86_64
+          mv llm-detector-macos/llm-detector  llm-detector-macos-x86_64    2>/dev/null || true
+          mv llm-detector-windows/llm-detector.exe llm-detector-windows-x86_64.exe 2>/dev/null || true
+        continue-on-error: true
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            llm-detector-linux.tar.gz
-            llm-detector-macos.tar.gz
-            llm-detector-windows.zip
+            llm-detector-linux-x86_64
+            llm-detector-macos-x86_64
+            llm-detector-windows-x86_64.exe
           generate_release_notes: true
