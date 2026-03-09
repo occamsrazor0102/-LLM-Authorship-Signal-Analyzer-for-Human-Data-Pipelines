@@ -10,7 +10,7 @@ Surprisal diversity features based on:
 
 import zlib
 
-from llm_detector.compat import HAS_PERPLEXITY, get_perplexity_model
+from llm_detector.compat import HAS_PERPLEXITY, get_perplexity_model, HAS_BINOCULARS, get_binoculars_model
 
 if HAS_PERPLEXITY:
     import torch as _torch
@@ -21,6 +21,7 @@ _PPL_EMPTY = {
     'surprisal_second_half_var': 0.0, 'volatility_decay_ratio': 1.0,
     'comp_ratio': 0.0, 'zlib_normalized_ppl': 0.0, 'comp_ppl_ratio': 0.0,
     'token_losses': None,
+    'binoculars_score': 0.0, 'binoculars_determination': None,
 }
 
 
@@ -51,6 +52,26 @@ def run_perplexity(text):
         loss = outputs.loss
 
     ppl = _torch.exp(loss).item()
+
+    # ── Binoculars: contrastive cross-model ratio ──
+    # Ref: Hans et al. (2024) "Spotting LLMs With Binoculars"
+    # Low ratio (performer/observer) indicates AI-generated text.
+    binoculars_score = 0.0
+    binoculars_det = None
+    if HAS_BINOCULARS:
+        try:
+            observer = get_binoculars_model()
+            if observer is not None:
+                with _torch.no_grad():
+                    obs_outputs = observer(input_ids, labels=input_ids)
+                    obs_ppl = _torch.exp(obs_outputs.loss).item()
+                binoculars_score = round(ppl / max(obs_ppl, 1e-6), 4)
+                if binoculars_score < 0.70:
+                    binoculars_det = 'AMBER'
+                elif binoculars_score < 0.85:
+                    binoculars_det = 'YELLOW'
+        except Exception:
+            pass  # Binoculars is supplementary; don't fail the analyzer
 
     # ── FEAT 7: Compression-perplexity divergence ──
     text_bytes = text.encode('utf-8')
@@ -154,4 +175,6 @@ def run_perplexity(text):
         'zlib_normalized_ppl': round(zlib_normalized_ppl, 2),
         'comp_ppl_ratio': round(comp_ppl_ratio, 4),
         'token_losses': token_losses_list,
+        'binoculars_score': binoculars_score,
+        'binoculars_determination': binoculars_det,
     }

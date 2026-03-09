@@ -35,7 +35,7 @@ def determine(preamble_score, preamble_severity, prompt_sig, voice_dis,
               instr_density=None, word_count=0,
               self_sim=None, cont_result=None, lang_gate=None, norm_report=None,
               mode='auto', fingerprint_score=0.0, semantic=None, ppl=None,
-              tocsin=None, **kwargs):
+              tocsin=None, disabled_channels=None, **kwargs):
     """Evidence fusion with channel-based corroboration.
 
     Returns (determination, reason, confidence, channel_details).
@@ -56,8 +56,17 @@ def determine(preamble_score, preamble_severity, prompt_sig, voice_dis,
         'channels': {ch.channel: {
             'score': ch.score, 'severity': ch.severity,
             'explanation': ch.explanation, 'mode_eligible': mode in ch.mode_eligibility,
+            'data_sufficient': ch.data_sufficient,
         } for ch in channels},
     }
+
+    # Channel ablation: remove disabled channels from fusion
+    _disabled = set(disabled_channels or [])
+    if _disabled:
+        for ch_name in _disabled:
+            if ch_name in channel_details['channels']:
+                channel_details['channels'][ch_name]['disabled'] = True
+        channels = [ch for ch in channels if ch.channel not in _disabled]
 
     # Fairness severity cap
     severity_cap = None
@@ -88,16 +97,16 @@ def determine(preamble_score, preamble_severity, prompt_sig, voice_dis,
         primary_channels = channels
         supporting_channels = []
 
-    # Evidence fusion
+    # Evidence fusion — only count channels with sufficient data for convergence
     all_active = sorted(
-        [ch for ch in channels if ch.severity != 'GREEN'],
+        [ch for ch in channels if ch.severity != 'GREEN' and ch.data_sufficient],
         key=lambda c: c.sev_level, reverse=True,
     )
     primary_active = sorted(
-        [ch for ch in primary_channels if ch.severity != 'GREEN'],
+        [ch for ch in primary_channels if ch.severity != 'GREEN' and ch.data_sufficient],
         key=lambda c: c.sev_level, reverse=True,
     )
-    support_active = [ch for ch in supporting_channels if ch.severity != 'GREEN']
+    support_active = [ch for ch in supporting_channels if ch.severity != 'GREEN' and ch.data_sufficient]
 
     n_red = sum(1 for ch in all_active if ch.severity == 'RED')
     n_amber_plus = sum(1 for ch in all_active if ch.sev_level >= 2)

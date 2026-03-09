@@ -17,7 +17,7 @@ _BASELINE_FIELDS = [
     'self_similarity_nssi_score', 'self_similarity_nssi_signals', 'self_similarity_determination',
     'continuation_bscore', 'continuation_determination',
     'self_similarity_sent_length_cv', 'self_similarity_comp_ratio', 'self_similarity_hapax_ratio',
-    'norm_obfuscation_delta', 'norm_invisible_chars', 'norm_homoglyphs',
+    'norm_obfuscation_delta', 'norm_invisible_chars', 'norm_homoglyphs', 'norm_attack_types',
     'lang_support_level', 'lang_fw_coverage', 'lang_non_latin_ratio',
     'ground_truth', 'language', 'domain', 'mode',
     'window_max_score', 'window_mean_score', 'window_variance',
@@ -33,6 +33,7 @@ _BASELINE_FIELDS = [
     'tocsin_cohesiveness', 'perplexity_zlib_normalized_ppl',
     'self_similarity_structural_compression_delta',
     'surprisal_trajectory_cv', 'surprisal_stationarity',
+    'binoculars_score',
 ]
 
 

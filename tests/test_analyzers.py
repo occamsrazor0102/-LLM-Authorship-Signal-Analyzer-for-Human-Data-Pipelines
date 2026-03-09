@@ -175,6 +175,28 @@ def test_perplexity_compound_signals():
               f"got type {type(r.get('token_losses'))}")
 
 
+def test_binoculars_fields():
+    print("\n-- BINOCULARS FIELDS --")
+    from llm_detector.compat import HAS_BINOCULARS
+
+    # Regardless of model availability, the fields should be present
+    r_short = run_perplexity("too short")
+    check("Short text: binoculars_score in result", 'binoculars_score' in r_short,
+          f"keys: {list(r_short.keys())}")
+    check("Short text: binoculars_determination in result", 'binoculars_determination' in r_short)
+    check("Short text: binoculars_score == 0", r_short['binoculars_score'] == 0.0)
+    check("Short text: binoculars_determination is None", r_short['binoculars_determination'] is None)
+
+    if HAS_BINOCULARS and HAS_PERPLEXITY:
+        r = run_perplexity(CLINICAL_TEXT)
+        check("Binoculars: score field present", 'binoculars_score' in r)
+        check("Binoculars: determination field present", 'binoculars_determination' in r)
+        check("Binoculars: score is numeric", isinstance(r['binoculars_score'], (int, float)),
+              f"got type {type(r['binoculars_score'])}")
+    else:
+        print("  (transformers not installed -- skipping binoculars model tests)")
+
+
 if __name__ == '__main__':
     print("=" * 70)
     print("Analyzer Tests")
@@ -186,6 +208,7 @@ if __name__ == '__main__':
     test_perplexity_compound_signals()
     test_cot_leakage()
     test_self_similarity_s13()
+    test_binoculars_fields()
 
     print(f"\n{'=' * 70}")
     print(f"RESULTS: {PASSED} passed, {FAILED} failed")
