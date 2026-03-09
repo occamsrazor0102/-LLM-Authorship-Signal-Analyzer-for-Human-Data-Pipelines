@@ -24,17 +24,15 @@ def test_cli_argparse_no_crash():
     import argparse
     # Importing main triggers the parser construction; a duplicate argument
     # definition would raise argparse.ArgumentError.
+    from unittest.mock import patch
     try:
         from llm_detector.cli import main
         # Trigger parser construction by calling with --help, capturing SystemExit
-        saved_argv = sys.argv
-        sys.argv = ['llm-detector', '--help']
-        try:
-            main()
-        except SystemExit:
-            pass
-        finally:
-            sys.argv = saved_argv
+        with patch('sys.argv', ['llm-detector', '--help']):
+            try:
+                main()
+            except SystemExit:
+                pass
         check("CLI parser constructed without errors", True)
     except argparse.ArgumentError as e:
         check("CLI parser constructed without errors", False, str(e))
