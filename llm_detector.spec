@@ -2,17 +2,22 @@
 """
 PyInstaller spec for LLM Detector Pipeline.
 
-Build with:
+Supports two build modes controlled by the ONEFILE environment variable:
+
+  Directory bundle (default):
     pyinstaller llm_detector.spec
 
-Or for a single-file executable:
-    pyinstaller llm_detector.spec --onefile
+  Single-file executable:
+    ONEFILE=1 pyinstaller llm_detector.spec          # Linux / macOS
+    $env:ONEFILE=1; pyinstaller llm_detector.spec     # PowerShell
 """
 
+import os
 import sys
 from PyInstaller.utils.hooks import collect_submodules
 
 block_cipher = None
+onefile = os.environ.get('ONEFILE', '0') == '1'
 
 # Collect all submodules of the package
 hiddenimports = collect_submodules('llm_detector')
@@ -44,26 +49,46 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
-exe = EXE(
-    pyz,
-    a.scripts,
-    [],
-    exclude_binaries=True,
-    name='llm-detector',
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    console=False,   # windowed mode — GUI opens by default
-)
+if onefile:
+    # ── Single-file executable ──────────────────────────────────────
+    exe = EXE(
+        pyz,
+        a.scripts,
+        a.binaries,
+        a.zipfiles,
+        a.datas,
+        [],
+        name='llm-detector',
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=True,
+        upx_exclude=[],
+        runtime_tmpdir=None,
+        console=True,
+    )
+else:
+    # ── Directory bundle (default) ──────────────────────────────────
+    exe = EXE(
+        pyz,
+        a.scripts,
+        [],
+        exclude_binaries=True,
+        name='llm-detector',
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=True,
+        console=False,   # windowed mode — GUI opens by default
+    )
 
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name='llm-detector',
-)
+    coll = COLLECT(
+        exe,
+        a.binaries,
+        a.zipfiles,
+        a.datas,
+        strip=False,
+        upx=True,
+        upx_exclude=[],
+        name='llm-detector',
+    )
