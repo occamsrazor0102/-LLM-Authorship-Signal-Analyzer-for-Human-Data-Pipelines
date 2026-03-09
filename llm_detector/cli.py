@@ -119,6 +119,9 @@ def main():
                         help='Write baseline percentile tables to CSV (use with --analyze-baselines)')
     parser.add_argument('--no-layer3', action='store_true',
                         help='Skip Layer 3 entirely (NSSI + DNA-GPT)')
+    parser.add_argument('--disable-channel', metavar='CHANNELS',
+                        help='Comma-separated channel names to disable for ablation: '
+                             'prompt_structure, stylometric, continuation, windowed')
     parser.add_argument('--api-key', metavar='KEY',
                         help='API key for DNA-GPT continuation analysis. Falls back to '
                              'ANTHROPIC_API_KEY or OPENAI_API_KEY env var.')
@@ -317,12 +320,24 @@ def main():
 
     run_l3 = not args.no_layer3
 
+    disabled_channels = set()
+    if args.disable_channel:
+        disabled_channels = {c.strip() for c in args.disable_channel.split(',')}
+        valid = {'prompt_structure', 'stylometric', 'continuation', 'windowed'}
+        invalid = disabled_channels - valid
+        if invalid:
+            print(f"WARNING: Unknown channel names: {invalid}. Valid: {valid}")
+            disabled_channels &= valid
+        if disabled_channels:
+            print(f"  Channels disabled (ablation): {', '.join(sorted(disabled_channels))}")
+
     if args.text:
         result = analyze_prompt(
             args.text, run_l3=run_l3,
             api_key=args.api_key, dna_provider=args.provider,
             dna_model=args.dna_model, dna_samples=args.dna_samples,
             mode=args.mode, cal_table=cal_table,
+            disabled_channels=disabled_channels,
         )
         print_result(result, verbose=True)
         return
@@ -374,6 +389,7 @@ def main():
             dna_samples=args.dna_samples,
             mode=args.mode,
             cal_table=cal_table,
+            disabled_channels=disabled_channels,
         )
         results.append(r)
         tid = task.get('task_id', f'_row{i}')

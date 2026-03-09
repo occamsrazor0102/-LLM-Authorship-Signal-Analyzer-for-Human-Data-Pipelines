@@ -26,7 +26,7 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
                    run_l3=True, api_key=None, dna_provider='anthropic',
                    dna_model=None, dna_samples=3,
                    ground_truth=None, language=None, domain=None,
-                   mode='auto', cal_table=None):
+                   mode='auto', cal_table=None, disabled_channels=None):
     """Run full v0.66 pipeline on a single prompt. Returns result dict."""
     # Normalization pre-pass
     normalized_text, norm_report = normalize_text(text)
@@ -104,6 +104,7 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         semantic=semantic, ppl=ppl,
         tocsin=tocsin,
         window_result=window_result,
+        disabled_channels=disabled_channels,
     )
 
     # Conformal calibration

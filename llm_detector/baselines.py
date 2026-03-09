@@ -18,6 +18,7 @@ _BASELINE_FIELDS = [
     'continuation_bscore', 'continuation_determination',
     'self_similarity_sent_length_cv', 'self_similarity_comp_ratio', 'self_similarity_hapax_ratio',
     'norm_obfuscation_delta', 'norm_invisible_chars', 'norm_homoglyphs',
+    'attack_type',
     'lang_support_level', 'lang_fw_coverage', 'lang_non_latin_ratio',
     'ground_truth', 'language', 'domain', 'mode',
     'window_max_score', 'window_mean_score', 'window_variance',
@@ -36,6 +37,27 @@ _BASELINE_FIELDS = [
 ]
 
 
+def derive_attack_type(record):
+    """Derive categorical attack_type from normalization fields."""
+    homoglyphs = record.get('norm_homoglyphs', 0) or 0
+    invisible = record.get('norm_invisible_chars', 0) or 0
+    delta = record.get('norm_obfuscation_delta', 0) or 0
+
+    tags = []
+    if homoglyphs > 0:
+        tags.append('homoglyph')
+    if invisible > 0:
+        tags.append('zero_width')
+    if delta >= 0.02 and not tags:
+        tags.append('encoding')
+
+    if len(tags) > 1:
+        return 'combined'
+    elif len(tags) == 1:
+        return tags[0]
+    return 'none'
+
+
 def collect_baselines(results, output_path):
     """Append scored results to JSONL file for baseline accumulation."""
     timestamp = datetime.now().isoformat()
@@ -44,6 +66,7 @@ def collect_baselines(results, output_path):
     with open(output_path, 'a') as f:
         for r in results:
             record = {k: r.get(k) for k in _BASELINE_FIELDS}
+            record['attack_type'] = derive_attack_type(record)
             record['_timestamp'] = timestamp
             record['_version'] = 'v0.65'
             wc = r.get('word_count', 0)
