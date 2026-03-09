@@ -100,6 +100,28 @@ Ten new signals added in v0.65, exploiting temporal uniformity and compressibili
 
 When baseline data is available, the pipeline applies conformal calibration to raw confidence scores. The `conformity_level` field indicates how typical a confidence score is among calibrated human-authored texts (1.0 = typical of human text, 0.01 = very unusual).
 
+### Short-Text Handling
+
+For texts under 100 words, many analyzers bail out (NSSI < 150w, continuation < 80w, perplexity < 50w, TOCSIN < 40w). The fusion layer detects when fewer than 2 channels can produce scores and relaxes multi-channel corroboration requirements with a 0.15 confidence penalty. This prevents short texts from always appearing GREEN simply because most channels couldn't run. The L0 CRITICAL path (preamble) is unaffected.
+
+### Channel Ablation
+
+For diagnostic and evaluation purposes, individual channels can be disabled:
+
+```bash
+# Disable stylometric and continuation channels
+python -m llm_detector --text "..." --disable-channel stylometric,continuation
+
+# Run prompt structure only
+python -m llm_detector input.xlsx --disable-channel stylometric,continuation,windowed
+```
+
+Disabled channels appear as GREEN no-ops in the audit trail. This is useful for measuring per-channel contribution to detection accuracy.
+
+### Attack-Type Tagging
+
+When collecting baseline data with `--collect`, the pipeline automatically derives an `attack_type` field from normalization signals: `homoglyph`, `zero_width`, `encoding`, `combined`, or `none`. This enables per-attack-type degradation analysis without changes to the detector itself.
+
 ## Package Structure
 
 ```
@@ -218,6 +240,7 @@ python -m llm_detector document.pdf
 | `--no-similarity` | Skip cross-submission similarity analysis |
 | `--similarity-threshold` | Jaccard threshold for similarity flagging (default: 0.40) |
 | `--no-layer3` | Skip continuation analysis entirely |
+| `--disable-channel CHANNELS` | Comma-separated channel names to disable for ablation (`prompt_structure`, `stylometric`, `continuation`, `windowed`) |
 | `--api-key` | API key for DNA-GPT continuation analysis |
 | `--provider` | LLM provider: `anthropic` or `openai` (default: anthropic) |
 | `--mode` | Detection mode: `task_prompt`, `generic_aigt`, or `auto` (default: auto) |
