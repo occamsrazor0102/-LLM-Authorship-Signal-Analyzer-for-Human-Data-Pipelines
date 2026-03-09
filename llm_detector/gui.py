@@ -378,6 +378,24 @@ class DetectorGUI:
         except ValueError:
             return 0.40
 
+    def _browse_sim_store(self):
+        path = filedialog.askopenfilename(
+            filetypes=[('JSONL', '*.jsonl'), ('All', '*.*')])
+        if path:
+            self.sim_store_var.set(path)
+
+    def _browse_instructions(self):
+        path = filedialog.askopenfilename(
+            filetypes=[('Text', '*.txt *.md'), ('All', '*.*')])
+        if path:
+            self.instructions_var.set(path)
+
+    def _browse_corpus(self):
+        path = filedialog.askopenfilename(
+            filetypes=[('JSONL', '*.jsonl'), ('All', '*.*')])
+        if path:
+            self.corpus_path_var.set(path)
+
     def _clear_output(self):
         self.output.delete('1.0', tk.END)
         self.status_var.set('Ready')
@@ -548,6 +566,13 @@ class DetectorGUI:
             if ct > 0 or det in ('RED', 'AMBER', 'YELLOW', 'GREEN'):
                 parts.append(f"{det}={ct}")
         self._append(f"\nSummary: {' | '.join(parts)}\n", 'HEADER')
+
+        # Load instruction text for similarity baseline
+        instruction_text = None
+        instr_path = self.instructions_var.get().strip()
+        if instr_path and os.path.exists(instr_path):
+            with open(instr_path, 'r') as f:
+                instruction_text = f.read()
 
         # Similarity analysis
         if not self.no_similarity_var.get() and len(results) >= 2:
