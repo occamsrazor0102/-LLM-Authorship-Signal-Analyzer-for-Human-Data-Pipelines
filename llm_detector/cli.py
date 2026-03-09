@@ -140,9 +140,6 @@ def main():
     parser.add_argument('--mode', default='auto', choices=['task_prompt', 'generic_aigt', 'auto'],
                         help='Detection mode: task_prompt (prompt-structure primary), '
                              'generic_aigt (all channels), auto (heuristic). Default: auto')
-    parser.add_argument('--disable-channel', nargs='+', default=[],
-                        choices=['prompt_structure', 'stylometry', 'continuation', 'windowing'],
-                        help='Disable specific fusion channels for ablation experiments')
     parser.add_argument('--calibrate', metavar='JSONL',
                         help='Build calibration table from labeled baseline JSONL and save to --cal-table')
     parser.add_argument('--cal-table', metavar='JSON',
