@@ -53,3 +53,42 @@ llm-detector-gui = "llm_detector.cli:main_gui"
 
 [tool.setuptools.packages.find]
 include = ["llm_detector*"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+addopts = [
+    "--verbose",
+    "--strict-markers",
+    "--tb=short",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "gpu: marks tests that require GPU",
+    "network: marks tests that require network access",
+    "ml: marks tests that require ML dependencies (transformers, sentence-transformers)",
+]
+
+[tool.coverage.run]
+source = ["llm_detector"]
+omit = [
+    "llm_detector/__main__.py",
+    "llm_detector/gui.py",
+    "llm_detector/dashboard.py",
+]
+
+[tool.coverage.report]
+fail_under = 60
+precision = 2
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]
