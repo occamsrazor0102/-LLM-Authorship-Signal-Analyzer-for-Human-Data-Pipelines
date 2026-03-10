@@ -24,7 +24,9 @@ chmod +x llm-detector-macos-arm64   # or the variant you downloaded
 **Windows — run from PowerShell or Command Prompt:**
 ```
 .\llm-detector-windows-x86_64.exe --text "Your prompt here"
-``` Designed for quality assurance in benchmark construction (GDPval-style evaluation tasks), clinical education assessments, and any pipeline where humans are expected to author original prompts but may submit LLM-generated content instead.
+```
+
+Designed for quality assurance in benchmark construction (GDPval-style evaluation tasks), clinical education assessments, and any pipeline where humans are expected to author original prompts but may submit LLM-generated content instead.
 
 ### Monolith Repo Only
 
@@ -306,7 +308,6 @@ llm_detector/                  # Main package
     baselines.py               # Baseline collection and analysis
     similarity.py              # Cross-submission similarity
     memory.py                  # BEET memory store + ML tools
-    memory.py                  # BEET historical memory store
     io.py                      # File I/O (XLSX, CSV, PDF)
     cli.py                     # Command-line interface
     gui.py                     # Desktop GUI
@@ -438,9 +439,6 @@ python -m llm_detector document.pdf
 | `--memory-summary` | Print memory store summary |
 | `--confirm TASK_ID LABEL REVIEWER` | Record ground truth confirmation |
 | `--attempter-history NAME` | Show historical profile for an attempter |
-| `--memory DIR` | Path to BEET memory store directory (enables cross-batch memory) |
-| `--confirm TASK_ID LABEL` | Record a confirmed ground-truth label (`ai` or `human`) |
-| `--attempter-history NAME` | Show submission history for an attempter |
 | `--risk-report` | Show attempter risk rankings |
 | `--rebuild-calibration` | Rebuild calibration table from confirmed labels |
 | `--rebuild-shadow` | Rebuild shadow model from confirmed labels |
@@ -448,12 +446,10 @@ python -m llm_detector document.pdf
 | `--rebuild-centroids` | Rebuild semantic centroids from confirmed labels |
 | `--rebuild-all` | Rebuild all learned artifacts at once |
 | `--labeled-corpus JSONL` | Path to JSONL with raw text (for lexicon/centroid tools) |
-| `--rebuild-all` | Rebuild all learned artifacts (calibration, shadow model, centroids, lexicon) |
-| `--labeled-corpus JSONL` | Path to JSONL with raw text (required for `--discover-lexicon` and `--rebuild-centroids`) |
 
 ### Memory System (BEET)
 
-The BEET (Behavioral Evidence & Evaluation Tracker) memory system enables cross-batch learning by persisting submissions, fingerprints, and attempter profiles across pipeline runs.
+See the [Memory System (BEET)](#memory-system-beet) section above for full documentation on the BEET store, ML tools, attempter risk tiers, and store file reference.
 
 ```bash
 # Run with memory enabled
@@ -468,38 +464,6 @@ python -m llm_detector --memory .beet/ --risk-report
 
 # Rebuild all learned artifacts from confirmed labels
 python -m llm_detector --memory .beet/ --rebuild-all --labeled-corpus texts.jsonl
-```
-
-#### ML Tools
-
-Three learning tools operate on confirmed labels to produce artifacts for human review:
-
-| Tool | Command | Description |
-|------|---------|-------------|
-| **Shadow Model** | `--rebuild-shadow` | L1-penalized logistic regression trained on confirmed labels. Runs alongside the rule engine and flags disagreements (blind spots or false positives). Requires >= 200 confirmed labels. |
-| **Lexicon Discovery** | `--discover-lexicon` | Smoothed log-odds (Monroe et al. 2008) to find AI-associated vocabulary from labeled text. Outputs ranked candidates CSV for human review. |
-| **Centroid Rebuilder** | `--rebuild-centroids` | Recomputes AI/human semantic centroids from confirmed text, replacing hardcoded archetypes with data-driven centroids (with k-means sub-clustering). |
-
-The shadow model and calibration work from scalar features stored in `submissions.jsonl` — they don't need raw text. Centroids and lexicon discovery require `--labeled-corpus` pointing to a JSONL file with `{"task_id": "...", "text": "..."}` entries.
-
-#### Memory Store Directory
-
-```
-.beet/
-├── config.json                # Store metadata and statistics
-├── submissions.jsonl          # All scored submissions with features
-├── fingerprints.jsonl         # MinHash fingerprints for similarity
-├── attempters.jsonl           # Attempter risk profiles
-├── confirmed.jsonl            # Human-confirmed ground truth labels
-├── calibration.json           # Empirical calibration table
-├── calibration_history/       # Versioned calibration snapshots
-├── shadow_model.pkl           # Trained shadow classifier
-├── shadow_disagreements.jsonl # Logged rule/model disagreements
-├── centroids/                 # Versioned semantic centroids
-│   ├── centroids_latest.npz
-│   └── centroids_v20260307.npz
-└── lexicon_discovery/         # Lexicon candidate outputs
-    └── candidates_2026-03-07.csv
 ```
 
 ### Python API
@@ -570,7 +534,7 @@ disagreement = store.check_shadow_disagreement(result)
 
 ```bash
 # Run all tests:
-for f in tests/test_*.py; do python "$f"; done
+pytest -q
 
 # Individual test files:
 python tests/test_pipeline.py
@@ -581,10 +545,14 @@ python tests/test_windowed.py
 python tests/test_token_cohesiveness.py
 python tests/test_fusion.py
 python tests/test_normalize.py
-python tests/test_memory.py
 python tests/test_similarity.py
 python tests/test_reporting.py
 python tests/test_html_report.py
+python tests/test_calibration.py
+python tests/test_lexicon.py
+python tests/test_preamble_cot.py
+python tests/test_xray_spans.py
+python tests/test_cli.py
 ```
 
 ## Design Principles
@@ -612,7 +580,7 @@ python tests/test_html_report.py
 | v0.65a | Continuation/windowed/compressibility features |
 | v0.65b | Enhanced similarity (adaptive, semantic, cross-batch) |
 | v0.66 | Span annotation, attempter profiling, reporting, HTML |
-| **v0.67** | **Memory system + ML tools (shadow model, lexicon discovery, centroids)** |
+| **v0.67** ✓ | **Memory system + ML tools (shadow model, lexicon discovery, centroids)** |
 
 ## License
 
