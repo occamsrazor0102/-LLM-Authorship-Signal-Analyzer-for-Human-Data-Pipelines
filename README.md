@@ -311,6 +311,7 @@ llm_detector/                  # Main package
     io.py                      # File I/O (XLSX, CSV, PDF)
     cli.py                     # Command-line interface
     gui.py                     # Desktop GUI
+    dashboard.py               # Streamlit web dashboard
     html_report.py             # HTML report generation
     reporting.py               # Report formatting
 
@@ -403,6 +404,29 @@ python -m llm_detector --gui
 
 The desktop interface uses a dashboard-style layout (tabbed workspace, card sections, top-line KPI metrics in the Analysis tab, and improved visual hierarchy) so it feels closer to a modern analytics UI while keeping the existing Tkinter workflow and features.
 
+### Web GUI (Streamlit)
+
+Install Streamlit first if you haven't already:
+
+```bash
+pip install streamlit
+```
+
+Then launch the web dashboard with any of the following:
+
+```bash
+# Via the dedicated entry point (recommended after pip install)
+llm-detector-dashboard
+
+# Via the --web flag on the main CLI
+python -m llm_detector --web
+
+# Direct Streamlit invocation
+streamlit run llm_detector/dashboard.py
+```
+
+The web dashboard opens in your browser and provides the same five pages as the desktop GUI (Analysis, Configuration, Memory & Learning, Calibration, Reports), without requiring a local display.
+
 ### File Mode (XLSX/CSV/PDF)
 
 ```bash
@@ -417,6 +441,7 @@ python -m llm_detector document.pdf
 |------|-------------|
 | `--text` | Analyze a single text string |
 | `--gui` | Launch desktop GUI mode |
+| `--web` | Launch Streamlit web dashboard |
 | `--sheet` | Sheet name for XLSX files |
 | `--prompt-col` | Column name containing prompts (default: "prompt") |
 | `--verbose`, `-v` | Show all layer details for every result |

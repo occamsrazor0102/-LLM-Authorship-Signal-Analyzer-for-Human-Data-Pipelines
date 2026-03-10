@@ -605,6 +605,7 @@ def main():
     parser = argparse.ArgumentParser(description='LLM Detection Pipeline v0.66')
     parser.add_argument('input', nargs='?', help='Input file (.xlsx, .csv, or .pdf)')
     parser.add_argument('--gui', action='store_true', help='Launch desktop GUI mode')
+    parser.add_argument('--web', action='store_true', help='Launch Streamlit web dashboard')
     parser.add_argument('--text', help='Analyze a single text string')
     parser.add_argument('--sheet', help='Sheet name for xlsx files')
     parser.add_argument('--prompt-col', default='prompt', help='Column name containing prompts')
@@ -702,6 +703,10 @@ def main():
     if args.gui:
         from llm_detector.gui import launch_gui
         launch_gui()
+        return
+
+    if args.web:
+        main_dashboard()
         return
 
     # Memory store setup
@@ -1158,6 +1163,26 @@ def main_gui():
     """Entry point that always launches the GUI (for gui-scripts / executable)."""
     from llm_detector.gui import launch_gui
     launch_gui()
+
+
+def main_dashboard():
+    """Entry point that launches the Streamlit web dashboard."""
+    import subprocess
+    import importlib.util
+    import shutil
+
+    if shutil.which('streamlit') is None:
+        print('ERROR: streamlit is not installed or not in PATH.')
+        print('Install it with: pip install streamlit')
+        return
+
+    spec = importlib.util.find_spec('llm_detector.dashboard')
+    if spec is None or spec.origin is None:
+        print('ERROR: llm_detector.dashboard module not found.')
+        print('Ensure the llm_detector package is properly installed.')
+        return
+    dashboard_path = spec.origin
+    subprocess.run(['streamlit', 'run', dashboard_path], check=False)
 
 
 if __name__ == '__main__':
