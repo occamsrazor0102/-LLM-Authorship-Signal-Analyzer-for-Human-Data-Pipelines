@@ -91,17 +91,17 @@ pyinstaller llm_detector.spec --noconfirm --clean
 
 ## What's included in the executable
 
-The standalone exe bundles **core features** (all built-in analyzers, lexicon packs, CLI, and GUI). Optional heavyweight dependencies (spaCy, PyTorch, sentence-transformers) are included only if they are installed at build time.
+The standalone exe bundles **all features** — built-in analyzers, lexicon packs, CLI, GUI, and all optional NLP dependencies (spaCy, sentence-transformers, scikit-learn, ftfy, PyTorch/transformers, Anthropic/OpenAI API clients, and pypdf).
 
-To build a **minimal** exe (smallest size):
+To build the **standard** exe (all features, recommended):
 ```bash
-pip install pyinstaller pandas openpyxl
+pip install ".[bundle]"
 ONEFILE=1 pyinstaller llm_detector.spec --noconfirm --clean
 ```
 
-To build a **full-featured** exe:
+To build a **minimal** exe (smallest size, core features only):
 ```bash
-pip install ".[all,bundle]"
+pip install pyinstaller pandas openpyxl
 ONEFILE=1 pyinstaller llm_detector.spec --noconfirm --clean
 ```
 

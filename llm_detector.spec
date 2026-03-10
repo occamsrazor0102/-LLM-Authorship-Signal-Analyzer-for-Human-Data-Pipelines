@@ -14,13 +14,14 @@ Supports two build modes controlled by the ONEFILE environment variable:
 
 import os
 import sys
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 
 block_cipher = None
 onefile = os.environ.get('ONEFILE', '0') == '1'
 
 # Collect all submodules of the package
 hiddenimports = collect_submodules('llm_detector')
+datas = []
 
 # Optional deps — include if installed, skip gracefully if not
 for mod in ['anthropic', 'openai', 'pypdf', 'spacy', 'ftfy',
@@ -28,6 +29,18 @@ for mod in ['anthropic', 'openai', 'pypdf', 'spacy', 'ftfy',
     try:
         __import__(mod)
         hiddenimports += collect_submodules(mod)
+        datas += collect_data_files(mod)
+    except ImportError:
+        pass
+
+# spaCy companion libraries — needed for the bundled sentencizer
+for mod in ['thinc', 'blis', 'cymem', 'preshed', 'murmurhash',
+            'srsly', 'catalogue', 'confection', 'weasel', 'wasabi',
+            'langcodes', 'language_data']:
+    try:
+        __import__(mod)
+        hiddenimports += collect_submodules(mod)
+        datas += collect_data_files(mod)
     except ImportError:
         pass
 
@@ -35,7 +48,7 @@ a = Analysis(
     ['llm_detector/__main__.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
