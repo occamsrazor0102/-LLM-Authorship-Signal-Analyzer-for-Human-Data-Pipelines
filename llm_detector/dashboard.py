@@ -41,6 +41,8 @@ _DET_EMOJI = {
 
 _CHANNELS = ["prompt_structure", "stylometry", "continuation", "windowing"]
 
+# Maximum number of preamble patterns shown in verbose output to avoid overflow.
+_MAX_PREAMBLE_PATTERNS = 20
 
 def _det_badge(det: str) -> str:
     """Return a colored markdown badge for a determination."""
@@ -476,28 +478,226 @@ def _page_analysis():
                             hide_index=True,
                         )
 
-                # Verbose details
+                # Verbose details — full sub-signal breakdown
                 if verbose:
-                    with st.expander("Verbose Details"):
-                        vcols = {
-                            "Preamble": f"{r.get('preamble_score', 0):.2f} ({r.get('preamble_severity', '-')})",
-                            "Fingerprints": f"{r.get('fingerprint_score', 0):.2f} ({r.get('fingerprint_hits', 0)} hits)",
-                            "PromptSig": (
-                                f"composite={r.get('prompt_signature_composite', 0):.2f} "
-                                f"CFD={r.get('prompt_signature_cfd', 0):.3f}"
-                            ),
-                            "IDI": f"{r.get('instruction_density_idi', 0):.1f}",
-                            "VSD": f"{r.get('voice_dissonance_vsd', 0):.1f}",
-                        }
-                        for k, v in vcols.items():
-                            st.text(f"{k}: {v}")
+                    with st.expander("\U0001f9ea Full Sub-Signal Breakdown", expanded=True):
+                        # ── Normalization & Language Gate ──────────────
+                        st.markdown("**🔤 Normalization & Language Gate**")
+                        norm_data = [
+                            {"Signal": "Obfuscation delta", "Value": f"{r.get('norm_obfuscation_delta', 0):.1%}"},
+                            {"Signal": "Invisible chars", "Value": str(r.get('norm_invisible_chars', 0))},
+                            {"Signal": "Homoglyphs", "Value": str(r.get('norm_homoglyphs', 0))},
+                            {"Signal": "Language support", "Value": r.get('lang_support_level', 'SUPPORTED')},
+                            {"Signal": "Function-word coverage", "Value": f"{r.get('lang_fw_coverage', 0):.3f}"},
+                            {"Signal": "Non-Latin ratio", "Value": f"{r.get('lang_non_latin_ratio', 0):.3f}"},
+                        ]
+                        attacks = r.get("norm_attack_types", [])
+                        if attacks:
+                            norm_data.append({"Signal": "Attack types neutralized", "Value": ", ".join(attacks)})
+                        st.dataframe(pd.DataFrame(norm_data), use_container_width=True, hide_index=True)
 
-                        bscore = r.get("continuation_bscore", 0)
-                        if bscore > 0:
-                            st.text(
-                                f"DNA-GPT: BScore={bscore:.4f} "
-                                f"(det={r.get('continuation_determination', 'n/a')})"
-                            )
+                        # ── Preamble ───────────────────────────────────
+                        st.markdown("**📋 Preamble**")
+                        pre_data = [
+                            {"Signal": "Score", "Value": f"{r.get('preamble_score', 0):.3f}"},
+                            {"Signal": "Severity", "Value": r.get('preamble_severity', '-')},
+                            {"Signal": "Matched patterns", "Value": str(r.get('preamble_hits', 0))},
+                        ]
+                        st.dataframe(pd.DataFrame(pre_data), use_container_width=True, hide_index=True)
+                        preamble_details = r.get("preamble_details", [])
+                        if preamble_details:
+                            st.caption("Matched preamble patterns: " + ", ".join(str(p) for p in preamble_details[:_MAX_PREAMBLE_PATTERNS]))
+
+                        # ── Fingerprint ────────────────────────────────
+                        st.markdown("**🔍 Fingerprint**")
+                        fp_data = [
+                            {"Signal": "Score", "Value": f"{r.get('fingerprint_score', 0):.3f}"},
+                            {"Signal": "Hits", "Value": str(r.get('fingerprint_hits', 0))},
+                        ]
+                        st.dataframe(pd.DataFrame(fp_data), use_container_width=True, hide_index=True)
+
+                        # ── Prompt Signature ───────────────────────────
+                        st.markdown("**✍️ Prompt Signature**")
+                        ps_data = [
+                            {"Signal": "Composite", "Value": f"{r.get('prompt_signature_composite', 0):.3f}"},
+                            {"Signal": "CFD (constraint-frame density)", "Value": f"{r.get('prompt_signature_cfd', 0):.4f}"},
+                            {"Signal": "MFSR (meta-frame score ratio)", "Value": f"{r.get('prompt_signature_mfsr', 0):.3f}"},
+                            {"Signal": "Distinct frames", "Value": str(r.get('prompt_signature_distinct_frames', 0))},
+                            {"Signal": "Framing completeness (0-3)", "Value": str(r.get('prompt_signature_framing', 0))},
+                            {"Signal": "Conditional density", "Value": f"{r.get('prompt_signature_conditional_density', 0):.4f}"},
+                            {"Signal": "Meta-design hits", "Value": str(r.get('prompt_signature_meta_design', 0))},
+                            {"Signal": "Contractions", "Value": str(r.get('prompt_signature_contractions', 0))},
+                            {"Signal": "Must-rate", "Value": f"{r.get('prompt_signature_must_rate', 0):.4f}"},
+                            {"Signal": "Numbered criteria", "Value": str(r.get('prompt_signature_numbered_criteria', 0))},
+                        ]
+                        st.dataframe(pd.DataFrame(ps_data), use_container_width=True, hide_index=True)
+
+                        # ── Instruction Density (IDI) ──────────────────
+                        st.markdown("**📐 Instruction Density (IDI)**")
+                        idi_data = [
+                            {"Signal": "IDI score", "Value": f"{r.get('instruction_density_idi', 0):.2f}"},
+                            {"Signal": "Imperatives", "Value": str(r.get('instruction_density_imperatives', 0))},
+                            {"Signal": "Conditionals", "Value": str(r.get('instruction_density_conditionals', 0))},
+                            {"Signal": "Binary specs (Y/N)", "Value": str(r.get('instruction_density_binary_specs', 0))},
+                            {"Signal": "Missing refs", "Value": str(r.get('instruction_density_missing_refs', 0))},
+                            {"Signal": "Flag count", "Value": str(r.get('instruction_density_flag_count', 0))},
+                        ]
+                        st.dataframe(pd.DataFrame(idi_data), use_container_width=True, hide_index=True)
+
+                        # ── Voice Dissonance (VSD) ─────────────────────
+                        st.markdown("**🎭 Voice Dissonance (VSD)**")
+                        vsd_data = [
+                            {"Signal": "VSD score", "Value": f"{r.get('voice_dissonance_vsd', 0):.2f}"},
+                            {"Signal": "Voice score", "Value": f"{r.get('voice_dissonance_voice_score', 0):.2f}"},
+                            {"Signal": "Spec score", "Value": f"{r.get('voice_dissonance_spec_score', 0):.2f}"},
+                            {"Signal": "Voice gated", "Value": str(r.get('voice_dissonance_voice_gated', False))},
+                            {"Signal": "Casual markers", "Value": str(r.get('voice_dissonance_casual_markers', 0))},
+                            {"Signal": "Misspellings", "Value": str(r.get('voice_dissonance_misspellings', 0))},
+                            {"Signal": "CamelCase cols", "Value": str(r.get('voice_dissonance_camel_cols', 0))},
+                            {"Signal": "Calculations", "Value": str(r.get('voice_dissonance_calcs', 0))},
+                            {"Signal": "Hedges", "Value": str(r.get('voice_dissonance_hedges', 0))},
+                            {"Signal": "SSI triggered", "Value": str(r.get('ssi_triggered', False))},
+                        ]
+                        st.dataframe(pd.DataFrame(vsd_data), use_container_width=True, hide_index=True)
+
+                        # ── Pack Diagnostics ───────────────────────────
+                        st.markdown("**📦 Pack Diagnostics**")
+                        pack_data = [
+                            {"Signal": "Constraint score", "Value": f"{r.get('pack_constraint_score', 0):.4f}"},
+                            {"Signal": "Exec-spec score", "Value": f"{r.get('pack_exec_spec_score', 0):.4f}"},
+                            {"Signal": "Schema score", "Value": f"{r.get('pack_schema_score', 0):.4f}"},
+                            {"Signal": "Active families", "Value": str(r.get('pack_active_families', 0))},
+                            {"Signal": "Prompt boost", "Value": f"{r.get('pack_prompt_boost', 0):.4f}"},
+                            {"Signal": "IDI boost", "Value": f"{r.get('pack_idi_boost', 0):.4f}"},
+                        ]
+                        st.dataframe(pd.DataFrame(pack_data), use_container_width=True, hide_index=True)
+
+                        # ── Stylometry ─────────────────────────────────
+                        st.markdown("**🖊️ Stylometry**")
+                        stylo_data = [
+                            {"Signal": "Function-word ratio", "Value": f"{r.get('stylo_fw_ratio', 0):.4f}"},
+                            {"Signal": "Sentence length dispersion", "Value": f"{r.get('stylo_sent_dispersion', 0):.4f}"},
+                            {"Signal": "Type-token ratio (TTR)", "Value": f"{r.get('stylo_ttr', 0):.4f}"},
+                            {"Signal": "Avg word length", "Value": f"{r.get('stylo_avg_word_len', 0):.3f}"},
+                            {"Signal": "Short-word ratio", "Value": f"{r.get('stylo_short_word_ratio', 0):.4f}"},
+                            {"Signal": "Masked topical tokens", "Value": str(r.get('stylo_mask_count', 0))},
+                        ]
+                        st.dataframe(pd.DataFrame(stylo_data), use_container_width=True, hide_index=True)
+
+                        # ── Windowing ──────────────────────────────────
+                        st.markdown("**🪟 Windowing**")
+                        win_data = [
+                            {"Signal": "Max window score", "Value": f"{r.get('window_max_score', 0):.4f}"},
+                            {"Signal": "Mean window score", "Value": f"{r.get('window_mean_score', 0):.4f}"},
+                            {"Signal": "Window variance", "Value": f"{r.get('window_variance', 0):.4f}"},
+                            {"Signal": "Hot-span length", "Value": str(r.get('window_hot_span', 0))},
+                            {"Signal": "N windows", "Value": str(r.get('window_n_windows', 0))},
+                            {"Signal": "Mixed signal", "Value": str(r.get('window_mixed_signal', False))},
+                            {"Signal": "FW trajectory CV", "Value": f"{r.get('window_fw_trajectory_cv', 0):.4f}"},
+                            {"Signal": "Comp trajectory mean", "Value": f"{r.get('window_comp_trajectory_mean', 0):.4f}"},
+                            {"Signal": "Comp trajectory CV", "Value": f"{r.get('window_comp_trajectory_cv', 0):.4f}"},
+                            {"Signal": "Changepoint", "Value": str(r.get('window_changepoint') or 'none')},
+                        ]
+                        st.dataframe(pd.DataFrame(win_data), use_container_width=True, hide_index=True)
+
+                        # ── Self-Similarity (NSSI) ─────────────────────
+                        st.markdown("**🔁 Self-Similarity (NSSI)**")
+                        nssi_data = [
+                            {"Signal": "NSSI score", "Value": f"{r.get('self_similarity_nssi_score', 0):.4f}"},
+                            {"Signal": "NSSI signals", "Value": str(r.get('self_similarity_nssi_signals', 0))},
+                            {"Signal": "Determination", "Value": str(r.get('self_similarity_determination') or 'n/a')},
+                            {"Signal": "Confidence", "Value": f"{r.get('self_similarity_confidence', 0):.3f}"},
+                            {"Signal": "Formulaic density", "Value": f"{r.get('self_similarity_formulaic_density', 0):.4f}"},
+                            {"Signal": "Power-adj density", "Value": f"{r.get('self_similarity_power_adj_density', 0):.4f}"},
+                            {"Signal": "Demonstrative density", "Value": f"{r.get('self_similarity_demonstrative_density', 0):.4f}"},
+                            {"Signal": "Transition density", "Value": f"{r.get('self_similarity_transition_density', 0):.4f}"},
+                            {"Signal": "Scare-quote density", "Value": f"{r.get('self_similarity_scare_quote_density', 0):.4f}"},
+                            {"Signal": "Em-dash density", "Value": f"{r.get('self_similarity_emdash_density', 0):.4f}"},
+                            {"Signal": "This/the start rate", "Value": f"{r.get('self_similarity_this_the_start_rate', 0):.4f}"},
+                            {"Signal": "Section depth", "Value": str(r.get('self_similarity_section_depth', 0))},
+                            {"Signal": "Sent length CV", "Value": f"{r.get('self_similarity_sent_length_cv', 0):.4f}"},
+                            {"Signal": "Comp ratio", "Value": f"{r.get('self_similarity_comp_ratio', 0):.4f}"},
+                            {"Signal": "Hapax ratio", "Value": f"{r.get('self_similarity_hapax_ratio', 0):.4f}"},
+                            {"Signal": "Hapax count", "Value": str(r.get('self_similarity_hapax_count', 0))},
+                            {"Signal": "Unique words", "Value": str(r.get('self_similarity_unique_words', 0))},
+                            {"Signal": "Shuffled comp ratio", "Value": f"{r.get('self_similarity_shuffled_comp_ratio', 0):.4f}"},
+                            {"Signal": "Structural compression delta", "Value": f"{r.get('self_similarity_structural_compression_delta', 0):.4f}"},
+                        ]
+                        st.dataframe(pd.DataFrame(nssi_data), use_container_width=True, hide_index=True)
+
+                        # ── Continuation / DNA-GPT ─────────────────────
+                        st.markdown("**🧬 Continuation (DNA-GPT)**")
+                        cont_data = [
+                            {"Signal": "B-score", "Value": f"{r.get('continuation_bscore', 0):.4f}"},
+                            {"Signal": "B-score max", "Value": f"{r.get('continuation_bscore_max', 0):.4f}"},
+                            {"Signal": "Determination", "Value": str(r.get('continuation_determination') or 'n/a')},
+                            {"Signal": "Confidence", "Value": f"{r.get('continuation_confidence', 0):.3f}"},
+                            {"Signal": "N samples", "Value": str(r.get('continuation_n_samples', 0))},
+                            {"Signal": "Mode", "Value": str(r.get('continuation_mode') or 'n/a')},
+                            {"Signal": "NCD", "Value": f"{r.get('continuation_ncd', 0):.4f}"},
+                            {"Signal": "Internal overlap", "Value": f"{r.get('continuation_internal_overlap', 0):.4f}"},
+                            {"Signal": "Cond surprisal", "Value": f"{r.get('continuation_cond_surprisal', 0):.4f}"},
+                            {"Signal": "Repeat-4 rate", "Value": f"{r.get('continuation_repeat4', 0):.4f}"},
+                            {"Signal": "TTR (continuation)", "Value": f"{r.get('continuation_ttr', 0):.4f}"},
+                            {"Signal": "Composite", "Value": f"{r.get('continuation_composite', 0):.4f}"},
+                            {"Signal": "Composite variance", "Value": f"{r.get('continuation_composite_variance', 0):.4f}"},
+                            {"Signal": "Composite stability", "Value": f"{r.get('continuation_composite_stability', 0):.4f}"},
+                            {"Signal": "Improvement rate", "Value": f"{r.get('continuation_improvement_rate', 0):.4f}"},
+                            {"Signal": "NCD matrix mean", "Value": f"{r.get('continuation_ncd_matrix_mean', 0):.4f}"},
+                            {"Signal": "NCD matrix variance", "Value": f"{r.get('continuation_ncd_matrix_variance', 0):.4f}"},
+                            {"Signal": "NCD matrix min", "Value": f"{r.get('continuation_ncd_matrix_min', 0):.4f}"},
+                        ]
+                        st.dataframe(pd.DataFrame(cont_data), use_container_width=True, hide_index=True)
+
+                        # ── Perplexity ─────────────────────────────────
+                        st.markdown("**📊 Perplexity**")
+                        ppl_data = [
+                            {"Signal": "Perplexity value", "Value": f"{r.get('perplexity_value', 0):.3f}"},
+                            {"Signal": "Determination", "Value": str(r.get('perplexity_determination') or 'n/a')},
+                            {"Signal": "Confidence", "Value": f"{r.get('perplexity_confidence', 0):.3f}"},
+                            {"Signal": "Surprisal variance", "Value": f"{r.get('surprisal_variance', 0):.4f}"},
+                            {"Signal": "Surprisal var (first half)", "Value": f"{r.get('surprisal_first_half_var', 0):.4f}"},
+                            {"Signal": "Surprisal var (second half)", "Value": f"{r.get('surprisal_second_half_var', 0):.4f}"},
+                            {"Signal": "Volatility decay ratio", "Value": f"{r.get('volatility_decay_ratio', 1):.4f}"},
+                            {"Signal": "Binoculars score", "Value": f"{r.get('binoculars_score', 0):.4f}"},
+                            {"Signal": "Binoculars determination", "Value": str(r.get('binoculars_determination') or 'n/a')},
+                            {"Signal": "Comp ratio", "Value": f"{r.get('perplexity_comp_ratio', 0):.4f}"},
+                            {"Signal": "zlib-normalised PPL", "Value": f"{r.get('perplexity_zlib_normalized_ppl', 0):.4f}"},
+                            {"Signal": "Comp/PPL ratio", "Value": f"{r.get('perplexity_comp_ppl_ratio', 0):.4f}"},
+                        ]
+                        st.dataframe(pd.DataFrame(ppl_data), use_container_width=True, hide_index=True)
+
+                        # ── Surprisal Trajectory ───────────────────────
+                        st.markdown("**📈 Surprisal Trajectory**")
+                        traj_data = [
+                            {"Signal": "Trajectory CV", "Value": f"{r.get('surprisal_trajectory_cv', 0):.4f}"},
+                            {"Signal": "Var-of-var", "Value": f"{r.get('surprisal_var_of_var', 0):.4f}"},
+                            {"Signal": "Stationarity", "Value": f"{r.get('surprisal_stationarity', 0):.4f}"},
+                        ]
+                        st.dataframe(pd.DataFrame(traj_data), use_container_width=True, hide_index=True)
+
+                        # ── TOCSIN ─────────────────────────────────────
+                        st.markdown("**🔔 TOCSIN (Token Cohesiveness)**")
+                        toc_data = [
+                            {"Signal": "Cohesiveness", "Value": f"{r.get('tocsin_cohesiveness', 0):.4f}"},
+                            {"Signal": "Cohesiveness std", "Value": f"{r.get('tocsin_cohesiveness_std', 0):.4f}"},
+                            {"Signal": "Determination", "Value": str(r.get('tocsin_determination') or 'n/a')},
+                            {"Signal": "Confidence", "Value": f"{r.get('tocsin_confidence', 0):.3f}"},
+                        ]
+                        st.dataframe(pd.DataFrame(toc_data), use_container_width=True, hide_index=True)
+
+                        # ── Semantic Resonance ─────────────────────────
+                        st.markdown("**🌐 Semantic Resonance**")
+                        sem_data = [
+                            {"Signal": "AI score", "Value": f"{r.get('semantic_resonance_ai_score', 0):.4f}"},
+                            {"Signal": "Human score", "Value": f"{r.get('semantic_resonance_human_score', 0):.4f}"},
+                            {"Signal": "AI centroid mean", "Value": f"{r.get('semantic_resonance_ai_mean', 0):.4f}"},
+                            {"Signal": "Human centroid mean", "Value": f"{r.get('semantic_resonance_human_mean', 0):.4f}"},
+                            {"Signal": "Delta (AI − human)", "Value": f"{r.get('semantic_resonance_delta', 0):.4f}"},
+                            {"Signal": "Determination", "Value": str(r.get('semantic_resonance_determination') or 'n/a')},
+                            {"Signal": "Confidence", "Value": f"{r.get('semantic_resonance_confidence', 0):.3f}"},
+                        ]
+                        st.dataframe(pd.DataFrame(sem_data), use_container_width=True, hide_index=True)
 
                 # Detection spans
                 spans = r.get("detection_spans", [])

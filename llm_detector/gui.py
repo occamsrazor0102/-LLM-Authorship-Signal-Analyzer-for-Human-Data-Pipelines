@@ -25,6 +25,9 @@ _DET_COLORS = {
 
 _CHANNELS = ['prompt_structure', 'stylometry', 'continuation', 'windowing']
 
+# Maximum number of preamble patterns printed in verbose output to avoid overflow.
+_MAX_PREAMBLE_PATTERNS = 20
+
 _DASHBOARD_THEME = {
     'bg': '#f4f7fb',
     'card': '#ffffff',
@@ -1223,32 +1226,208 @@ class DetectorGUI:
         self._append('\n')
 
     def _display_verbose(self, r):
-        delta = r.get('norm_obfuscation_delta', 0)
-        lang = r.get('lang_support_level', 'SUPPORTED')
-        if delta > 0 or lang != 'SUPPORTED':
-            self._append(f"  NORM: delta={delta:.1%} invisible={r.get('norm_invisible_chars', 0)} "
-                         f"homoglyphs={r.get('norm_homoglyphs', 0)}\n", 'DIM')
-            self._append(f"  GATE: {lang} fw={r.get('lang_fw_coverage', 0):.2f} "
-                         f"non_latin={r.get('lang_non_latin_ratio', 0):.2f}\n", 'DIM')
-        self._append(f"  Preamble: {r.get('preamble_score', 0):.2f} ({r.get('preamble_severity', '-')})\n", 'DIM')
-        self._append(f"  Fingerprints: {r.get('fingerprint_score', 0):.2f} ({r.get('fingerprint_hits', 0)} hits)\n", 'DIM')
-        self._append(f"  PromptSig: composite={r.get('prompt_signature_composite', 0):.2f} "
-                     f"CFD={r.get('prompt_signature_cfd', 0):.3f} MFSR={r.get('prompt_signature_mfsr', 0):.3f} "
-                     f"frames={r.get('prompt_signature_distinct_frames', 0)}\n", 'DIM')
-        self._append(f"  IDI: {r.get('instruction_density_idi', 0):.1f} "
-                     f"(imp={r.get('instruction_density_imperatives', 0)} "
-                     f"cond={r.get('instruction_density_conditionals', 0)})\n", 'DIM')
-        self._append(f"  VSD: {r.get('voice_dissonance_vsd', 0):.1f} "
-                     f"(voice={r.get('voice_dissonance_voice_score', 0):.1f} "
-                     f"spec={r.get('voice_dissonance_spec_score', 0):.1f})\n", 'DIM')
-        nssi = r.get('self_similarity_nssi_score', 0)
-        if nssi > 0:
-            self._append(f"  NSSI: {nssi:.3f} ({r.get('self_similarity_nssi_signals', 0)} sig, "
-                         f"det={r.get('self_similarity_determination', 'n/a')})\n", 'DIM')
-        bscore = r.get('continuation_bscore', 0)
-        if bscore > 0:
-            self._append(f"  DNA-GPT: BScore={bscore:.4f} "
-                         f"(det={r.get('continuation_determination', 'n/a')})\n", 'DIM')
+        # ── Normalization & Language Gate ──────────────────────────────
+        self._append("  ── Normalization & Language Gate ──\n", 'HEADER')
+        self._append(
+            f"  NORM: obfuscation_delta={r.get('norm_obfuscation_delta', 0):.1%}"
+            f"  invisible={r.get('norm_invisible_chars', 0)}"
+            f"  homoglyphs={r.get('norm_homoglyphs', 0)}\n", 'DIM')
+        attacks = r.get('norm_attack_types', [])
+        if attacks:
+            self._append(f"  Attacks neutralized: {', '.join(attacks)}\n", 'ALERT')
+        self._append(
+            f"  GATE: {r.get('lang_support_level', 'SUPPORTED')}"
+            f"  fw_coverage={r.get('lang_fw_coverage', 0):.3f}"
+            f"  non_latin={r.get('lang_non_latin_ratio', 0):.3f}\n", 'DIM')
+
+        # ── Preamble ───────────────────────────────────────────────────
+        self._append("  ── Preamble ──\n", 'HEADER')
+        self._append(
+            f"  score={r.get('preamble_score', 0):.3f}"
+            f"  severity={r.get('preamble_severity', '-')}"
+            f"  matched_patterns={r.get('preamble_hits', 0)}\n", 'DIM')
+        preamble_details = r.get('preamble_details', [])
+        if preamble_details:
+            self._append(f"  patterns: {', '.join(str(p) for p in preamble_details[:_MAX_PREAMBLE_PATTERNS])}\n", 'DIM')
+
+        # ── Fingerprint ────────────────────────────────────────────────
+        self._append("  ── Fingerprint ──\n", 'HEADER')
+        self._append(
+            f"  score={r.get('fingerprint_score', 0):.3f}"
+            f"  hits={r.get('fingerprint_hits', 0)}\n", 'DIM')
+
+        # ── Prompt Signature ───────────────────────────────────────────
+        self._append("  ── Prompt Signature ──\n", 'HEADER')
+        self._append(
+            f"  composite={r.get('prompt_signature_composite', 0):.3f}"
+            f"  CFD={r.get('prompt_signature_cfd', 0):.4f}"
+            f"  MFSR={r.get('prompt_signature_mfsr', 0):.3f}"
+            f"  frames={r.get('prompt_signature_distinct_frames', 0)}\n", 'DIM')
+        self._append(
+            f"  framing={r.get('prompt_signature_framing', 0)}/3"
+            f"  cond_density={r.get('prompt_signature_conditional_density', 0):.4f}"
+            f"  meta_design={r.get('prompt_signature_meta_design', 0)}\n", 'DIM')
+        self._append(
+            f"  contractions={r.get('prompt_signature_contractions', 0)}"
+            f"  must_rate={r.get('prompt_signature_must_rate', 0):.4f}"
+            f"  numbered_criteria={r.get('prompt_signature_numbered_criteria', 0)}\n", 'DIM')
+
+        # ── Instruction Density (IDI) ──────────────────────────────────
+        self._append("  ── Instruction Density (IDI) ──\n", 'HEADER')
+        self._append(
+            f"  IDI={r.get('instruction_density_idi', 0):.2f}"
+            f"  imperatives={r.get('instruction_density_imperatives', 0)}"
+            f"  conditionals={r.get('instruction_density_conditionals', 0)}"
+            f"  binary_specs={r.get('instruction_density_binary_specs', 0)}"
+            f"  missing_refs={r.get('instruction_density_missing_refs', 0)}"
+            f"  flag_count={r.get('instruction_density_flag_count', 0)}\n", 'DIM')
+
+        # ── Voice Dissonance (VSD) ─────────────────────────────────────
+        self._append("  ── Voice Dissonance (VSD) ──\n", 'HEADER')
+        self._append(
+            f"  VSD={r.get('voice_dissonance_vsd', 0):.2f}"
+            f"  voice_score={r.get('voice_dissonance_voice_score', 0):.2f}"
+            f"  spec_score={r.get('voice_dissonance_spec_score', 0):.2f}"
+            f"  voice_gated={r.get('voice_dissonance_voice_gated', False)}\n", 'DIM')
+        self._append(
+            f"  casual_markers={r.get('voice_dissonance_casual_markers', 0)}"
+            f"  misspellings={r.get('voice_dissonance_misspellings', 0)}"
+            f"  camel_cols={r.get('voice_dissonance_camel_cols', 0)}"
+            f"  calcs={r.get('voice_dissonance_calcs', 0)}"
+            f"  hedges={r.get('voice_dissonance_hedges', 0)}"
+            f"  SSI={r.get('ssi_triggered', False)}\n", 'DIM')
+
+        # ── Pack Diagnostics ───────────────────────────────────────────
+        self._append("  ── Pack Diagnostics ──\n", 'HEADER')
+        self._append(
+            f"  constraint={r.get('pack_constraint_score', 0):.4f}"
+            f"  exec_spec={r.get('pack_exec_spec_score', 0):.4f}"
+            f"  schema={r.get('pack_schema_score', 0):.4f}"
+            f"  families={r.get('pack_active_families', 0)}"
+            f"  prompt_boost={r.get('pack_prompt_boost', 0):.4f}"
+            f"  idi_boost={r.get('pack_idi_boost', 0):.4f}\n", 'DIM')
+
+        # ── Stylometry ─────────────────────────────────────────────────
+        self._append("  ── Stylometry ──\n", 'HEADER')
+        self._append(
+            f"  fw_ratio={r.get('stylo_fw_ratio', 0):.4f}"
+            f"  sent_dispersion={r.get('stylo_sent_dispersion', 0):.4f}"
+            f"  TTR={r.get('stylo_ttr', 0):.4f}"
+            f"  avg_word_len={r.get('stylo_avg_word_len', 0):.3f}"
+            f"  short_word_ratio={r.get('stylo_short_word_ratio', 0):.4f}"
+            f"  mask_count={r.get('stylo_mask_count', 0)}\n", 'DIM')
+
+        # ── Windowing ──────────────────────────────────────────────────
+        self._append("  ── Windowing ──\n", 'HEADER')
+        self._append(
+            f"  max={r.get('window_max_score', 0):.4f}"
+            f"  mean={r.get('window_mean_score', 0):.4f}"
+            f"  var={r.get('window_variance', 0):.4f}"
+            f"  hot_span={r.get('window_hot_span', 0)}"
+            f"  n_windows={r.get('window_n_windows', 0)}"
+            f"  mixed={r.get('window_mixed_signal', False)}\n", 'DIM')
+        self._append(
+            f"  fw_traj_cv={r.get('window_fw_trajectory_cv', 0):.4f}"
+            f"  comp_traj_mean={r.get('window_comp_trajectory_mean', 0):.4f}"
+            f"  comp_traj_cv={r.get('window_comp_trajectory_cv', 0):.4f}"
+            f"  changepoint={r.get('window_changepoint') or 'none'}\n", 'DIM')
+
+        # ── Self-Similarity (NSSI) ─────────────────────────────────────
+        self._append("  ── Self-Similarity (NSSI) ──\n", 'HEADER')
+        self._append(
+            f"  NSSI={r.get('self_similarity_nssi_score', 0):.4f}"
+            f"  signals={r.get('self_similarity_nssi_signals', 0)}"
+            f"  det={r.get('self_similarity_determination') or 'n/a'}"
+            f"  conf={r.get('self_similarity_confidence', 0):.3f}\n", 'DIM')
+        self._append(
+            f"  formulaic={r.get('self_similarity_formulaic_density', 0):.4f}"
+            f"  power_adj={r.get('self_similarity_power_adj_density', 0):.4f}"
+            f"  demonstrative={r.get('self_similarity_demonstrative_density', 0):.4f}"
+            f"  transition={r.get('self_similarity_transition_density', 0):.4f}\n", 'DIM')
+        self._append(
+            f"  scare_quote={r.get('self_similarity_scare_quote_density', 0):.4f}"
+            f"  emdash={r.get('self_similarity_emdash_density', 0):.4f}"
+            f"  this_the_start={r.get('self_similarity_this_the_start_rate', 0):.4f}"
+            f"  section_depth={r.get('self_similarity_section_depth', 0)}\n", 'DIM')
+        self._append(
+            f"  sent_len_cv={r.get('self_similarity_sent_length_cv', 0):.4f}"
+            f"  comp_ratio={r.get('self_similarity_comp_ratio', 0):.4f}"
+            f"  hapax_ratio={r.get('self_similarity_hapax_ratio', 0):.4f}"
+            f"  hapax_count={r.get('self_similarity_hapax_count', 0)}"
+            f"  unique_words={r.get('self_similarity_unique_words', 0)}\n", 'DIM')
+        self._append(
+            f"  shuffled_comp={r.get('self_similarity_shuffled_comp_ratio', 0):.4f}"
+            f"  struct_delta={r.get('self_similarity_structural_compression_delta', 0):.4f}\n", 'DIM')
+
+        # ── Continuation / DNA-GPT ─────────────────────────────────────
+        self._append("  ── Continuation (DNA-GPT) ──\n", 'HEADER')
+        self._append(
+            f"  bscore={r.get('continuation_bscore', 0):.4f}"
+            f"  bscore_max={r.get('continuation_bscore_max', 0):.4f}"
+            f"  det={r.get('continuation_determination') or 'n/a'}"
+            f"  conf={r.get('continuation_confidence', 0):.3f}"
+            f"  n_samples={r.get('continuation_n_samples', 0)}"
+            f"  mode={r.get('continuation_mode') or 'n/a'}\n", 'DIM')
+        self._append(
+            f"  NCD={r.get('continuation_ncd', 0):.4f}"
+            f"  internal_overlap={r.get('continuation_internal_overlap', 0):.4f}"
+            f"  cond_surprisal={r.get('continuation_cond_surprisal', 0):.4f}"
+            f"  repeat4={r.get('continuation_repeat4', 0):.4f}"
+            f"  TTR={r.get('continuation_ttr', 0):.4f}\n", 'DIM')
+        self._append(
+            f"  composite={r.get('continuation_composite', 0):.4f}"
+            f"  comp_var={r.get('continuation_composite_variance', 0):.4f}"
+            f"  comp_stab={r.get('continuation_composite_stability', 0):.4f}"
+            f"  impr_rate={r.get('continuation_improvement_rate', 0):.4f}\n", 'DIM')
+        self._append(
+            f"  ncd_mat_mean={r.get('continuation_ncd_matrix_mean', 0):.4f}"
+            f"  ncd_mat_var={r.get('continuation_ncd_matrix_variance', 0):.4f}"
+            f"  ncd_mat_min={r.get('continuation_ncd_matrix_min', 0):.4f}\n", 'DIM')
+
+        # ── Perplexity ─────────────────────────────────────────────────
+        self._append("  ── Perplexity ──\n", 'HEADER')
+        self._append(
+            f"  ppl={r.get('perplexity_value', 0):.3f}"
+            f"  det={r.get('perplexity_determination') or 'n/a'}"
+            f"  conf={r.get('perplexity_confidence', 0):.3f}\n", 'DIM')
+        self._append(
+            f"  surp_var={r.get('surprisal_variance', 0):.4f}"
+            f"  surp_var_1st={r.get('surprisal_first_half_var', 0):.4f}"
+            f"  surp_var_2nd={r.get('surprisal_second_half_var', 0):.4f}"
+            f"  volatility_decay={r.get('volatility_decay_ratio', 1):.4f}\n", 'DIM')
+        self._append(
+            f"  binoculars={r.get('binoculars_score', 0):.4f}"
+            f"  bino_det={r.get('binoculars_determination') or 'n/a'}"
+            f"  comp_ratio={r.get('perplexity_comp_ratio', 0):.4f}"
+            f"  zlib_ppl={r.get('perplexity_zlib_normalized_ppl', 0):.4f}"
+            f"  comp_ppl={r.get('perplexity_comp_ppl_ratio', 0):.4f}\n", 'DIM')
+
+        # ── Surprisal Trajectory ───────────────────────────────────────
+        self._append("  ── Surprisal Trajectory ──\n", 'HEADER')
+        self._append(
+            f"  traj_cv={r.get('surprisal_trajectory_cv', 0):.4f}"
+            f"  var_of_var={r.get('surprisal_var_of_var', 0):.4f}"
+            f"  stationarity={r.get('surprisal_stationarity', 0):.4f}\n", 'DIM')
+
+        # ── TOCSIN ─────────────────────────────────────────────────────
+        self._append("  ── TOCSIN (Token Cohesiveness) ──\n", 'HEADER')
+        self._append(
+            f"  cohesiveness={r.get('tocsin_cohesiveness', 0):.4f}"
+            f"  std={r.get('tocsin_cohesiveness_std', 0):.4f}"
+            f"  det={r.get('tocsin_determination') or 'n/a'}"
+            f"  conf={r.get('tocsin_confidence', 0):.3f}\n", 'DIM')
+
+        # ── Semantic Resonance ─────────────────────────────────────────
+        self._append("  ── Semantic Resonance ──\n", 'HEADER')
+        self._append(
+            f"  ai_score={r.get('semantic_resonance_ai_score', 0):.4f}"
+            f"  human_score={r.get('semantic_resonance_human_score', 0):.4f}"
+            f"  ai_mean={r.get('semantic_resonance_ai_mean', 0):.4f}"
+            f"  human_mean={r.get('semantic_resonance_human_mean', 0):.4f}\n", 'DIM')
+        self._append(
+            f"  delta={r.get('semantic_resonance_delta', 0):.4f}"
+            f"  det={r.get('semantic_resonance_determination') or 'n/a'}"
+            f"  conf={r.get('semantic_resonance_confidence', 0):.3f}\n", 'DIM')
 
     # ── Memory & Learning Actions ─────────────────────────────────────
 
