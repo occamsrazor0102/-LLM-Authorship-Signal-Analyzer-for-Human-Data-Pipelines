@@ -12,6 +12,7 @@ import statistics
 from collections import Counter, defaultdict
 
 from llm_detector.analyzers.continuation_api import _dna_ngrams, _dna_bscore, _dna_truncate_text
+from llm_detector.text_utils import type_token_ratio
 
 _TOKEN_RE = re.compile(r'\w+|[^\w\s]')
 
@@ -142,13 +143,6 @@ def _conditional_surprisal(lm, prefix_tokens, suffix_tokens):
     return total / max(1, len(suffix_tokens))
 
 
-def _type_token_ratio(tokens):
-    """Type-Token Ratio: vocabulary richness."""
-    if not tokens:
-        return 0.0
-    return len(set(tokens)) / len(tokens)
-
-
 def _surprisal_improvement_curve(lm, full_tokens, splits=(0.25, 0.50, 0.75)):
     """Measure how conditional surprisal changes with increasing prefix length.
 
@@ -261,7 +255,7 @@ def run_continuation_local(text, gamma=0.5, K=32, order=5):
     internal_overlap = _internal_ngram_overlap(prefix_tokens, suffix_tokens)
     cond_surp = _conditional_surprisal(lm, prefix_tokens, suffix_tokens)
     repeat4 = _repeated_ngram_rate(suffix_tokens, 4)
-    ttr = _type_token_ratio(suffix_tokens)
+    ttr = type_token_ratio(suffix_tokens)
 
     # FEAT 2: Cross-prefix surprisal improvement curve
     all_tokens = _proxy_tokenize(text)

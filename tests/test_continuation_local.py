@@ -7,9 +7,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from llm_detector.analyzers.continuation_local import (
     run_continuation_local, run_continuation_local_multi,
     _BackoffNGramLM, _calculate_ncd,
-    _internal_ngram_overlap, _repeated_ngram_rate, _type_token_ratio,
+    _internal_ngram_overlap, _repeated_ngram_rate,
     _proxy_tokenize, _multi_segment_ncd, _surprisal_improvement_curve,
 )
+from llm_detector.text_utils import type_token_ratio as _type_token_ratio
 from llm_detector.channels.continuation import score_continuation
 from tests.conftest import AI_TEXT, HUMAN_TEXT
 
