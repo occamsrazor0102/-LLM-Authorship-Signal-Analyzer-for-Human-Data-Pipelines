@@ -28,6 +28,15 @@ PREAMBLE_PATTERNS = [
     (r"(?i)\bstep \d+\s*:", "cot_step_numbering", "MEDIUM"),
 ]
 
+# Pre-compiled patterns with a flag indicating whether to search only the first
+# 500 characters.  Compiling once at import time avoids repeated compilation on
+# every run_preamble() call.
+_TRUNCATED_NAMES = frozenset(('assistant_ack', 'artifact_delivery', 'first_person_creation', 'cot_leakage'))
+_PREAMBLE_COMPILED = [
+    (re.compile(pat), name, sev, name in _TRUNCATED_NAMES)
+    for pat, name, sev in PREAMBLE_PATTERNS
+]
+
 
 def run_preamble(text):
     """Detect LLM preamble artifacts. Returns (score, severity, hits, spans)."""
@@ -36,9 +45,9 @@ def run_preamble(text):
     spans = []
     severity = 'NONE'
 
-    for pat, name, sev in PREAMBLE_PATTERNS:
-        search_text = first_500 if name in ('assistant_ack', 'artifact_delivery', 'first_person_creation', 'cot_leakage') else text
-        match = re.search(pat, search_text)
+    for compiled_pat, name, sev, use_truncated in _PREAMBLE_COMPILED:
+        search_text = first_500 if use_truncated else text
+        match = compiled_pat.search(search_text)
         if match:
             hits.append((name, sev))
             spans.append({

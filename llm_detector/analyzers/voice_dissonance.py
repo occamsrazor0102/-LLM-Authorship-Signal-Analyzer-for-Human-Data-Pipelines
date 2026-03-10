@@ -39,6 +39,8 @@ def _build_marker_pattern(marker):
 
 _CASUAL_RE = [re.compile(_build_marker_pattern(m), re.IGNORECASE) for m in CASUAL_MARKERS]
 _TYPO_RE = [re.compile(r'\b' + re.escape(t) + r'\b', re.IGNORECASE) for t in MANUFACTURED_TYPOS]
+# Combined em-dash pattern (covers unicode dashes and spaced hyphens in one pass)
+_EM_DASH_RE = re.compile(r'(?<!\d)\s?[—–]\s?(?!\d)| - ')
 
 
 def run_voice_dissonance(text):
@@ -52,8 +54,7 @@ def run_voice_dissonance(text):
 
     contractions = len(re.findall(r"\b\w+'(?:t|re|ve|s|d|ll|m)\b", text, re.IGNORECASE))
 
-    em_dashes = len(re.findall(r'(?<!\d)\s?[—–]\s?(?!\d)', text))
-    em_dashes += len(re.findall(r' - ', text))
+    em_dashes = len(_EM_DASH_RE.findall(text))
 
     lowercase_starts = sum(1 for line in text.split('\n') if line.strip() and line.strip()[0].islower())
 

@@ -36,6 +36,10 @@ META_DESIGN_PATTERNS = [
     r'(?i)grounded in\b',
 ]
 
+# Pre-compiled versions to avoid re-compiling on every call.
+_CONSTRAINT_FRAMES_RE = [re.compile(pat, re.IGNORECASE) for pat in CONSTRAINT_FRAMES]
+_META_DESIGN_RE = [re.compile(pat) for pat in META_DESIGN_PATTERNS]
+
 
 def run_prompt_signature(text):
     """Detect prompt-engineering signatures. Returns dict of metrics."""
@@ -45,8 +49,8 @@ def run_prompt_signature(text):
 
     total_frames = 0
     distinct_pats = set()
-    for pat in CONSTRAINT_FRAMES:
-        matches = re.findall(pat, text, re.IGNORECASE)
+    for pat, compiled_pat in zip(CONSTRAINT_FRAMES, _CONSTRAINT_FRAMES_RE):
+        matches = compiled_pat.findall(text)
         if matches:
             total_frames += len(matches)
             distinct_pats.add(pat)
@@ -54,7 +58,7 @@ def run_prompt_signature(text):
 
     multi_frame = 0
     for sent in sents:
-        ct = sum(1 for pat in CONSTRAINT_FRAMES if re.search(pat, sent, re.IGNORECASE))
+        ct = sum(1 for compiled_pat in _CONSTRAINT_FRAMES_RE if compiled_pat.search(sent))
         if ct >= 2:
             multi_frame += 1
     mfsr = multi_frame / n_sents
@@ -69,7 +73,8 @@ def run_prompt_signature(text):
     cond_count += len(re.findall(r'\bunless\b', text, re.IGNORECASE))
     cond_density = cond_count / n_sents
 
-    meta_hits = [pat for pat in META_DESIGN_PATTERNS if re.search(pat, text)]
+    meta_hits = [pat for pat, compiled_pat in zip(META_DESIGN_PATTERNS, _META_DESIGN_RE)
+                 if compiled_pat.search(text)]
 
     contractions = len(re.findall(r"\b\w+'(?:t|re|ve|s|d|ll|m)\b", text, re.IGNORECASE))
 
