@@ -1232,5 +1232,15 @@ def main_dashboard():
     subprocess.run(['streamlit', 'run', dashboard_path], check=False)
 
 
+def main_web():
+    """Entry point for the ``llm-detector-dashboard`` console script.
+
+    Launches the Streamlit web dashboard.  Equivalent to running::
+
+        streamlit run llm_detector/dashboard.py
+    """
+    main_dashboard()
+
+
 if __name__ == '__main__':
     main()

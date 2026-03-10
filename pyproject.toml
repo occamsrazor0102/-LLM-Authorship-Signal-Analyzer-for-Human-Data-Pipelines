@@ -33,8 +33,11 @@ perplexity = [
 pdf = [
     "pypdf>=3.0",
 ]
+web = [
+    "streamlit>=1.20",
+]
 all = [
-    "llm-detector[api,nlp,perplexity,pdf]",
+    "llm-detector[api,nlp,perplexity,pdf,web]",
 ]
 bundle = [
     "llm-detector[api,pdf]",
@@ -43,7 +46,7 @@ bundle = [
 
 [project.scripts]
 llm-detector = "llm_detector.cli:main"
-llm-detector-dashboard = "llm_detector.cli:main_dashboard"
+llm-detector-dashboard = "llm_detector.cli:main_web"
 
 [project.gui-scripts]
 llm-detector-gui = "llm_detector.cli:main_gui"
