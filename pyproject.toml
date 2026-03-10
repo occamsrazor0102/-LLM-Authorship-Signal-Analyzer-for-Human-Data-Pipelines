@@ -43,6 +43,7 @@ bundle = [
 
 [project.scripts]
 llm-detector = "llm_detector.cli:main"
+llm-detector-dashboard = "llm_detector.cli:main_dashboard"
 
 [project.gui-scripts]
 llm-detector-gui = "llm_detector.cli:main_gui"
