@@ -222,9 +222,9 @@ class DetectorGUI:
         ttk.Entry(out, textvariable=self.output_csv_var).grid(row=0, column=1, sticky='ew', padx=(0, 6), pady=4)
         ttk.Button(out, text='...', width=3, command=lambda: self._browse_save(self.output_csv_var, [('CSV', '*.csv')])).grid(
             row=0, column=2, sticky='w', padx=2, pady=4)
-        ttk.Label(out, text='HTML report dir').grid(row=1, column=0, sticky='w', padx=6, pady=4)
+        ttk.Label(out, text='HTML report').grid(row=1, column=0, sticky='w', padx=6, pady=4)
         ttk.Entry(out, textvariable=self.html_report_var).grid(row=1, column=1, sticky='ew', padx=(0, 6), pady=4)
-        ttk.Button(out, text='...', width=3, command=lambda: self._browse_dir(self.html_report_var)).grid(
+        ttk.Button(out, text='...', width=3, command=lambda: self._browse_save(self.html_report_var, [('HTML', '*.html')])).grid(
             row=1, column=2, sticky='w', padx=2, pady=4)
         ttk.Label(out, text='Cost per prompt ($)').grid(row=2, column=0, sticky='w', padx=6, pady=4)
         ttk.Entry(out, textvariable=self.cost_var, width=8).grid(row=2, column=1, sticky='w', pady=4)
@@ -745,25 +745,27 @@ class DetectorGUI:
         if not self._last_results:
             messagebox.showinfo('No results', 'Run an analysis first.')
             return
-        report_dir = self.html_report_var.get().strip()
-        if not report_dir:
-            report_dir = filedialog.askdirectory(title='Select HTML report directory')
-        if not report_dir:
-            return
 
         flagged = [r for r in self._last_results if r['determination'] in ('RED', 'AMBER', 'MIXED')]
         if not flagged:
             messagebox.showinfo('No flagged', 'No flagged submissions to report.')
             return
 
+        report_path = self.html_report_var.get().strip()
+        if not report_path:
+            report_path = filedialog.asksaveasfilename(
+                title='Save HTML Report',
+                defaultextension='.html',
+                filetypes=[('HTML files', '*.html')],
+                initialfile='batch_report.html',
+            )
+        if not report_path:
+            return
+
         try:
-            os.makedirs(report_dir, exist_ok=True)
-            from llm_detector.html_report import generate_html_report
-            for r in flagged:
-                tid = r.get('task_id', 'unknown')[:20].replace('/', '_')
-                path = os.path.join(report_dir, f"{tid}_{r['determination']}.html")
-                generate_html_report(self._last_text_map.get(r.get('task_id', ''), ''), r, path)
-            self.status_var.set(f'{len(flagged)} HTML reports written to {report_dir}')
+            from llm_detector.html_report import generate_batch_html_report
+            generate_batch_html_report(flagged, self._last_text_map, report_path)
+            self.status_var.set(f'HTML report written: {report_path} ({len(flagged)} submissions)')
         except Exception as e:
             messagebox.showerror('Error', str(e))
 
