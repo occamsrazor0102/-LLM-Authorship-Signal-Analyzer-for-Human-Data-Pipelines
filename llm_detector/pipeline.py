@@ -27,7 +27,8 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
                    dna_model=None, dna_samples=3,
                    ground_truth=None, language=None, domain=None,
                    mode='auto', cal_table=None, memory_store=None,
-                   disabled_channels=None, precomputed_continuation=None):
+                   disabled_channels=None, precomputed_continuation=None,
+                   ppl_model=None):
     """Run full v0.66 pipeline on a single prompt. Returns result dict."""
     # Normalization pre-pass
     normalized_text, norm_report = normalize_text(text)
@@ -66,7 +67,7 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         cont_result = run_continuation_local_multi(text_for_analysis)
 
     semantic = run_semantic_resonance(text_for_analysis)
-    ppl = run_perplexity(text_for_analysis)
+    ppl = run_perplexity(text_for_analysis, model_id=ppl_model)
     tocsin = run_token_cohesiveness(text_for_analysis)
 
     # FEAT 10: Surprisal trajectory from per-token losses

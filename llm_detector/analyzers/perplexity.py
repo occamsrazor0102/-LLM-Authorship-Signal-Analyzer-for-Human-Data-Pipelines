@@ -25,8 +25,12 @@ _PPL_EMPTY = {
 }
 
 
-def run_perplexity(text):
-    """Calculate token-level perplexity using distilgpt2.
+def run_perplexity(text, model_id=None):
+    """Calculate token-level perplexity using a causal language model.
+
+    Args:
+        text: Input text.
+        model_id: HuggingFace model identifier (default: Qwen2.5-0.5B).
 
     Returns dict with perplexity, determination, confidence, and
     surprisal diversity features (variance, half-variances, decay ratio).
@@ -38,7 +42,7 @@ def run_perplexity(text):
     if len(words) < 50:
         return {**_PPL_EMPTY, 'reason': 'Perplexity: text too short'}
 
-    model, tokenizer = get_perplexity_model()
+    model, tokenizer = get_perplexity_model(model_id)
 
     encodings = tokenizer(text, return_tensors='pt', truncation=True,
                            max_length=1024)
@@ -60,10 +64,14 @@ def run_perplexity(text):
     binoculars_det = None
     if HAS_BINOCULARS:
         try:
-            observer = get_binoculars_model()
+            observer, obs_tokenizer = get_binoculars_model()
             if observer is not None:
+                # Re-tokenize with observer's tokenizer (may differ from primary model)
+                obs_enc = obs_tokenizer(text, return_tensors='pt', truncation=True,
+                                        max_length=1024)
+                obs_ids = obs_enc.input_ids
                 with _torch.no_grad():
-                    obs_outputs = observer(input_ids, labels=input_ids)
+                    obs_outputs = observer(obs_ids, labels=obs_ids)
                     obs_ppl = _torch.exp(obs_outputs.loss).item()
                 binoculars_score = round(ppl / max(obs_ppl, 1e-6), 4)
                 if binoculars_score < 0.70:

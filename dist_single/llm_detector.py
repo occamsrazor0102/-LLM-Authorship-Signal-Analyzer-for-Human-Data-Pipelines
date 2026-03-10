@@ -121,7 +121,7 @@ def get_semantic_models():
 
 # ── transformers: local perplexity scoring ──────────────────────────────────
 try:
-    from transformers import GPT2LMHeadModel, GPT2TokenizerFast  # noqa: F401
+    from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: F401
     import torch  # noqa: F401
     HAS_PERPLEXITY = True
 except ImportError:
@@ -130,17 +130,23 @@ except Exception as e:
     HAS_PERPLEXITY = False
     logger.info("transformers/torch setup failed (%s). Perplexity scoring disabled.", e)
 
+PPL_DEFAULT_MODEL = 'Qwen/Qwen2.5-0.5B'
+
 _PPL_MODEL = None
 _PPL_TOKENIZER = None
+_PPL_MODEL_ID = None
 
-def get_perplexity_model():
+def get_perplexity_model(model_id=None):
     """Return (model, tokenizer), loading on first call."""
-    global _PPL_MODEL, _PPL_TOKENIZER
-    if _PPL_MODEL is None and HAS_PERPLEXITY:
-        from transformers import GPT2LMHeadModel, GPT2TokenizerFast
-        _PPL_MODEL_ID = 'distilgpt2'
-        _PPL_MODEL = GPT2LMHeadModel.from_pretrained(_PPL_MODEL_ID)
-        _PPL_TOKENIZER = GPT2TokenizerFast.from_pretrained(_PPL_MODEL_ID)
+    global _PPL_MODEL, _PPL_TOKENIZER, _PPL_MODEL_ID
+    if model_id is None:
+        model_id = PPL_DEFAULT_MODEL
+    if (_PPL_MODEL is None or _PPL_MODEL_ID != model_id) and HAS_PERPLEXITY:
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        logger.info("Loading perplexity model: %s", model_id)
+        _PPL_MODEL_ID = model_id
+        _PPL_MODEL = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=True)
+        _PPL_TOKENIZER = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
         _PPL_MODEL.eval()
     return _PPL_MODEL, _PPL_TOKENIZER
 
@@ -2488,8 +2494,12 @@ _PPL_EMPTY = {
 }
 
 
-def run_perplexity(text):
-    """Calculate token-level perplexity using distilgpt2.
+def run_perplexity(text, model_id=None):
+    """Calculate token-level perplexity using a causal language model.
+
+    Args:
+        text: Input text.
+        model_id: HuggingFace model identifier (default: Qwen2.5-0.5B).
 
     Returns dict with perplexity, determination, confidence, and
     surprisal diversity features (variance, half-variances, decay ratio).
@@ -2501,7 +2511,7 @@ def run_perplexity(text):
     if len(words) < 50:
         return {**_PPL_EMPTY, 'reason': 'Perplexity: text too short'}
 
-    model, tokenizer = get_perplexity_model()
+    model, tokenizer = get_perplexity_model(model_id)
 
     encodings = tokenizer(text, return_tensors='pt', truncation=True,
                            max_length=1024)
@@ -4624,7 +4634,8 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
                    run_l3=True, api_key=None, dna_provider='anthropic',
                    dna_model=None, dna_samples=3,
                    ground_truth=None, language=None, domain=None,
-                   mode='auto', cal_table=None, precomputed_continuation=None):
+                   mode='auto', cal_table=None, precomputed_continuation=None,
+                   ppl_model=None):
     """Run full v0.65 pipeline on a single prompt. Returns result dict."""
     # Normalization pre-pass
     normalized_text, norm_report = normalize_text(text)
@@ -4663,7 +4674,7 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         cont_result = run_continuation_local_multi(text_for_analysis)
 
     semantic = run_semantic_resonance(text_for_analysis)
-    ppl = run_perplexity(text_for_analysis)
+    ppl = run_perplexity(text_for_analysis, model_id=ppl_model)
     tocsin = run_token_cohesiveness(text_for_analysis)
 
     # FEAT 10: Surprisal trajectory from per-token losses

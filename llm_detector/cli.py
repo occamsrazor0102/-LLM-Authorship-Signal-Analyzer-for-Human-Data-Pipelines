@@ -633,6 +633,11 @@ def main():
                         help='LLM provider for DNA-GPT (default: anthropic)')
     parser.add_argument('--dna-model', metavar='MODEL',
                         help='Model name for DNA-GPT (default: auto per provider)')
+    parser.add_argument('--ppl-model', metavar='MODEL',
+                        help='HuggingFace model for perplexity scoring '
+                             '(default: Qwen/Qwen2.5-0.5B). '
+                             'Options: Qwen/Qwen2.5-0.5B, HuggingFaceTB/SmolLM2-360M, '
+                             'HuggingFaceTB/SmolLM2-135M, distilgpt2, gpt2')
     parser.add_argument('--dna-samples', type=int, default=3,
                         help='Number of regeneration samples for DNA-GPT (default: 3)')
     parser.add_argument('--workers', type=int, default=1,
@@ -875,6 +880,7 @@ def main():
             dna_model=args.dna_model, dna_samples=args.dna_samples,
             mode=args.mode, cal_table=cal_table,
             disabled_channels=disabled_channels,
+            ppl_model=getattr(args, 'ppl_model', None),
         )
         print_result(result, verbose=True)
         return
@@ -961,6 +967,7 @@ def main():
             memory_store=store,
             disabled_channels=disabled_channels,
             precomputed_continuation=precomputed,
+            ppl_model=getattr(args, 'ppl_model', None),
         )
 
     if n_workers > 1:
