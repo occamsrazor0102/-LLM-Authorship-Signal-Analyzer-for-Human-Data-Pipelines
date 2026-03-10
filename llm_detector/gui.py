@@ -67,6 +67,7 @@ class DetectorGUI:
         self.workers_var = tk.StringVar(value='4')
         self.batch_var = tk.BooleanVar(value=False)
         self.no_layer3_var = tk.BooleanVar(value=False)
+        self.ppl_model_var = tk.StringVar(value='Qwen/Qwen2.5-0.5B')
         self.verbose_var = tk.BooleanVar(value=False)
         self.output_csv_var = tk.StringVar()
         self.html_report_var = tk.StringVar()
@@ -165,6 +166,15 @@ class DetectorGUI:
         ttk.Checkbutton(mode_row, text='Show details', variable=self.show_details_var).pack(side=tk.LEFT, padx=(0, 12))
         ttk.Checkbutton(mode_row, text='Verbose', variable=self.verbose_var).pack(side=tk.LEFT, padx=(0, 12))
         ttk.Checkbutton(mode_row, text='Skip Layer 3', variable=self.no_layer3_var).pack(side=tk.LEFT)
+
+        # Perplexity model selector
+        ppl_row = ttk.Frame(tab)
+        ppl_row.pack(fill=tk.X, pady=(0, 6))
+        ttk.Label(ppl_row, text='PPL Model:').pack(side=tk.LEFT)
+        ttk.Combobox(ppl_row, textvariable=self.ppl_model_var,
+                     values=['Qwen/Qwen2.5-0.5B', 'HuggingFaceTB/SmolLM2-360M',
+                             'HuggingFaceTB/SmolLM2-135M', 'distilgpt2', 'gpt2'],
+                     width=30, state='readonly').pack(side=tk.LEFT, padx=(4, 0))
 
         # Channel ablation
         abl = ttk.LabelFrame(tab, text='Channel Ablation')
@@ -651,6 +661,7 @@ class DetectorGUI:
             'disabled_channels': self._get_disabled_channels(),
             'cal_table': self._cal_table,
             'memory_store': self._memory_store,
+            'ppl_model': self.ppl_model_var.get() or None,
         }
         return kwargs
 

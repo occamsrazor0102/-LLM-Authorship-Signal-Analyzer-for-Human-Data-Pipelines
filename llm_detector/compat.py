@@ -138,7 +138,7 @@ def get_semantic_models():
 
 # ── transformers: local perplexity scoring ──────────────────────────────────
 try:
-    from transformers import GPT2LMHeadModel, GPT2TokenizerFast  # noqa: F401
+    from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: F401
     import torch  # noqa: F401
     HAS_PERPLEXITY = True
 except ImportError:
@@ -147,17 +147,37 @@ except Exception as e:
     HAS_PERPLEXITY = False
     logger.info("transformers/torch setup failed (%s). Perplexity scoring disabled.", e)
 
+# Default and available perplexity models (model_id -> short label)
+PPL_MODELS = {
+    'Qwen/Qwen2.5-0.5B': 'Qwen2.5-0.5B',
+    'HuggingFaceTB/SmolLM2-360M': 'SmolLM2-360M',
+    'HuggingFaceTB/SmolLM2-135M': 'SmolLM2-135M',
+    'distilgpt2': 'DistilGPT-2 (legacy)',
+    'gpt2': 'GPT-2',
+}
+PPL_DEFAULT_MODEL = 'Qwen/Qwen2.5-0.5B'
+
 _PPL_MODEL = None
 _PPL_TOKENIZER = None
+_PPL_MODEL_ID = None
 
-def get_perplexity_model():
-    """Return (model, tokenizer), loading on first call."""
-    global _PPL_MODEL, _PPL_TOKENIZER
-    if _PPL_MODEL is None and HAS_PERPLEXITY:
-        from transformers import GPT2LMHeadModel, GPT2TokenizerFast
-        _PPL_MODEL_ID = 'distilgpt2'
-        _PPL_MODEL = GPT2LMHeadModel.from_pretrained(_PPL_MODEL_ID)
-        _PPL_TOKENIZER = GPT2TokenizerFast.from_pretrained(_PPL_MODEL_ID)
+def get_perplexity_model(model_id=None):
+    """Return (model, tokenizer), loading on first call.
+
+    Args:
+        model_id: HuggingFace model identifier. Defaults to PPL_DEFAULT_MODEL.
+                  If a different model_id is passed than what's currently loaded,
+                  the model is reloaded.
+    """
+    global _PPL_MODEL, _PPL_TOKENIZER, _PPL_MODEL_ID
+    if model_id is None:
+        model_id = PPL_DEFAULT_MODEL
+    if (_PPL_MODEL is None or _PPL_MODEL_ID != model_id) and HAS_PERPLEXITY:
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        logger.info("Loading perplexity model: %s", model_id)
+        _PPL_MODEL_ID = model_id
+        _PPL_MODEL = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=True)
+        _PPL_TOKENIZER = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
         _PPL_MODEL.eval()
     return _PPL_MODEL, _PPL_TOKENIZER
 
@@ -165,15 +185,18 @@ def get_perplexity_model():
 HAS_BINOCULARS = HAS_PERPLEXITY  # Same deps, just needs second model
 
 _BINO_MODEL = None
+_BINO_TOKENIZER = None
 
 def get_binoculars_model():
-    """Return GPT-2 base observer model for contrastive scoring, loading on first call."""
-    global _BINO_MODEL
+    """Return (observer_model, observer_tokenizer) for contrastive scoring."""
+    global _BINO_MODEL, _BINO_TOKENIZER
     if _BINO_MODEL is None and HAS_BINOCULARS:
-        from transformers import GPT2LMHeadModel
-        _BINO_MODEL = GPT2LMHeadModel.from_pretrained('gpt2')
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        # Use distilgpt2 as observer — small and different enough for contrastive signal
+        _BINO_MODEL = AutoModelForCausalLM.from_pretrained('distilgpt2')
+        _BINO_TOKENIZER = AutoTokenizer.from_pretrained('distilgpt2')
         _BINO_MODEL.eval()
-    return _BINO_MODEL
+    return _BINO_MODEL, _BINO_TOKENIZER
 
 # ── pypdf: PDF text extraction ──────────────────────────────────────────────
 try:
