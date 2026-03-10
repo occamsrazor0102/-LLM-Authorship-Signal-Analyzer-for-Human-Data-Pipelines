@@ -183,6 +183,14 @@ class DetectorGUI:
         self.confirm_label_var = tk.StringVar(value='ai')
         self.confirm_reviewer_var = tk.StringVar()
         self.attempter_history_var = tk.StringVar()
+        self.run_dir_var = tk.StringVar()
+        self.cal_report_jsonl_var = tk.StringVar()
+        self.cal_report_csv_var = tk.StringVar()
+        self.label_output_var = tk.StringVar()
+        self.label_reviewer_var = tk.StringVar()
+        self.label_skip_green_var = tk.BooleanVar(value=False)
+        self.label_skip_red_var = tk.BooleanVar(value=False)
+        self.label_max_var = tk.StringVar(value='')
         # KPI metric variables for Analysis tab dashboard cards.
         self.metric_total_var = tk.StringVar(value='0')
         self.metric_top_det_var = tk.StringVar(value='N/A')
@@ -383,6 +391,10 @@ class DetectorGUI:
             row=1, column=2, sticky='w', padx=2, pady=4)
         ttk.Label(out, text='Cost per prompt ($)').grid(row=2, column=0, sticky='w', padx=6, pady=4)
         ttk.Entry(out, textvariable=self.cost_var, width=8).grid(row=2, column=1, sticky='w', pady=4)
+        ttk.Label(out, text='Run directory').grid(row=3, column=0, sticky='w', padx=6, pady=4)
+        ttk.Entry(out, textvariable=self.run_dir_var).grid(row=3, column=1, sticky='ew', padx=(0, 6), pady=4)
+        ttk.Button(out, text='...', width=3, command=lambda: self._browse_dir(self.run_dir_var)).grid(
+            row=3, column=2, sticky='w', padx=2, pady=4)
         out.columnconfigure(1, weight=1)
 
         # Baseline collection
@@ -468,6 +480,28 @@ class DetectorGUI:
         ttk.Button(btn_row2, text='Discover Lexicon', command=lambda: self._run_async(self._discover_lexicon)).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(btn_row2, text='Rebuild All', command=lambda: self._run_async(self._rebuild_all)).pack(side=tk.LEFT)
 
+        # Interactive Labeling
+        lbl = ttk.LabelFrame(tab, text='Interactive Labeling')
+        lbl.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(lbl, text=(
+            'Review pipeline results and assign ground-truth labels for calibration.\n'
+            'Requires a completed analysis run on the Analysis tab.'
+        ), style='DashboardSubtitle.TLabel').grid(
+            row=0, column=0, columnspan=4, sticky='w', padx=6, pady=(4, 2))
+        ttk.Label(lbl, text='Output JSONL').grid(row=1, column=0, sticky='w', padx=6, pady=4)
+        ttk.Entry(lbl, textvariable=self.label_output_var).grid(row=1, column=1, sticky='ew', padx=(0, 6), pady=4)
+        ttk.Button(lbl, text='...', width=3, command=lambda: self._browse_save(self.label_output_var, [('JSONL', '*.jsonl')])).grid(
+            row=1, column=2, sticky='w', padx=2, pady=4)
+        ttk.Label(lbl, text='Reviewer').grid(row=2, column=0, sticky='w', padx=6, pady=4)
+        ttk.Entry(lbl, textvariable=self.label_reviewer_var, width=24).grid(row=2, column=1, sticky='w', pady=4)
+        ttk.Label(lbl, text='Max labels').grid(row=3, column=0, sticky='w', padx=6, pady=4)
+        ttk.Spinbox(lbl, textvariable=self.label_max_var, from_=0, to=9999, width=6).grid(row=3, column=1, sticky='w', pady=4)
+        ttk.Checkbutton(lbl, text='Skip GREEN', variable=self.label_skip_green_var).grid(row=4, column=0, sticky='w', padx=6, pady=4)
+        ttk.Checkbutton(lbl, text='Skip RED', variable=self.label_skip_red_var).grid(row=4, column=1, sticky='w', pady=4)
+        ttk.Button(lbl, text='▶ Start Labeling Session', command=self._start_labeling_session,
+                   style='DashboardPrimary.TButton').grid(row=5, column=0, columnspan=3, sticky='w', padx=6, pady=6)
+        lbl.columnconfigure(1, weight=1)
+
     # ── Tab 4: Calibration & Baselines ───────────────────────────────
 
     def _build_calibration_tab(self, notebook):
@@ -508,6 +542,21 @@ class DetectorGUI:
         ttk.Button(bl, text='Analyze Baselines', command=lambda: self._run_async(self._analyze_baselines)).grid(
             row=2, column=0, columnspan=2, sticky='w', padx=6, pady=4)
         bl.columnconfigure(1, weight=1)
+
+        # Calibration Diagnostics Report
+        cr = ttk.LabelFrame(tab, text='Calibration Diagnostics Report')
+        cr.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(cr, text='Labeled JSONL').grid(row=0, column=0, sticky='w', padx=6, pady=4)
+        ttk.Entry(cr, textvariable=self.cal_report_jsonl_var).grid(row=0, column=1, sticky='ew', padx=(0, 6), pady=4)
+        ttk.Button(cr, text='...', width=3, command=lambda: self._browse_open(self.cal_report_jsonl_var, [('JSONL', '*.jsonl')])).grid(
+            row=0, column=2, sticky='w', padx=2, pady=4)
+        ttk.Label(cr, text='Export CSV (optional)').grid(row=1, column=0, sticky='w', padx=6, pady=4)
+        ttk.Entry(cr, textvariable=self.cal_report_csv_var).grid(row=1, column=1, sticky='ew', padx=(0, 6), pady=4)
+        ttk.Button(cr, text='...', width=3, command=lambda: self._browse_save(self.cal_report_csv_var, [('CSV', '*.csv')])).grid(
+            row=1, column=2, sticky='w', padx=2, pady=4)
+        ttk.Button(cr, text='Generate Report', command=lambda: self._run_async(self._run_calibration_report)).grid(
+            row=2, column=0, columnspan=2, sticky='w', padx=6, pady=4)
+        cr.columnconfigure(1, weight=1)
 
     # ── Helpers ───────────────────────────────────────────────────────
 
@@ -828,6 +877,26 @@ class DetectorGUI:
         if not path:
             self.root.after(0, lambda: messagebox.showinfo('Input required', 'Choose a CSV/XLSX file.'))
             return
+
+        # Apply run-directory defaults before starting analysis
+        run_dir_base = self.run_dir_var.get().strip()
+        if run_dir_base:
+            from pathlib import Path
+            from datetime import datetime
+            run_dir = Path(run_dir_base) / datetime.now().strftime('run_%Y%m%d_%H%M%S')
+            run_dir.mkdir(parents=True, exist_ok=True)
+            self._append(f"Run directory: {run_dir}\n", 'HEADER')
+            if not self.output_csv_var.get().strip():
+                self.output_csv_var.set(str(run_dir / 'results.csv'))
+            if not self.html_report_var.get().strip():
+                self.html_report_var.set(str(run_dir / 'report.html'))
+            if not self.memory_var.get().strip():
+                self.memory_var.set(str(run_dir / 'memory'))
+            if not self.sim_store_var.get().strip():
+                self.sim_store_var.set(str(run_dir / 'similarity.jsonl'))
+            if not self.label_output_var.get().strip():
+                self.label_output_var.set(str(run_dir / 'labels.jsonl'))
+
         ext = os.path.splitext(path)[1].lower()
         if ext in ('.xlsx', '.xlsm'):
             tasks = load_xlsx(path, sheet=self.sheet_var.get().strip() or None,
@@ -1595,6 +1664,72 @@ class DetectorGUI:
             sys.stdout = old_stdout
         self._append(buf.getvalue())
 
+    def _run_calibration_report(self):
+        jsonl_path = self.cal_report_jsonl_var.get().strip()
+        if not jsonl_path or not os.path.exists(jsonl_path):
+            self.root.after(0, lambda: messagebox.showinfo('Required', 'Select a valid labeled JSONL file.'))
+            return
+        csv_path = self.cal_report_csv_var.get().strip() or None
+
+        import io
+        import sys
+        buf = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = buf
+        try:
+            from llm_detector.cli import calibration_report
+            calibration_report(
+                jsonl_path,
+                cal_table=self._cal_table,
+                output_csv=csv_path,
+            )
+        finally:
+            sys.stdout = old_stdout
+        self._append(buf.getvalue())
+
+    def _start_labeling_session(self):
+        if not self._last_results:
+            messagebox.showinfo('No results', 'Run an analysis first.')
+            return
+        reviewer = self.label_reviewer_var.get().strip()
+        if not reviewer:
+            messagebox.showinfo('Required', 'Enter a reviewer name.')
+            return
+
+        from llm_detector.cli import _sort_for_labeling
+        results = _sort_for_labeling(self._last_results)
+
+        if self.label_skip_green_var.get():
+            results = [r for r in results if r['determination'] != 'GREEN']
+        if self.label_skip_red_var.get():
+            results = [r for r in results if r['determination'] != 'RED']
+
+        max_val = self.label_max_var.get().strip()
+        if max_val.isdigit() and int(max_val) > 0:
+            results = results[:int(max_val)]
+
+        if not results:
+            messagebox.showinfo('No items', 'No items to label with current settings.')
+            return
+
+        from datetime import datetime
+        output_path = self.label_output_var.get().strip()
+        if not output_path:
+            output_path = f"beet_labels_{datetime.now().strftime('%Y%m%d_%H%M')}.jsonl"
+            self.label_output_var.set(output_path)
+
+        def on_complete(stats):
+            self._append(
+                f"Labeling complete: {stats.get('labeled_ai', 0)} AI, "
+                f"{stats.get('labeled_human', 0)} human, "
+                f"{stats.get('labeled_unsure', 0)} unsure, "
+                f"{stats.get('skipped', 0)} skipped\n", 'HEADER'
+            )
+
+        _LabelingDialog(self.root, results, self._last_text_map,
+                        output_path=output_path, reviewer=reviewer,
+                        store=self._memory_store, on_complete=on_complete)
+
 
     # ── Tab 5: Reports ─────────────────────────────────────────────────
 
@@ -1709,6 +1844,211 @@ class DetectorGUI:
             messagebox.showinfo('Baselines', f'Results appended to {path}')
         except Exception as e:
             messagebox.showerror('Baselines Error', str(e))
+
+
+if HAS_TK:
+    class _LabelingDialog:
+        """Modal dialog for reviewing pipeline results and assigning ground-truth labels."""
+
+        _ICONS = {
+            'RED': '\U0001f534', 'AMBER': '\U0001f7e0', 'YELLOW': '\U0001f7e1',
+            'GREEN': '\U0001f7e2', 'MIXED': '\U0001f535', 'REVIEW': '\u26aa',
+        }
+
+        def __init__(self, parent, results, text_map, output_path, reviewer,
+                     store=None, on_complete=None):
+            self._results = list(results)
+            self._text_map = text_map or {}
+            self._output_path = output_path
+            self._reviewer = reviewer
+            self._store = store
+            self._on_complete = on_complete
+            self._idx = 0
+            self._stats = {
+                'total_presented': 0,
+                'labeled_ai': 0,
+                'labeled_human': 0,
+                'labeled_unsure': 0,
+                'skipped': 0,
+            }
+
+            self.win = tk.Toplevel(parent)
+            self.win.title('Interactive Labeling')
+            self.win.geometry('900x680')
+            self.win.grab_set()
+            self.win.protocol('WM_DELETE_WINDOW', self._quit)
+
+            self._build()
+            self._show_current()
+
+        def _build(self):
+            # Progress bar
+            top = ttk.Frame(self.win, padding=(8, 6))
+            top.pack(fill=tk.X)
+            self._progress_var = tk.StringVar()
+            ttk.Label(top, textvariable=self._progress_var, style='DashboardSubtitle.TLabel').pack(side=tk.LEFT)
+
+            # Result display
+            display_frame = ttk.LabelFrame(self.win, text='Result', padding=6)
+            display_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
+
+            scrollbar = ttk.Scrollbar(display_frame)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            self._display_text = tk.Text(
+                display_frame, wrap=tk.WORD, font=('Consolas', 9),
+                state='disabled', yscrollcommand=scrollbar.set)
+            self._display_text.pack(fill=tk.BOTH, expand=True)
+            scrollbar.config(command=self._display_text.yview)
+
+            # Notes
+            notes_frame = ttk.Frame(self.win, padding=(8, 2))
+            notes_frame.pack(fill=tk.X)
+            ttk.Label(notes_frame, text='Notes (optional):').pack(side=tk.LEFT)
+            self._notes_var = tk.StringVar()
+            ttk.Entry(notes_frame, textvariable=self._notes_var).pack(
+                side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 0))
+
+            # Action buttons
+            btn_frame = ttk.Frame(self.win, padding=(8, 6))
+            btn_frame.pack(fill=tk.X)
+            ttk.Button(btn_frame, text='\U0001f916  AI',
+                       command=lambda: self._label('ai')).pack(side=tk.LEFT, padx=(0, 4))
+            ttk.Button(btn_frame, text='\U0001f9d1  Human',
+                       command=lambda: self._label('human')).pack(side=tk.LEFT, padx=(0, 4))
+            ttk.Button(btn_frame, text='?  Unsure',
+                       command=lambda: self._label('unsure')).pack(side=tk.LEFT, padx=(0, 4))
+            ttk.Button(btn_frame, text='Skip',
+                       command=self._skip).pack(side=tk.LEFT, padx=(0, 12))
+            ttk.Separator(btn_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=4)
+            ttk.Button(btn_frame, text='Quit Session',
+                       command=self._quit).pack(side=tk.LEFT, padx=(4, 0))
+
+        def _show_current(self):
+            if self._idx >= len(self._results):
+                self._finish()
+                return
+
+            r = self._results[self._idx]
+            n = len(self._results)
+            icon = self._ICONS.get(r.get('determination', ''), '?')
+            self._progress_var.set(
+                f'[{self._idx + 1}/{n}]  Reviewer: {self._reviewer}  |  '
+                f'Labeled so far: {self._stats["labeled_ai"]} AI / '
+                f'{self._stats["labeled_human"]} human / '
+                f'{self._stats["labeled_unsure"]} unsure'
+            )
+
+            det = r.get('determination', '?')
+            lines = [
+                f"{icon} [{det}]  conf={r.get('confidence', 0):.2f}  mode={r.get('mode', '?')}",
+                f"Task:      {r.get('task_id', '?')}",
+                f"Attempter: {r.get('attempter', '(unknown)')}",
+                f"Occupation: {r.get('occupation', '(unknown)')}",
+                f"Words:     {r.get('word_count', 0)}",
+                f"Reason:    {r.get('reason', '')[:120]}",
+                '',
+                '--- Key Signals ---',
+                f"Preamble:    {r.get('preamble_score', 0):.2f} ({r.get('preamble_severity', 'NONE')})",
+                f"Prompt Sig:  {r.get('prompt_signature_composite', 0):.2f}  "
+                f"(CFD={r.get('prompt_signature_cfd', 0):.3f})",
+                f"VSD:         {r.get('voice_dissonance_vsd', 0):.1f}  "
+                f"(voice={r.get('voice_dissonance_voice_score', 0):.1f} x "
+                f"spec={r.get('voice_dissonance_spec_score', 0):.1f})",
+                f"IDI:         {r.get('instruction_density_idi', 0):.1f}",
+                f"NSSI:        {r.get('self_similarity_nssi_score', 0):.3f}  "
+                f"({r.get('self_similarity_nssi_signals', 0)} signals)",
+                f"DNA-GPT:     {r.get('continuation_bscore', 0):.4f}  "
+                f"({r.get('continuation_mode', 'n/a')})",
+            ]
+
+            cd = (r.get('channel_details') or {}).get('channels', {})
+            if cd:
+                lines.append('')
+                lines.append('--- Channels ---')
+                for ch_name in ['prompt_structure', 'stylometry', 'continuation', 'windowing']:
+                    info = cd.get(ch_name, {})
+                    sev = info.get('severity', 'GREEN')
+                    if sev != 'GREEN':
+                        lines.append(f'  {ch_name:20s} {sev:6s}  {info.get("explanation", "")[:60]}')
+
+            tid = r.get('task_id', '')
+            if tid in self._text_map:
+                text = self._text_map[tid]
+                preview = text[:300] + (f'... [{len(text) - 300} more chars]' if len(text) > 300 else '')
+                lines.append('')
+                lines.append('--- Text Preview ---')
+                lines.append(preview)
+
+            self._display_text.configure(state='normal')
+            self._display_text.delete('1.0', tk.END)
+            self._display_text.insert('1.0', '\n'.join(lines))
+            self._display_text.configure(state='disabled')
+            self._notes_var.set('')
+
+        def _label(self, ground_truth):
+            import json
+            from datetime import datetime
+            r = self._results[self._idx]
+            notes = self._notes_var.get().strip()
+
+            wc = r.get('word_count', 0)
+            length_bin = (
+                'short' if wc < 100 else
+                'medium' if wc < 300 else
+                'long' if wc < 800 else
+                'very_long'
+            )
+            record = {
+                'task_id': r.get('task_id', ''),
+                'attempter': r.get('attempter', ''),
+                'occupation': r.get('occupation', ''),
+                'ground_truth': ground_truth,
+                'pipeline_determination': r.get('determination', ''),
+                'pipeline_confidence': r.get('confidence', 0),
+                'reviewer': self._reviewer,
+                'notes': notes,
+                'timestamp': datetime.now().isoformat(),
+                'pipeline_version': 'v0.66',
+                'confidence': r.get('confidence', 0),
+                'word_count': wc,
+                'domain': r.get('domain', ''),
+                'mode': r.get('mode', ''),
+                'length_bin': length_bin,
+            }
+
+            with open(self._output_path, 'a') as f:
+                f.write(json.dumps(record) + '\n')
+
+            if self._store and ground_truth in ('ai', 'human'):
+                self._store.record_confirmation(
+                    r.get('task_id', ''), ground_truth,
+                    verified_by=self._reviewer, notes=notes,
+                )
+
+            if ground_truth == 'ai':
+                self._stats['labeled_ai'] += 1
+            elif ground_truth == 'human':
+                self._stats['labeled_human'] += 1
+            else:
+                self._stats['labeled_unsure'] += 1
+            self._stats['total_presented'] += 1
+
+            self._idx += 1
+            self._show_current()
+
+        def _skip(self):
+            self._stats['skipped'] += 1
+            self._stats['total_presented'] += 1
+            self._idx += 1
+            self._show_current()
+
+        def _quit(self):
+            self._finish()
+
+        def _finish(self):
+            if self._on_complete:
+                self._on_complete(self._stats)
+            self.win.destroy()
 
 
 def launch_gui():

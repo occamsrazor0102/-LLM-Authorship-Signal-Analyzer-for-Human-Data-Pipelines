@@ -1252,6 +1252,179 @@ def _page_memory():
                 for m in msgs:
                     st.info(m)
 
+    # Interactive Labeling
+    with st.expander("\U0001f3f7\ufe0f Interactive Labeling", expanded=False):
+        st.caption(
+            "Review pipeline results one by one and assign ground-truth labels "
+            "(AI / Human / Unsure). Labels are written to a JSONL file for "
+            "calibration and optionally stored in the memory store. "
+            "Run an analysis on the **Analysis** page first."
+        )
+
+        results = st.session_state.get("results", [])
+        if not results:
+            st.info("No results available. Run an analysis on the **Analysis** page first.")
+        else:
+            c1, c2 = st.columns(2)
+            with c1:
+                lbl_reviewer = st.text_input(
+                    "Reviewer name/ID", key="lbl_reviewer"
+                )
+                lbl_output = st.text_input(
+                    "Output JSONL path",
+                    key="lbl_output",
+                    placeholder="beet_labels_YYYYMM_HHMM.jsonl",
+                )
+                lbl_max = st.number_input(
+                    "Max labels (0 = all)", min_value=0, value=0, key="lbl_max"
+                )
+            with c2:
+                lbl_skip_green = st.checkbox("Skip GREEN determinations", key="lbl_skip_green")
+                lbl_skip_red = st.checkbox("Skip RED determinations", key="lbl_skip_red")
+
+            if st.button("▶ Start / Resume Labeling Session", type="primary"):
+                if not lbl_reviewer.strip():
+                    st.warning("Enter a reviewer name.")
+                else:
+                    from llm_detector.cli import _sort_for_labeling
+                    from datetime import datetime
+                    sorted_res = _sort_for_labeling(results)
+                    if lbl_skip_green:
+                        sorted_res = [r for r in sorted_res if r["determination"] != "GREEN"]
+                    if lbl_skip_red:
+                        sorted_res = [r for r in sorted_res if r["determination"] != "RED"]
+                    if lbl_max > 0:
+                        sorted_res = sorted_res[:lbl_max]
+                    out_path = lbl_output.strip() or (
+                        f"beet_labels_{datetime.now().strftime('%Y%m%d_%H%M')}.jsonl"
+                    )
+                    st.session_state["lbl_queue"] = sorted_res
+                    st.session_state["lbl_idx"] = 0
+                    st.session_state["lbl_out_path"] = out_path
+                    st.session_state["lbl_reviewer_name"] = lbl_reviewer.strip()
+                    st.session_state["lbl_stats"] = {
+                        "labeled_ai": 0, "labeled_human": 0,
+                        "labeled_unsure": 0, "skipped": 0,
+                    }
+                    st.rerun()
+
+            # Active labeling session
+            queue = st.session_state.get("lbl_queue", [])
+            idx = st.session_state.get("lbl_idx", 0)
+            if queue and idx < len(queue):
+                r = queue[idx]
+                stats = st.session_state.get("lbl_stats", {})
+                text_map = st.session_state.get("text_map", {})
+                session_reviewer = st.session_state.get("lbl_reviewer_name", "")
+                out_path = st.session_state.get("lbl_out_path", "labels.jsonl")
+
+                icons = {
+                    "RED": "\U0001f534", "AMBER": "\U0001f7e0",
+                    "YELLOW": "\U0001f7e1", "GREEN": "\U0001f7e2",
+                    "MIXED": "\U0001f535", "REVIEW": "\u26aa",
+                }
+                icon = icons.get(r.get("determination", ""), "?")
+                st.markdown(f"**{icon} [{r.get('determination','?')}]** — "
+                            f"conf={r.get('confidence', 0):.2f} | "
+                            f"words={r.get('word_count', 0)} | "
+                            f"mode={r.get('mode','?')}")
+                st.markdown(f"**Task:** {r.get('task_id','?')}  &nbsp; "
+                            f"**Attempter:** {r.get('attempter','(unknown)')}  &nbsp; "
+                            f"**Occupation:** {r.get('occupation','(unknown)')}")
+                st.caption(f"Reason: {r.get('reason','')[:200]}")
+
+                tid = r.get("task_id", "")
+                if tid in text_map:
+                    with st.expander("Text preview"):
+                        st.text(text_map[tid][:500])
+
+                st.progress((idx) / len(queue),
+                            text=f"{idx + 1}/{len(queue)} — "
+                                 f"{stats.get('labeled_ai',0)} AI / "
+                                 f"{stats.get('labeled_human',0)} human / "
+                                 f"{stats.get('labeled_unsure',0)} unsure / "
+                                 f"{stats.get('skipped',0)} skipped")
+
+                lbl_notes = st.text_input("Notes (optional)", key=f"lbl_notes_{idx}")
+
+                bc1, bc2, bc3, bc4, bc5 = st.columns(5)
+
+                def _record_and_advance(ground_truth):
+                    import json
+                    from datetime import datetime
+                    wc = r.get("word_count", 0)
+                    record = {
+                        "task_id": r.get("task_id", ""),
+                        "attempter": r.get("attempter", ""),
+                        "occupation": r.get("occupation", ""),
+                        "ground_truth": ground_truth,
+                        "pipeline_determination": r.get("determination", ""),
+                        "pipeline_confidence": r.get("confidence", 0),
+                        "reviewer": session_reviewer,
+                        "notes": st.session_state.get(f"lbl_notes_{idx}", ""),
+                        "timestamp": datetime.now().isoformat(),
+                        "pipeline_version": "v0.66",
+                        "confidence": r.get("confidence", 0),
+                        "word_count": wc,
+                        "domain": r.get("domain", ""),
+                        "mode": r.get("mode", ""),
+                        "length_bin": (
+                            "short" if wc < 100 else
+                            "medium" if wc < 300 else
+                            "long" if wc < 800 else
+                            "very_long"
+                        ),
+                    }
+                    with open(out_path, "a") as fh:
+                        fh.write(json.dumps(record) + "\n")
+                    mem = st.session_state.get("memory_store")
+                    if mem and ground_truth in ("ai", "human"):
+                        mem.record_confirmation(
+                            r.get("task_id", ""), ground_truth,
+                            verified_by=session_reviewer,
+                            notes=record["notes"],
+                        )
+                    if ground_truth == "ai":
+                        st.session_state["lbl_stats"]["labeled_ai"] += 1
+                    elif ground_truth == "human":
+                        st.session_state["lbl_stats"]["labeled_human"] += 1
+                    else:
+                        st.session_state["lbl_stats"]["labeled_unsure"] += 1
+                    st.session_state["lbl_idx"] += 1
+                    st.rerun()
+
+                with bc1:
+                    if st.button("\U0001f916 AI", use_container_width=True, key=f"lbl_ai_{idx}"):
+                        _record_and_advance("ai")
+                with bc2:
+                    if st.button("\U0001f9d1 Human", use_container_width=True, key=f"lbl_human_{idx}"):
+                        _record_and_advance("human")
+                with bc3:
+                    if st.button("? Unsure", use_container_width=True, key=f"lbl_unsure_{idx}"):
+                        _record_and_advance("unsure")
+                with bc4:
+                    if st.button("Skip", use_container_width=True, key=f"lbl_skip_{idx}"):
+                        st.session_state["lbl_stats"]["skipped"] += 1
+                        st.session_state["lbl_idx"] += 1
+                        st.rerun()
+                with bc5:
+                    if st.button("Quit", use_container_width=True, key=f"lbl_quit_{idx}"):
+                        st.session_state["lbl_queue"] = []
+                        st.rerun()
+
+            elif queue and idx >= len(queue):
+                stats = st.session_state.get("lbl_stats", {})
+                out_path = st.session_state.get("lbl_out_path", "labels.jsonl")
+                st.success(
+                    f"\u2705 Session complete — "
+                    f"{stats.get('labeled_ai', 0)} AI, "
+                    f"{stats.get('labeled_human', 0)} human, "
+                    f"{stats.get('labeled_unsure', 0)} unsure, "
+                    f"{stats.get('skipped', 0)} skipped. "
+                    f"Saved to `{out_path}`."
+                )
+                st.session_state["lbl_queue"] = []
+
 
 # ── Page: Calibration ────────────────────────────────────────────────────────
 
@@ -1354,6 +1527,42 @@ def _page_calibration():
                     analyze_baselines(
                         bl_jsonl.strip(),
                         output_csv=bl_csv.strip() or None,
+                    )
+                finally:
+                    sys.stdout = old
+                st.code(buf.getvalue())
+
+    # Calibration Diagnostics Report
+    with st.expander("\U0001f50e Calibration Diagnostics Report", expanded=False):
+        st.caption(
+            "Generate a diagnostics report from a labeled JSONL file "
+            "(records with ground_truth='ai' or 'human'). "
+            "Shows confusion matrix, reliability diagram, TPR at fixed FPR, "
+            "and per-stratum calibration."
+        )
+        cr_jsonl = st.text_input(
+            "Labeled JSONL",
+            placeholder="/path/to/labeled.jsonl",
+            key="cal_report_jsonl",
+        )
+        cr_csv = st.text_input(
+            "Export labeled data to CSV (optional)",
+            key="cal_report_csv",
+            placeholder="/path/to/output.csv",
+        )
+        if st.button("Generate Calibration Report"):
+            if not cr_jsonl.strip() or not os.path.exists(cr_jsonl.strip()):
+                st.warning("Select a valid labeled JSONL file.")
+            else:
+                buf = io.StringIO()
+                old = sys.stdout
+                sys.stdout = buf
+                try:
+                    from llm_detector.cli import calibration_report
+                    calibration_report(
+                        cr_jsonl.strip(),
+                        cal_table=st.session_state.get("cal_table"),
+                        output_csv=cr_csv.strip() or None,
                     )
                 finally:
                     sys.stdout = old

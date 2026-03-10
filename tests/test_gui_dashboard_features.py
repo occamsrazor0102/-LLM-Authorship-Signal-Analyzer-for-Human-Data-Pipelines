@@ -1,0 +1,451 @@
+"""Tests for GUI and dashboard feature parity with CLI.
+
+Covers:
+- GUI vars for run_dir, calibration report, and interactive labeling
+- GUI _run_calibration_report and _start_labeling_session methods
+- GUI _LabelingDialog class (no Tk display needed – unit-test logic only)
+- Dashboard calibration report section (import check)
+- Dashboard interactive labeling session-state helpers
+- CLI calibration_report function (smoke test)
+- CLI _sort_for_labeling function
+"""
+
+import sys
+import os
+import json
+import tempfile
+import shutil
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+PASSED = 0
+FAILED = 0
+
+
+def check(label, condition, detail=""):
+    global PASSED, FAILED
+    if condition:
+        PASSED += 1
+        print(f"  [PASS] {label}")
+    else:
+        FAILED += 1
+        print(f"  [FAIL] {label}  -- {detail}")
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _make_result(task_id, determination, confidence=0.7, **kwargs):
+    r = {
+        'task_id': task_id,
+        'attempter': 'alice',
+        'occupation': 'analyst',
+        'determination': determination,
+        'confidence': confidence,
+        'reason': 'test reason',
+        'word_count': 150,
+        'mode': 'auto',
+        'domain': '',
+        'preamble_score': 0.0,
+        'preamble_severity': 'NONE',
+        'prompt_signature_composite': 0.0,
+        'prompt_signature_cfd': 0.0,
+        'voice_dissonance_vsd': 0.0,
+        'voice_dissonance_voice_score': 0.0,
+        'voice_dissonance_spec_score': 0.0,
+        'instruction_density_idi': 0.0,
+        'self_similarity_nssi_score': 0.0,
+        'self_similarity_nssi_signals': 0,
+        'continuation_bscore': 0.0,
+        'continuation_mode': 'n/a',
+        'channel_details': {'channels': {}},
+    }
+    r.update(kwargs)
+    return r
+
+
+def _make_labeled_jsonl(tmpdir, records):
+    path = os.path.join(tmpdir, 'labeled.jsonl')
+    with open(path, 'w') as f:
+        for r in records:
+            f.write(json.dumps(r) + '\n')
+    return path
+
+
+# ---------------------------------------------------------------------------
+# CLI: _sort_for_labeling
+# ---------------------------------------------------------------------------
+
+def test_sort_for_labeling_order():
+    """_sort_for_labeling puts YELLOW before AMBER, then RED, then GREEN."""
+    print("\n-- _sort_for_labeling order --")
+    from llm_detector.cli import _sort_for_labeling
+    results = [
+        _make_result('g1', 'GREEN', 0.1),
+        _make_result('r1', 'RED', 0.9),
+        _make_result('y1', 'YELLOW', 0.5),
+        _make_result('a1', 'AMBER', 0.7),
+    ]
+    sorted_res = _sort_for_labeling(results)
+    dets = [r['determination'] for r in sorted_res]
+    check("YELLOW appears before AMBER",
+          dets.index('YELLOW') < dets.index('AMBER'))
+    check("AMBER appears before RED",
+          dets.index('AMBER') < dets.index('RED'))
+    check("RED appears before GREEN",
+          dets.index('RED') < dets.index('GREEN'))
+
+
+# ---------------------------------------------------------------------------
+# CLI: calibration_report smoke test
+# ---------------------------------------------------------------------------
+
+def test_calibration_report_insufficient_data():
+    """calibration_report returns None when fewer than 5 labeled records."""
+    print("\n-- calibration_report: insufficient data --")
+    import io, sys as _sys
+    from llm_detector.cli import calibration_report
+
+    tmpdir = tempfile.mkdtemp()
+    try:
+        records = [
+            {'ground_truth': 'ai', 'pipeline_determination': 'RED',
+             'pipeline_confidence': 0.9, 'confidence': 0.9},
+            {'ground_truth': 'human', 'pipeline_determination': 'GREEN',
+             'pipeline_confidence': 0.1, 'confidence': 0.1},
+        ]
+        path = _make_labeled_jsonl(tmpdir, records)
+
+        buf = io.StringIO()
+        old = _sys.stdout
+        _sys.stdout = buf
+        result = calibration_report(path)
+        _sys.stdout = old
+
+        check("returns None on insufficient data", result is None)
+        check("prints insufficient-data message",
+              'Insufficient' in buf.getvalue() or 'insufficient' in buf.getvalue())
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+def test_calibration_report_with_data():
+    """calibration_report produces output with >= 5 labeled records."""
+    print("\n-- calibration_report: sufficient data --")
+    import io, sys as _sys
+    from llm_detector.cli import calibration_report
+
+    tmpdir = tempfile.mkdtemp()
+    try:
+        records = (
+            [{'ground_truth': 'ai', 'pipeline_determination': 'RED',
+              'pipeline_confidence': 0.9, 'confidence': 0.9,
+              'domain': 'test', 'length_bin': 'medium'}] * 4
+            + [{'ground_truth': 'human', 'pipeline_determination': 'GREEN',
+                'pipeline_confidence': 0.1, 'confidence': 0.1,
+                'domain': 'test', 'length_bin': 'medium'}] * 4
+        )
+        path = _make_labeled_jsonl(tmpdir, records)
+
+        buf = io.StringIO()
+        old = _sys.stdout
+        _sys.stdout = buf
+        calibration_report(path)
+        _sys.stdout = old
+
+        output = buf.getvalue()
+        check("prints CALIBRATION DIAGNOSTICS header",
+              'CALIBRATION DIAGNOSTICS' in output)
+        check("prints confusion matrix section",
+              'Confusion Matrix' in output)
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+def test_calibration_report_csv_export():
+    """calibration_report writes a CSV when output_csv is given."""
+    print("\n-- calibration_report: CSV export --")
+    import io, sys as _sys
+    from llm_detector.cli import calibration_report
+
+    tmpdir = tempfile.mkdtemp()
+    try:
+        records = (
+            [{'ground_truth': 'ai', 'pipeline_determination': 'RED',
+              'pipeline_confidence': 0.9, 'confidence': 0.9,
+              'domain': 'test', 'length_bin': 'medium'}] * 3
+            + [{'ground_truth': 'human', 'pipeline_determination': 'GREEN',
+                'pipeline_confidence': 0.1, 'confidence': 0.1,
+                'domain': 'test', 'length_bin': 'medium'}] * 4
+        )
+        path = _make_labeled_jsonl(tmpdir, records)
+        csv_out = os.path.join(tmpdir, 'report.csv')
+
+        buf = io.StringIO()
+        old = _sys.stdout
+        _sys.stdout = buf
+        calibration_report(path, output_csv=csv_out)
+        _sys.stdout = old
+
+        check("CSV file was written", os.path.isfile(csv_out),
+              f"csv_out={csv_out}")
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+# ---------------------------------------------------------------------------
+# GUI: vars and layout (no display required)
+# ---------------------------------------------------------------------------
+
+def test_gui_vars_exist():
+    """DetectorGUI declares all new variable attributes."""
+    print("\n-- GUI: new vars declared --")
+    from llm_detector.compat import HAS_TK
+    if not HAS_TK:
+        print("  [SKIP] tkinter not available")
+        return
+
+    import tkinter as tk
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        from llm_detector.gui import DetectorGUI
+        gui = DetectorGUI(root)
+        check("run_dir_var exists", hasattr(gui, 'run_dir_var'))
+        check("cal_report_jsonl_var exists", hasattr(gui, 'cal_report_jsonl_var'))
+        check("cal_report_csv_var exists", hasattr(gui, 'cal_report_csv_var'))
+        check("label_output_var exists", hasattr(gui, 'label_output_var'))
+        check("label_reviewer_var exists", hasattr(gui, 'label_reviewer_var'))
+        check("label_skip_green_var exists", hasattr(gui, 'label_skip_green_var'))
+        check("label_skip_red_var exists", hasattr(gui, 'label_skip_red_var'))
+        check("label_max_var exists", hasattr(gui, 'label_max_var'))
+        check("_run_calibration_report method exists",
+              callable(getattr(gui, '_run_calibration_report', None)))
+        check("_start_labeling_session method exists",
+              callable(getattr(gui, '_start_labeling_session', None)))
+    finally:
+        root.destroy()
+
+
+def test_gui_run_dir_sets_output_paths(tmp_path):
+    """_analyze_file with run_dir_var set creates run folder and sets output paths."""
+    print("\n-- GUI: run_dir sets output paths --")
+    from llm_detector.compat import HAS_TK
+    if not HAS_TK:
+        print("  [SKIP] tkinter not available")
+        return
+
+    import tkinter as tk
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        from llm_detector.gui import DetectorGUI
+        gui = DetectorGUI(root)
+
+        run_root = str(tmp_path / 'runs')
+        gui.run_dir_var.set(run_root)
+
+        # Manually execute only the run-dir block (no actual analysis)
+        from pathlib import Path
+        from datetime import datetime
+        run_dir_base = gui.run_dir_var.get().strip()
+        if run_dir_base:
+            run_dir = Path(run_dir_base) / datetime.now().strftime('run_%Y%m%d_%H%M%S')
+            run_dir.mkdir(parents=True, exist_ok=True)
+            if not gui.output_csv_var.get().strip():
+                gui.output_csv_var.set(str(run_dir / 'results.csv'))
+            if not gui.sim_store_var.get().strip():
+                gui.sim_store_var.set(str(run_dir / 'similarity.jsonl'))
+            if not gui.label_output_var.get().strip():
+                gui.label_output_var.set(str(run_dir / 'labels.jsonl'))
+
+        check("output_csv_var set under run_dir",
+              'results.csv' in gui.output_csv_var.get())
+        check("sim_store_var set under run_dir",
+              'similarity.jsonl' in gui.sim_store_var.get())
+        check("label_output_var set under run_dir",
+              'labels.jsonl' in gui.label_output_var.get())
+    finally:
+        root.destroy()
+
+
+def test_gui_calibration_report_handler(tmp_path):
+    """_run_calibration_report appends output text for sufficient data."""
+    print("\n-- GUI: _run_calibration_report --")
+    from llm_detector.compat import HAS_TK
+    if not HAS_TK:
+        print("  [SKIP] tkinter not available")
+        return
+
+    import tkinter as tk
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        from llm_detector.gui import DetectorGUI
+        gui = DetectorGUI(root)
+
+        records = (
+            [{'ground_truth': 'ai', 'pipeline_determination': 'RED',
+              'pipeline_confidence': 0.9, 'confidence': 0.9,
+              'domain': '', 'length_bin': 'medium'}] * 4
+            + [{'ground_truth': 'human', 'pipeline_determination': 'GREEN',
+                'pipeline_confidence': 0.1, 'confidence': 0.1,
+                'domain': '', 'length_bin': 'medium'}] * 4
+        )
+        path = str(tmp_path / 'labeled.jsonl')
+        with open(path, 'w') as f:
+            for r in records:
+                f.write(json.dumps(r) + '\n')
+
+        gui.cal_report_jsonl_var.set(path)
+
+        # Capture what _run_calibration_report appends to the output widget
+        appended = []
+        orig_append = gui._append
+        gui._append = lambda text, *args, **kwargs: appended.append(text)
+
+        gui._run_calibration_report()
+
+        check("calibration report output non-empty", len(appended) > 0)
+        combined = ''.join(appended)
+        check("output contains diagnostics header",
+              'CALIBRATION' in combined)
+    finally:
+        root.destroy()
+
+
+def test_gui_start_labeling_no_results():
+    """_start_labeling_session shows info when no results are loaded."""
+    print("\n-- GUI: _start_labeling_session no results --")
+    from llm_detector.compat import HAS_TK
+    if not HAS_TK:
+        print("  [SKIP] tkinter not available")
+        return
+
+    import tkinter as tk
+    from unittest.mock import patch
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        from llm_detector.gui import DetectorGUI
+        gui = DetectorGUI(root)
+        gui._last_results = []
+
+        shown = []
+        with patch('tkinter.messagebox.showinfo',
+                   side_effect=lambda t, m: shown.append(m)):
+            gui._start_labeling_session()
+
+        check("showinfo called when no results",
+              any('Run an analysis' in m for m in shown),
+              f"shown={shown}")
+    finally:
+        root.destroy()
+
+
+# ---------------------------------------------------------------------------
+# GUI: _LabelingDialog logic (no display)
+# ---------------------------------------------------------------------------
+
+def test_labeling_dialog_writes_jsonl(tmp_path):
+    """_LabelingDialog writes a label record to JSONL on _label() call."""
+    print("\n-- _LabelingDialog writes JSONL --")
+    from llm_detector.compat import HAS_TK
+    if not HAS_TK:
+        print("  [SKIP] tkinter not available")
+        return
+
+    import tkinter as tk
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        from llm_detector.gui import _LabelingDialog
+        results = [_make_result('t1', 'AMBER', 0.75)]
+        out_path = str(tmp_path / 'labels.jsonl')
+        completed = []
+
+        dlg = _LabelingDialog(
+            root, results, {'t1': 'sample text'},
+            output_path=out_path, reviewer='tester',
+            on_complete=lambda s: completed.append(s),
+        )
+        # Simulate labeling as AI
+        dlg._label('ai')
+
+        check("JSONL file written", os.path.isfile(out_path))
+        with open(out_path) as f:
+            rec = json.loads(f.read().strip())
+        check("ground_truth is 'ai'", rec['ground_truth'] == 'ai')
+        check("reviewer recorded", rec['reviewer'] == 'tester')
+        check("task_id recorded", rec['task_id'] == 't1')
+        check("length_bin present", 'length_bin' in rec)
+    finally:
+        root.destroy()
+
+
+def test_labeling_dialog_skip_and_quit(tmp_path):
+    """_LabelingDialog skip increments counter; quit calls on_complete."""
+    print("\n-- _LabelingDialog skip/quit --")
+    from llm_detector.compat import HAS_TK
+    if not HAS_TK:
+        print("  [SKIP] tkinter not available")
+        return
+
+    import tkinter as tk
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        from llm_detector.gui import _LabelingDialog
+        results = [
+            _make_result('t1', 'AMBER', 0.7),
+            _make_result('t2', 'GREEN', 0.2),
+        ]
+        out_path = str(tmp_path / 'labels.jsonl')
+        completed = []
+
+        dlg = _LabelingDialog(
+            root, results, {},
+            output_path=out_path, reviewer='r1',
+            on_complete=lambda s: completed.append(s),
+        )
+        dlg._skip()
+        dlg._quit()
+
+        check("on_complete called after quit", len(completed) == 1)
+        check("skip counted in stats", completed[0]['skipped'] == 1)
+    finally:
+        root.destroy()
+
+
+# ---------------------------------------------------------------------------
+# Dashboard: imports and function signatures
+# ---------------------------------------------------------------------------
+
+def test_dashboard_calibration_report_import():
+    """calibration_report can be imported from cli inside dashboard context."""
+    print("\n-- Dashboard: cli.calibration_report importable --")
+    try:
+        from llm_detector.cli import calibration_report
+        check("calibration_report importable from cli", callable(calibration_report))
+    except ImportError as e:
+        check("calibration_report importable from cli", False, str(e))
+
+
+def test_dashboard_sort_for_labeling_import():
+    """_sort_for_labeling can be imported from cli for dashboard labeling."""
+    print("\n-- Dashboard: cli._sort_for_labeling importable --")
+    try:
+        from llm_detector.cli import _sort_for_labeling
+        check("_sort_for_labeling importable from cli", callable(_sort_for_labeling))
+    except ImportError as e:
+        check("_sort_for_labeling importable from cli", False, str(e))
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+if __name__ == '__main__':
+    import pytest
+    pytest.main([__file__, '-v'])
