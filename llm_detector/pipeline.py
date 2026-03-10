@@ -27,7 +27,7 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
                    dna_model=None, dna_samples=3,
                    ground_truth=None, language=None, domain=None,
                    mode='auto', cal_table=None, memory_store=None,
-                   disabled_channels=None):
+                   disabled_channels=None, precomputed_continuation=None):
     """Run full v0.66 pipeline on a single prompt. Returns result dict."""
     # Normalization pre-pass
     normalized_text, norm_report = normalize_text(text)
@@ -55,7 +55,9 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         self_sim = run_self_similarity(text_for_analysis)
 
     cont_result = None
-    if run_l3 and api_key:
+    if precomputed_continuation is not None:
+        cont_result = precomputed_continuation
+    elif run_l3 and api_key:
         cont_result = run_continuation_api_multi(
             text_for_analysis, api_key=api_key, provider=dna_provider,
             model=dna_model, n_samples=dna_samples,
