@@ -1,6 +1,30 @@
 # LLM Authorship Signal Analyzer for Human Data Pipelines
 
-A stylometric detection pipeline that identifies LLM-generated or LLM-assisted task prompts submitted through human data collection workflows. Designed for quality assurance in benchmark construction (GDPval-style evaluation tasks), clinical education assessments, and any pipeline where humans are expected to author original prompts but may submit LLM-generated content instead.
+[![Latest Release](https://img.shields.io/github/v/release/occamsrazor0102/-LLM-Authorship-Signal-Analyzer-for-Human-Data-Pipelines?label=latest%20release)](https://github.com/occamsrazor0102/-LLM-Authorship-Signal-Analyzer-for-Human-Data-Pipelines/releases/latest)
+
+A stylometric detection pipeline that identifies LLM-generated or LLM-assisted task prompts submitted through human data collection workflows.
+
+## Download (Standalone Executables)
+
+Pre-built single-file executables — no Python or dependencies required. Download the file for your platform from the [**latest release**](https://github.com/occamsrazor0102/-LLM-Authorship-Signal-Analyzer-for-Human-Data-Pipelines/releases/latest):
+
+| Platform | File |
+|----------|------|
+| **Windows** | `llm-detector-windows-x86_64.exe` |
+| **macOS (Intel)** | `llm-detector-macos-x86_64` |
+| **macOS (Apple Silicon)** | `llm-detector-macos-arm64` |
+| **Linux** | `llm-detector-linux-x86_64` |
+
+**macOS / Linux — make executable after download:**
+```bash
+chmod +x llm-detector-macos-arm64   # or the variant you downloaded
+./llm-detector-macos-arm64 --text "Your prompt here"
+```
+
+**Windows — run from PowerShell or Command Prompt:**
+```
+.\llm-detector-windows-x86_64.exe --text "Your prompt here"
+``` Designed for quality assurance in benchmark construction (GDPval-style evaluation tasks), clinical education assessments, and any pipeline where humans are expected to author original prompts but may submit LLM-generated content instead.
 
 ### Monolith Repo Only
 

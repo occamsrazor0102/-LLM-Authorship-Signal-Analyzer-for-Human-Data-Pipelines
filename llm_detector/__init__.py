@@ -18,7 +18,7 @@ Package structure:
     gui.py         - Desktop GUI
 """
 
-__version__ = '0.66.0'
+__version__ = '0.67.0'
 
 # Core pipeline
 from llm_detector.pipeline import analyze_prompt
