@@ -27,10 +27,17 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas openpyxl pypdf pytest
+          pip install pandas openpyxl pypdf pytest pytest-cov numpy
 
       - name: Run tests
-        run: pytest -q
+        run: pytest -q --cov=llm_detector --cov-report=xml --cov-report=term-missing
+
+      - name: Upload coverage report
+        uses: codecov/codecov-action@v3
+        if: always()
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
 
   build:
     needs: test

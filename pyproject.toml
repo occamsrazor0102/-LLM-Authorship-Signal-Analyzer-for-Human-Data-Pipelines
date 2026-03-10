@@ -53,3 +53,28 @@ llm-detector-gui = "llm_detector.cli:main_gui"
 
 [tool.setuptools.packages.find]
 include = ["llm_detector*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = ["-ra", "-q"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "requires_gpu: marks tests requiring GPU (transformers, torch, etc.)",
+    "requires_network: marks tests requiring network access",
+]
+
+[tool.coverage.run]
+source = ["llm_detector"]
+# Exclude untestable GUI modules (Streamlit/Tkinter) from coverage measurement
+omit = [
+    "llm_detector/dashboard.py",
+    "llm_detector/gui.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+# Enforce minimum 60% coverage (excluding GUI modules) — Sprint 1 threshold
+fail_under = 60
