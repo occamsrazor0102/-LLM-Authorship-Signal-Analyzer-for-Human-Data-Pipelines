@@ -28,7 +28,9 @@ import os
 import re
 import sys
 import threading
+import time
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor
 
 # ── Third-party (conditional) ────────────────────────────────────────
 from dataclasses import dataclass, field
@@ -1717,21 +1719,24 @@ def _dna_truncate_text(text, ratio=0.5):
 
 def _dna_call_anthropic(prefix, continuation_length, api_key,
                         model='claude-sonnet-4-20250514', n_samples=3, temperature=0.7):
-    """Generate continuations using Anthropic API."""
+    """Generate continuations using Anthropic API (parallel)."""
     try:
         import anthropic
     except ImportError:
         raise ImportError("pip install anthropic  (required for continuation analysis with Anthropic)")
     client = anthropic.Anthropic(api_key=api_key)
-    continuations = []
     max_tokens = min(max(continuation_length * 2, 200), 4096)
-    for _ in range(n_samples):
+    prompt = f"Continue the following text naturally, maintaining the same style, tone, and topic. Do not add any preamble or meta-commentary — just continue writing:\n\n{prefix}"
+
+    def _call(_):
         msg = client.messages.create(
             model=model, max_tokens=max_tokens, temperature=temperature,
-            messages=[{"role": "user",
-                       "content": f"Continue the following text naturally, maintaining the same style, tone, and topic. Do not add any preamble or meta-commentary — just continue writing:\n\n{prefix}"}]
+            messages=[{"role": "user", "content": prompt}],
         )
-        continuations.append(msg.content[0].text if msg.content else "")
+        return msg.content[0].text if msg.content else ""
+
+    with ThreadPoolExecutor(max_workers=n_samples) as pool:
+        continuations = list(pool.map(_call, range(n_samples)))
     return continuations
 
 
@@ -1740,15 +1745,15 @@ DNA_GPT_STORED_PROMPT_ID = 'pmpt_69a8ff3fd48081938b2de58954245ebf0f4f01733906fee
 
 def _dna_call_openai(prefix, continuation_length, api_key,
                      model='gpt-4o-mini', n_samples=3, temperature=0.7):
-    """Generate continuations using OpenAI Responses API with stored prompt."""
+    """Generate continuations using OpenAI Responses API (parallel)."""
     try:
         import openai
     except ImportError:
         raise ImportError("pip install openai  (required for continuation analysis with OpenAI)")
     client = openai.OpenAI(api_key=api_key)
-    continuations = []
     max_tokens = min(max(continuation_length * 2, 200), 4096)
-    for _ in range(n_samples):
+
+    def _call(_):
         resp = client.responses.create(
             model=model,
             max_output_tokens=max_tokens,
@@ -1759,7 +1764,10 @@ def _dna_call_openai(prefix, continuation_length, api_key,
             },
             input=prefix,
         )
-        continuations.append(resp.output_text or "")
+        return resp.output_text or ""
+
+    with ThreadPoolExecutor(max_workers=n_samples) as pool:
+        continuations = list(pool.map(_call, range(n_samples)))
     return continuations
 
 
@@ -1853,22 +1861,20 @@ def run_continuation_api_multi(text, api_key=None, provider='anthropic',
     measures stability of the BScore across truncation points. High stability
     (low variance) across truncation points is an AI signal.
     """
-    bscores = []
-    full_result = None
-
-    for ratio in truncation_ratios:
-        result = run_continuation_api(
+    def _run_ratio(ratio):
+        return ratio, run_continuation_api(
             text, api_key=api_key, provider=provider, model=model,
             truncation_ratio=ratio, n_samples=n_samples,
             temperature=temperature,
         )
-        bs = result.get('bscore', 0.0)
-        bscores.append(bs)
-        if ratio == 0.5:
-            full_result = copy.deepcopy(result)
 
-    if full_result is None:
-        full_result = copy.deepcopy(result)
+    ratio_results = {}
+    with ThreadPoolExecutor(max_workers=len(truncation_ratios)) as pool:
+        for ratio, result in pool.map(lambda r: _run_ratio(r), truncation_ratios):
+            ratio_results[ratio] = result
+
+    bscores = [ratio_results[r].get('bscore', 0.0) for r in truncation_ratios]
+    full_result = copy.deepcopy(ratio_results.get(0.5) or ratio_results[truncation_ratios[-1]])
 
     if len(bscores) >= 2:
         bscore_mean = statistics.mean(bscores)
@@ -1890,6 +1896,205 @@ def run_continuation_api_multi(text, api_key=None, provider='anthropic',
         )
 
     return full_result
+
+
+# ── Anthropic Message Batches API ──────────────────────────────────────
+
+
+def _prepare_batch_requests(texts, task_ids, model='claude-sonnet-4-20250514',
+                            n_samples=3, truncation_ratios=(0.3, 0.5, 0.7),
+                            temperature=0.7):
+    """Pre-compute truncation prefixes and build batch request list."""
+    requests = []
+    metadata = {}
+    skipped = {}
+
+    for task_idx, (text, task_id) in enumerate(zip(texts, task_ids)):
+        word_count = len(text.split())
+        if word_count < 150:
+            skipped[task_idx] = 'insufficient text'
+            continue
+
+        for ratio in truncation_ratios:
+            prefix, original_continuation = _dna_truncate_text(text, ratio)
+            if len(original_continuation.split()) < 30:
+                continue
+
+            orig_tokens = original_continuation.lower().split()
+            continuation_word_count = len(orig_tokens)
+            max_tokens = min(max(continuation_word_count * 2, 200), 4096)
+            prompt = (
+                "Continue the following text naturally, maintaining the same "
+                "style, tone, and topic. Do not add any preamble or "
+                "meta-commentary — just continue writing:\n\n" + prefix
+            )
+
+            for sample_idx in range(n_samples):
+                custom_id = f"t{task_idx}_r{ratio}_s{sample_idx}"
+                metadata[custom_id] = (
+                    task_idx, ratio, sample_idx,
+                    orig_tokens, continuation_word_count,
+                )
+                requests.append({
+                    "custom_id": custom_id,
+                    "params": {
+                        "model": model,
+                        "max_tokens": max_tokens,
+                        "temperature": temperature,
+                        "messages": [{"role": "user", "content": prompt}],
+                    },
+                })
+
+    return requests, metadata, skipped
+
+
+def _score_batch_results(raw_results, metadata, texts, task_ids,
+                         n_samples=3, truncation_ratios=(0.3, 0.5, 0.7)):
+    """Convert raw batch API results into per-task continuation dicts."""
+    regen_map = {}
+    for custom_id, regen_text in raw_results.items():
+        if custom_id not in metadata:
+            continue
+        task_idx, ratio, sample_idx, orig_tokens, cont_wc = metadata[custom_id]
+        regen_map.setdefault(task_idx, {}).setdefault(ratio, []).append(
+            (regen_text, orig_tokens, cont_wc)
+        )
+
+    task_results = {}
+    for task_idx, ratio_data in regen_map.items():
+        text = texts[task_idx]
+        word_count = len(text.split())
+        ratio_results = {}
+
+        for ratio, samples in ratio_data.items():
+            if not samples:
+                continue
+            orig_tokens = samples[0][1]
+            cont_wc = samples[0][2]
+
+            sample_scores = []
+            for regen_text, _, _ in samples:
+                regen_tokens = regen_text.lower().split()
+                if len(regen_tokens) < 10:
+                    continue
+                regen_tokens = regen_tokens[:int(len(orig_tokens) * 1.5)]
+                bs = _dna_bscore(orig_tokens, regen_tokens)
+                sample_scores.append(round(bs, 4))
+
+            if not sample_scores:
+                continue
+
+            bscore = statistics.mean(sample_scores)
+            bscore_max = max(sample_scores)
+
+            if bscore >= 0.20 and bscore_max >= 0.22:
+                det, conf = 'RED', min(0.90, 0.60 + bscore)
+                reason = f"DNA-GPT: high continuation overlap (BScore={bscore:.3f}, max={bscore_max:.3f})"
+            elif bscore >= 0.12:
+                det, conf = 'AMBER', min(0.70, 0.40 + bscore)
+                reason = f"DNA-GPT: elevated continuation overlap (BScore={bscore:.3f})"
+            elif bscore >= 0.08:
+                det, conf = 'YELLOW', min(0.40, 0.20 + bscore)
+                reason = f"DNA-GPT: moderate continuation overlap (BScore={bscore:.3f})"
+            else:
+                det, conf = 'GREEN', max(0.0, 0.10 - bscore)
+                reason = f"DNA-GPT: low continuation overlap (BScore={bscore:.3f}) -- likely human"
+
+            ratio_results[ratio] = {
+                'bscore': round(bscore, 4), 'bscore_max': round(bscore_max, 4),
+                'bscore_samples': sample_scores, 'determination': det,
+                'confidence': round(conf, 4), 'reason': reason,
+                'n_samples': len(sample_scores), 'truncation_ratio': ratio,
+                'continuation_words': cont_wc, 'word_count': word_count,
+            }
+
+        if not ratio_results:
+            continue
+
+        bscores = [ratio_results[r].get('bscore', 0.0)
+                    for r in truncation_ratios if r in ratio_results]
+        full_result = copy.deepcopy(
+            ratio_results.get(0.5) or next(iter(ratio_results.values()))
+        )
+
+        if len(bscores) >= 2:
+            bscore_mean = statistics.mean(bscores)
+            bscore_var = statistics.variance(bscores)
+            stability = max(0.0, 1.0 - (bscore_var / 0.02))
+        else:
+            bscore_mean = bscores[0] if bscores else 0.0
+            bscore_var = 0.0
+            stability = 0.0
+
+        full_result['multi_bscores'] = [round(b, 4) for b in bscores]
+        full_result['bscore_variance'] = round(bscore_var, 6)
+        full_result['bscore_stability'] = round(stability, 4)
+
+        if stability >= 0.75 and bscore_mean >= 0.15:
+            full_result['confidence'] = round(
+                min(full_result.get('confidence', 0.0) + 0.10, 1.0), 4
+            )
+
+        task_results[task_idx] = full_result
+
+    return task_results
+
+
+def run_continuation_batch(texts, task_ids, api_key, model=None,
+                           n_samples=3, truncation_ratios=(0.3, 0.5, 0.7),
+                           temperature=0.7, poll_interval=10, progress_fn=None):
+    """Run DNA-GPT continuation analysis for multiple texts via Anthropic Batches API."""
+    try:
+        import anthropic
+    except ImportError:
+        raise ImportError("pip install anthropic  (required for batch continuation analysis)")
+
+    if model is None:
+        model = 'claude-sonnet-4-20250514'
+
+    requests, metadata, skipped = _prepare_batch_requests(
+        texts, task_ids, model=model, n_samples=n_samples,
+        truncation_ratios=truncation_ratios, temperature=temperature,
+    )
+
+    if not requests:
+        return {}
+
+    if progress_fn:
+        progress_fn(f"Submitting batch of {len(requests)} API calls...")
+
+    client = anthropic.Anthropic(api_key=api_key)
+    batch = client.messages.batches.create(requests=requests)
+    batch_id = batch.id
+
+    if progress_fn:
+        progress_fn(f"Batch {batch_id} submitted. Polling for completion...")
+
+    while True:
+        batch = client.messages.batches.retrieve(batch_id)
+        status = batch.processing_status
+        if progress_fn:
+            counts = batch.request_counts
+            progress_fn(
+                f"Batch {batch_id}: {status} "
+                f"(succeeded={counts.succeeded}, processing={counts.processing}, "
+                f"errored={counts.errored})"
+            )
+        if status == 'ended':
+            break
+        time.sleep(poll_interval)
+
+    raw_results = {}
+    for entry in client.messages.batches.results(batch_id):
+        if entry.result.type == 'succeeded':
+            msg = entry.result.message
+            text_out = msg.content[0].text if msg.content else ""
+            raw_results[entry.custom_id] = text_out
+
+    return _score_batch_results(
+        raw_results, metadata, texts, task_ids,
+        n_samples=n_samples, truncation_ratios=truncation_ratios,
+    )
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -4419,7 +4624,7 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
                    run_l3=True, api_key=None, dna_provider='anthropic',
                    dna_model=None, dna_samples=3,
                    ground_truth=None, language=None, domain=None,
-                   mode='auto', cal_table=None):
+                   mode='auto', cal_table=None, precomputed_continuation=None):
     """Run full v0.65 pipeline on a single prompt. Returns result dict."""
     # Normalization pre-pass
     normalized_text, norm_report = normalize_text(text)
@@ -4447,7 +4652,9 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         self_sim = run_self_similarity(text_for_analysis)
 
     cont_result = None
-    if run_l3 and api_key:
+    if precomputed_continuation is not None:
+        cont_result = precomputed_continuation
+    elif run_l3 and api_key:
         cont_result = run_continuation_api_multi(
             text_for_analysis, api_key=api_key, provider=dna_provider,
             model=dna_model, n_samples=dna_samples,
