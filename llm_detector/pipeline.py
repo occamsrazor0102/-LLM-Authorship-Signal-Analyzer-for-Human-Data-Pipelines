@@ -89,7 +89,7 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
     detection_spans.extend(prompt_sig.get('pack_spans', []))
     detection_spans.extend(voice_dis.get('pack_spans', []))
     detection_spans.extend(instr_density.get('pack_spans', []))
-    for hw in get_hot_window_spans(text_for_analysis):
+    for hw in get_hot_window_spans(text_for_analysis, precomputed_result=window_result):
         detection_spans.append({
             'start': hw[0], 'end': hw[1], 'text': '', 'source': 'hot_window',
             'label': f'score={hw[2]:.2f}', 'type': 'window',
