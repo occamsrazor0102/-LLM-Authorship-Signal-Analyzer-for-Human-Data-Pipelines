@@ -147,7 +147,35 @@ def _render_sidebar():
                 "\U0001f4ca  Reports",
             ],
             label_visibility="collapsed",
+            help=(
+                "\u2699\ufe0f Configuration — Set API keys for Layer 3 continuation "
+                "analysis, tune similarity thresholds, and choose output paths.\n\n"
+                "\U0001f9e0 Memory & Learning — Load the BEET memory store that "
+                "persists analysis history across sessions. Record ground-truth labels "
+                "and rebuild shadow / centroid models.\n\n"
+                "\u2696\ufe0f Calibration — Load or build conformal calibration tables "
+                "to improve confidence estimates. Analyze baseline datasets to tune "
+                "detection thresholds."
+            ),
         )
+
+        # Brief contextual description for non-obvious pages
+        _page_hints = {
+            "\u2699\ufe0f  Configuration": (
+                "\u2139\ufe0f API keys, similarity settings, and output options."
+            ),
+            "\U0001f9e0  Memory & Learning": (
+                "\u2139\ufe0f Persists history, attempter profiles, and learned models "
+                "across sessions."
+            ),
+            "\u2696\ufe0f  Calibration": (
+                "\u2139\ufe0f Conformal calibration tables and baseline analysis to "
+                "sharpen confidence scores."
+            ),
+        }
+        hint = _page_hints.get(page)
+        if hint:
+            st.caption(hint)
 
         st.divider()
 
@@ -522,29 +550,48 @@ def _page_analysis():
 
         with c2:
             # HTML report
-            flagged = [
-                r
-                for r in results
-                if r["determination"] in ("RED", "AMBER", "MIXED")
-            ]
-            if flagged:
-                try:
-                    from llm_detector.html_report import (
-                        generate_batch_html_report,
+            try:
+                text_map = st.session_state.get("text_map", {})
+                if len(results) == 1:
+                    # Single text analysis — generate report for any determination
+                    from llm_detector.html_report import generate_html_report
+                    r = results[0]
+                    # Text is stored under "_single" for single-text analysis;
+                    # fall back to task_id key for any other single-result case.
+                    text = text_map.get("_single") or text_map.get(
+                        r.get("task_id", ""), ""
                     )
-                    html = generate_batch_html_report(
-                        flagged, st.session_state.get("text_map", {})
-                    )
+                    html_content = generate_html_report(text, r)
                     st.download_button(
                         "\U0001f4c4 Download HTML Report",
-                        html,
+                        html_content,
                         "report.html",
                         "text/html",
                     )
-                except Exception:
-                    st.caption("HTML report generation unavailable")
-            else:
-                st.caption("No flagged results for HTML report")
+                else:
+                    # Batch analysis — report for flagged results only
+                    flagged = [
+                        r
+                        for r in results
+                        if r["determination"] in ("RED", "AMBER", "MIXED")
+                    ]
+                    if flagged:
+                        from llm_detector.html_report import (
+                            generate_batch_html_report,
+                        )
+                        html_content = generate_batch_html_report(
+                            flagged, text_map
+                        )
+                        st.download_button(
+                            "\U0001f4c4 Download HTML Report",
+                            html_content,
+                            "report.html",
+                            "text/html",
+                        )
+                    else:
+                        st.caption("No flagged results for HTML report")
+            except Exception:
+                st.caption("HTML report generation unavailable")
 
 
 # ── Page: Configuration ──────────────────────────────────────────────────────

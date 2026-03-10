@@ -34,6 +34,99 @@ _DASHBOARD_THEME = {
     'accent_light': '#dbeafe',
 }
 
+# Descriptions shown when hovering each notebook tab header.
+_TAB_TOOLTIPS = [
+    None,  # Analysis tab — self-explanatory
+    (
+        'Configuration\n\n'
+        'Set the API key for Layer 3 continuation analysis (DNA-GPT), '
+        'choose the LLM provider, tune similarity detection thresholds, '
+        'and configure output paths for CSV and HTML reports.'
+    ),
+    (
+        'Memory & Learning\n\n'
+        'Load the BEET memory store that persists analysis history, '
+        'attempter profiles, and learned models across sessions. '
+        'Record ground-truth labels, view attempter history, and '
+        'rebuild shadow models or centroids from a labeled corpus.'
+    ),
+    (
+        'Calibration & Baselines\n\n'
+        'Load or build a conformal calibration table to convert raw '
+        'confidence scores into well-calibrated probabilities. '
+        'Analyze a baselines JSONL to compute score distributions and '
+        'tune detection thresholds for your specific domain.'
+    ),
+    None,  # Reports tab — self-explanatory
+]
+
+
+if HAS_TK:
+    class _NotebookToolTip:
+        """Shows a brief tooltip when the mouse hovers over a notebook tab."""
+
+        def __init__(self, notebook, tab_texts):
+            """
+            notebook  : ttk.Notebook instance
+            tab_texts : list whose index matches the tab index; None = no tip
+            """
+            self._nb = notebook
+            self._texts = tab_texts
+            self._tip_win = None
+            self._after_id = None
+            notebook.bind('<Motion>', self._on_motion)
+            notebook.bind('<Leave>', self._cancel)
+            notebook.bind('<ButtonPress>', self._cancel)
+
+        # ------------------------------------------------------------------
+        def _on_motion(self, event):
+            try:
+                idx = self._nb.index('@%d,%d' % (event.x, event.y))
+            except Exception:
+                self._cancel()
+                return
+            text = (self._texts[idx]
+                    if 0 <= idx < len(self._texts) else None)
+            if not text:
+                self._cancel()
+                return
+            if self._after_id is None:
+                self._after_id = self._nb.after(
+                    550,
+                    lambda x=event.x_root, y=event.y_root: self._show(text, x, y),
+                )
+
+        def _cancel(self, event=None):
+            if self._after_id is not None:
+                self._nb.after_cancel(self._after_id)
+                self._after_id = None
+            self._hide()
+
+        def _show(self, text, x, y):
+            self._after_id = None
+            self._hide()
+            self._tip_win = tk.Toplevel(self._nb)
+            self._tip_win.wm_overrideredirect(True)
+            self._tip_win.wm_geometry('+%d+%d' % (x + 12, y + 20))
+            tk.Label(
+                self._tip_win,
+                text=text,
+                justify=tk.LEFT,
+                background='#ffffcc',
+                foreground='#333333',
+                relief=tk.SOLID,
+                borderwidth=1,
+                font=('Segoe UI', 9),
+                wraplength=320,
+                padx=8,
+                pady=6,
+            ).pack()
+
+        def _hide(self):
+            if self._tip_win is not None:
+                self._tip_win.destroy()
+                self._tip_win = None
+
 
 class DetectorGUI:
     """Full-featured desktop GUI exposing all pipeline capabilities."""
@@ -122,6 +215,9 @@ class DetectorGUI:
         self._build_calibration_tab(notebook)
         # Tab 5: Reports
         self._build_reports_tab(notebook)
+
+        # Hover tooltips on tab headers
+        _NotebookToolTip(notebook, _TAB_TOOLTIPS)
 
         # Status bar
         status = ttk.Frame(self.root, style='DashboardStatus.TFrame', padding=(10, 6))
@@ -989,12 +1085,38 @@ class DetectorGUI:
             messagebox.showinfo('No results', 'Run an analysis first.')
             return
 
+        report_path = self.html_report_var.get().strip()
+
+        # Single-text analysis: generate a report regardless of determination
+        if len(self._last_results) == 1:
+            if not report_path:
+                report_path = filedialog.asksaveasfilename(
+                    title='Save HTML Report',
+                    defaultextension='.html',
+                    filetypes=[('HTML files', '*.html')],
+                    initialfile='report.html',
+                )
+            if not report_path:
+                return
+            try:
+                from llm_detector.html_report import generate_html_report
+                r = self._last_results[0]
+                text = (
+                    self._last_text_map.get('_single')
+                    or self._last_text_map.get(r.get('task_id', ''), '')
+                )
+                generate_html_report(text, r, report_path)
+                self.status_var.set(f'HTML report written: {report_path}')
+            except Exception as e:
+                messagebox.showerror('Error', str(e))
+            return
+
+        # Batch analysis: report only flagged submissions
         flagged = [r for r in self._last_results if r['determination'] in ('RED', 'AMBER', 'MIXED')]
         if not flagged:
             messagebox.showinfo('No flagged', 'No flagged submissions to report.')
             return
 
-        report_path = self.html_report_var.get().strip()
         if not report_path:
             report_path = filedialog.asksaveasfilename(
                 title='Save HTML Report',
