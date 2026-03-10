@@ -38,10 +38,8 @@ def mask_topical_content(text):
         (_TOPIC_CAMELCASE_RE, ' _IDENT_ '),
         (_TOPIC_ALLCAPS_RE, ' _ACRO_ '),
     ]:
-        hits = len(pattern.findall(text))
-        if hits:
-            text = pattern.sub(repl, text)
-            count += hits
+        text, n = pattern.subn(repl, text)
+        count += n
     return text, count
 
 

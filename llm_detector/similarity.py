@@ -16,7 +16,6 @@ import struct
 import hashlib
 import statistics
 from collections import defaultdict
-
 from llm_detector.compat import HAS_SEMANTIC
 
 
@@ -149,11 +148,15 @@ def analyze_similarity(results, text_map, jaccard_threshold=0.40,
             except Exception:
                 sem_matrix = None
 
+        # Pre-compute attempter names once per group member to avoid
+        # repeated .get()/.strip()/.lower() inside the O(n²) inner loop.
+        attempters = [r.get('attempter', '').strip().lower() for r in group]
+
         for i in range(len(group)):
             for j in range(i + 1, len(group)):
                 r_a, r_b = group[i], group[j]
-                att_a = r_a.get('attempter', '').strip().lower()
-                att_b = r_b.get('attempter', '').strip().lower()
+                att_a = attempters[i]
+                att_b = attempters[j]
 
                 tid_a = r_a.get('task_id', '')
                 tid_b = r_b.get('task_id', '')
@@ -265,7 +268,7 @@ def analyze_similarity(results, text_map, jaccard_threshold=0.40,
                 'n_pairs': len(all_jaccards),
                 'jac_median': round(jac_median, 4),
                 'jac_std': round(jac_std, 4),
-                'jac_p90': round(sorted(all_jaccards)[int(len(all_jaccards) * 0.9)], 4),
+                'jac_p90': round(statistics.quantiles(all_jaccards, n=10)[8], 4),
                 'struct_median': round(struct_median, 4),
                 'struct_std': round(struct_std, 4),
                 'sem_median': round(sem_median, 4),
@@ -429,12 +432,13 @@ def cross_batch_similarity(current_results, text_map, store_path,
 
         current_shingles = _word_shingles(text)
         current_minhash = _shingle_fingerprint(current_shingles)
+        # Compute once per outer iteration — att_curr doesn't depend on hist.
+        att_curr = r.get('attempter', '').strip().lower()
 
         for hist in historical:
             if hist['task_id'] == tid:
                 continue
 
-            att_curr = r.get('attempter', '').strip().lower()
             att_hist = hist.get('attempter', '').strip().lower()
             if att_curr and att_hist and att_curr == att_hist:
                 continue
