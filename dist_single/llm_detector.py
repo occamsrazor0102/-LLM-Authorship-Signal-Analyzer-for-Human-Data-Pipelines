@@ -4799,6 +4799,16 @@ class DetectorGUI:
         ttk.Button(actions, text='Analyze File', command=lambda: self._run_async(self._analyze_file)).pack(side=tk.LEFT, padx=8)
         ttk.Button(actions, text='Clear Output', command=self._clear_output).pack(side=tk.LEFT)
 
+        # Progress bar
+        progress_frame = ttk.Frame(frame)
+        progress_frame.pack(fill=tk.X, pady=(0, 6))
+        self.progress_var = tk.DoubleVar(value=0)
+        self.progress_bar = ttk.Progressbar(progress_frame, variable=self.progress_var,
+                                             maximum=100, mode='determinate')
+        self.progress_bar.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.progress_label = ttk.Label(progress_frame, text='', width=20)
+        self.progress_label.pack(side=tk.LEFT, padx=(6, 0))
+
         ttk.Label(frame, text='Results:').pack(anchor='w')
         self.output = tk.Text(frame, height=20, wrap=tk.WORD)
         self.output.pack(fill=tk.BOTH, expand=True)
@@ -4827,8 +4837,18 @@ class DetectorGUI:
         if path:
             self.file_var.set(path)
 
+    def _update_progress(self, current, total):
+        pct = current / max(total, 1) * 100
+        self.root.after(0, lambda: self.progress_var.set(pct))
+        self.root.after(0, lambda: self.progress_label.config(text=f'{current}/{total}'))
+
+    def _reset_progress(self):
+        self.root.after(0, lambda: self.progress_var.set(0))
+        self.root.after(0, lambda: self.progress_label.config(text=''))
+
     def _clear_output(self):
         self.output.delete('1.0', tk.END)
+        self._reset_progress()
         self.status_var.set('Ready')
 
     def _run_async(self, fn):
@@ -4882,6 +4902,8 @@ class DetectorGUI:
 
         api_key = self.api_key_var.get().strip() or None
         counts = Counter()
+        n_tasks = len(tasks)
+        self._reset_progress()
         for i, task in enumerate(tasks, 1):
             r = analyze_prompt(
                 task['prompt'],
@@ -4894,7 +4916,8 @@ class DetectorGUI:
                 dna_provider=self.provider_var.get(),
             )
             counts[r['determination']] += 1
-            self._append(f"[{i}/{len(tasks)}] {self._format_result(r)}\n")
+            self._update_progress(i, n_tasks)
+            self._append(f"[{i}/{n_tasks}] {self._format_result(r)}\n")
 
         parts = []
         for det in ['RED', 'AMBER', 'MIXED', 'YELLOW', 'REVIEW', 'GREEN']:

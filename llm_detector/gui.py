@@ -150,6 +150,16 @@ class DetectorGUI:
         ttk.Button(actions, text='Save CSV', command=self._save_results_csv).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(actions, text='Save HTML Reports', command=self._save_html_reports).pack(side=tk.LEFT)
 
+        # Progress bar
+        progress_frame = ttk.Frame(tab)
+        progress_frame.pack(fill=tk.X, pady=(0, 6))
+        self.progress_var = tk.DoubleVar(value=0)
+        self.progress_bar = ttk.Progressbar(progress_frame, variable=self.progress_var,
+                                             maximum=100, mode='determinate')
+        self.progress_bar.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.progress_label = ttk.Label(progress_frame, text='', width=20)
+        self.progress_label.pack(side=tk.LEFT, padx=(6, 0))
+
         # Results output
         output_frame = ttk.Frame(tab)
         output_frame.pack(fill=tk.BOTH, expand=True)
@@ -417,8 +427,18 @@ class DetectorGUI:
         if path:
             self.corpus_path_var.set(path)
 
+    def _update_progress(self, current, total):
+        pct = current / max(total, 1) * 100
+        self.root.after(0, lambda: self.progress_var.set(pct))
+        self.root.after(0, lambda: self.progress_label.config(text=f'{current}/{total}'))
+
+    def _reset_progress(self):
+        self.root.after(0, lambda: self.progress_var.set(0))
+        self.root.after(0, lambda: self.progress_label.config(text=''))
+
     def _clear_output(self):
         self.output.delete('1.0', tk.END)
+        self._reset_progress()
         self.status_var.set('Ready')
 
     def _run_async(self, fn):
@@ -548,6 +568,9 @@ class DetectorGUI:
         results = []
         text_map = {}
         counts = Counter()
+        n_tasks = len(tasks)
+
+        self._reset_progress()
 
         for i, task in enumerate(tasks, 1):
             r = analyze_prompt(
@@ -562,7 +585,8 @@ class DetectorGUI:
             tid = task.get('task_id', f'_row{i}')
             text_map[tid] = task['prompt']
             counts[r['determination']] += 1
-            self._append(f"[{i}/{len(tasks)}] ")
+            self._update_progress(i, n_tasks)
+            self._append(f"[{i}/{n_tasks}] ")
             self._display_result(r)
 
         # Shadow model checks
