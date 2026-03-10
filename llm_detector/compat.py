@@ -18,7 +18,15 @@ logger = logging.getLogger(__name__)
 try:
     import tkinter as tk
     from tkinter import ttk, filedialog, messagebox
-    HAS_TK = True
+    # Verify that a display is available (fails in headless CI environments)
+    try:
+        _tk_test = tk.Tk()
+        _tk_test.withdraw()
+        _tk_test.destroy()
+        del _tk_test
+        HAS_TK = True
+    except tk.TclError:
+        HAS_TK = False
 except ImportError:
     HAS_TK = False
 
