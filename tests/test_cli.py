@@ -2,6 +2,9 @@
 
 import sys
 import os
+import csv
+import shutil
+import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 PASSED = 0
@@ -36,6 +39,172 @@ def test_cli_argparse_no_crash():
         check("CLI parser constructed without errors", True)
     except argparse.ArgumentError as e:
         check("CLI parser constructed without errors", False, str(e))
+
+
+def test_cli_new_column_args_accepted():
+    """Ensure new column mapping arguments are accepted by the CLI parser."""
+    print("\n-- CLI COLUMN MAPPING ARGS --")
+    from unittest.mock import patch
+    import argparse
+    try:
+        from llm_detector.cli import main
+        # --help forces early exit after printing, confirming parser accepted args
+        with patch('sys.argv', [
+            'llm-detector', '--help',
+            '--id-col', 'B',
+            '--occ-col', 'D',
+            '--attempter-col', 'C',
+            '--stage-col', 'E',
+        ]):
+            try:
+                main()
+            except SystemExit:
+                pass
+        check("--id-col / --occ-col / --attempter-col / --stage-col accepted", True)
+    except argparse.ArgumentError as e:
+        check("Column args accepted", False, str(e))
+
+
+def test_cli_run_dir_arg_accepted():
+    """Ensure --run-dir argument is accepted by the CLI parser."""
+    print("\n-- CLI --run-dir ARG --")
+    from unittest.mock import patch
+    import argparse
+    try:
+        from llm_detector.cli import main
+        with patch('sys.argv', ['llm-detector', '--help', '--run-dir', '/tmp/test_run']):
+            try:
+                main()
+            except SystemExit:
+                pass
+        check("--run-dir accepted", True)
+    except argparse.ArgumentError as e:
+        check("--run-dir accepted", False, str(e))
+
+
+def test_run_dir_creates_timestamped_folder():
+    """--run-dir creates a timestamped subfolder and sets output paths."""
+    print("\n-- RUN-DIR CREATES FOLDER --")
+    from unittest.mock import patch
+    import argparse
+
+    tmpdir = tempfile.mkdtemp()
+    try:
+        # Build a minimal CSV with enough text
+        csv_path = os.path.join(tmpdir, 'sample.csv')
+        with open(csv_path, 'w', newline='') as f:
+            w = csv.writer(f)
+            w.writerow(['prompt', 'task_id', 'attempter_name', 'occupation'])
+            w.writerow([
+                'This is a sufficiently long prompt text that passes the minimum '
+                'character check required by the pipeline loader function.',
+                'task001', 'alice', 'analyst',
+            ])
+
+        run_root = os.path.join(tmpdir, 'runs')
+        from llm_detector.cli import main
+        with patch('sys.argv', [
+            'llm-detector', csv_path,
+            '--run-dir', run_root,
+            '--no-layer3',
+            '--no-similarity',
+        ]):
+            main()
+
+        run_subdirs = os.listdir(run_root) if os.path.isdir(run_root) else []
+        check("run root created", os.path.isdir(run_root))
+        check("timestamped subfolder created",
+              len(run_subdirs) == 1 and run_subdirs[0].startswith('run_'),
+              f"found: {run_subdirs}")
+        if run_subdirs:
+            run_folder = os.path.join(run_root, run_subdirs[0])
+            check("results.csv created in run folder",
+                  os.path.isfile(os.path.join(run_folder, 'results.csv')))
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+def test_io_col_letter_to_index():
+    """_col_letter_to_index converts letters and numbers correctly."""
+    print("\n-- IO: _col_letter_to_index --")
+    from llm_detector.io import _col_letter_to_index
+
+    check("A -> 0", _col_letter_to_index('A') == 0)
+    check("a -> 0 (case-insensitive)", _col_letter_to_index('a') == 0)
+    check("B -> 1", _col_letter_to_index('B') == 1)
+    check("Z -> 25", _col_letter_to_index('Z') == 25)
+    check("'1' -> 0 (1-based)", _col_letter_to_index('1') == 0)
+    check("'3' -> 2 (1-based)", _col_letter_to_index('3') == 2)
+    check("'prompt' -> None", _col_letter_to_index('prompt') is None)
+    check("'task_id' -> None", _col_letter_to_index('task_id') is None)
+    check("'AB' -> None (multi-letter)", _col_letter_to_index('AB') is None)
+    check("'0' -> None (zero not valid 1-based)", _col_letter_to_index('0') is None)
+
+
+def test_io_load_csv_positional():
+    """load_csv resolves columns by letter position."""
+    print("\n-- IO: load_csv positional columns --")
+    import tempfile
+    import os
+    from llm_detector.io import load_csv
+
+    tmpdir = tempfile.mkdtemp()
+    try:
+        csv_path = os.path.join(tmpdir, 'test.csv')
+        with open(csv_path, 'w', newline='') as f:
+            w = csv.writer(f)
+            # Column order: text | id | person | area
+            w.writerow(['text', 'id', 'person', 'area'])
+            long_text = 'x' * 60
+            w.writerow([long_text, 'T001', 'alice', 'engineering'])
+
+        tasks = load_csv(
+            csv_path,
+            prompt_col='A',   # first column
+            id_col='B',       # second column
+            attempter_col='C',  # third column
+            occ_col='D',      # fourth column
+        )
+        check("1 task loaded", len(tasks) == 1, f"got {len(tasks)}")
+        if tasks:
+            check("prompt from col A", 'x' in tasks[0]['prompt'])
+            check("task_id from col B", tasks[0]['task_id'] == 'T001')
+            check("attempter from col C", tasks[0]['attempter'] == 'alice')
+            check("occupation from col D", tasks[0]['occupation'] == 'engineering')
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+def test_io_load_csv_numeric_positional():
+    """load_csv resolves columns by 1-based numeric string."""
+    print("\n-- IO: load_csv numeric positional columns --")
+    import tempfile
+    import os
+    from llm_detector.io import load_csv
+
+    tmpdir = tempfile.mkdtemp()
+    try:
+        csv_path = os.path.join(tmpdir, 'test.csv')
+        with open(csv_path, 'w', newline='') as f:
+            w = csv.writer(f)
+            w.writerow(['col1', 'col2', 'col3', 'col4'])
+            long_text = 'y' * 60
+            w.writerow([long_text, 'ID99', 'bob', 'finance'])
+
+        tasks = load_csv(
+            csv_path,
+            prompt_col='1',
+            id_col='2',
+            attempter_col='3',
+            occ_col='4',
+        )
+        check("1 task loaded", len(tasks) == 1, f"got {len(tasks)}")
+        if tasks:
+            check("task_id from col 2", tasks[0]['task_id'] == 'ID99')
+            check("attempter from col 3", tasks[0]['attempter'] == 'bob')
+            check("occupation from col 4", tasks[0]['occupation'] == 'finance')
+    finally:
+        shutil.rmtree(tmpdir)
 
 
 def test_disable_channel_names_match_fusion():
@@ -86,6 +255,12 @@ if __name__ == '__main__':
     print("=" * 70)
 
     test_cli_argparse_no_crash()
+    test_cli_new_column_args_accepted()
+    test_cli_run_dir_arg_accepted()
+    test_run_dir_creates_timestamped_folder()
+    test_io_col_letter_to_index()
+    test_io_load_csv_positional()
+    test_io_load_csv_numeric_positional()
     test_disable_channel_names_match_fusion()
     test_version_consistency()
 

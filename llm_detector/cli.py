@@ -5,6 +5,7 @@ import os
 import argparse
 from collections import Counter, defaultdict
 from datetime import datetime
+from pathlib import Path
 
 import sys
 
@@ -698,6 +699,22 @@ def main():
                         help='Generate calibration diagnostics report from labeled JSONL')
     parser.add_argument('--calibration-report-csv', metavar='PATH',
                         help='Export labeled data to CSV (use with --calibration-report)')
+    # Column mapping
+    parser.add_argument('--id-col', default='task_id', metavar='COL',
+                        help='Column name or letter (A–Z) for task ID (default: task_id)')
+    parser.add_argument('--occ-col', default='occupation', metavar='COL',
+                        help='Column name or letter (A–Z) for occupation/area (default: occupation)')
+    parser.add_argument('--attempter-col', default='attempter_name', metavar='COL',
+                        help='Column name or letter (A–Z) for attempter/author (default: attempter_name)')
+    parser.add_argument('--stage-col', default='pipeline_stage_name', metavar='COL',
+                        help='Column name or letter (A–Z) for pipeline stage (default: pipeline_stage_name)')
+    # Output directory
+    parser.add_argument('--run-dir', metavar='DIR',
+                        help='Root directory for this analysis run. A timestamped subfolder '
+                             '(run_YYYYMMDD_HHMMSS) is created automatically and all outputs '
+                             '(results CSV, HTML report, memory store, similarity store, '
+                             'labels) are saved there. Individual path flags override the '
+                             'auto-generated paths.')
     args = parser.parse_args()
 
     if args.gui:
@@ -708,6 +725,22 @@ def main():
     if args.web:
         main_dashboard()
         return
+
+    # ── Run-directory: create timestamped folder and set default output paths ─
+    if args.run_dir:
+        run_dir = Path(args.run_dir) / datetime.now().strftime('run_%Y%m%d_%H%M%S')
+        run_dir.mkdir(parents=True, exist_ok=True)
+        print(f"  Run directory: {run_dir}")
+        if not args.output:
+            args.output = str(run_dir / 'results.csv')
+        if not args.html_report:
+            args.html_report = str(run_dir / 'report.html')
+        if not args.memory:
+            args.memory = str(run_dir / 'memory')
+        if not args.similarity_store:
+            args.similarity_store = str(run_dir / 'similarity.jsonl')
+        if not getattr(args, 'label_output', None):
+            args.label_output = str(run_dir / 'labels.jsonl')
 
     # Memory store setup
     store = None
@@ -900,9 +933,23 @@ def main():
 
     ext = os.path.splitext(args.input)[1].lower()
     if ext in ('.xlsx', '.xlsm'):
-        tasks = load_xlsx(args.input, sheet=args.sheet, prompt_col=args.prompt_col)
+        tasks = load_xlsx(
+            args.input, sheet=args.sheet,
+            prompt_col=args.prompt_col,
+            id_col=args.id_col,
+            occ_col=args.occ_col,
+            attempter_col=args.attempter_col,
+            stage_col=args.stage_col,
+        )
     elif ext == '.csv':
-        tasks = load_csv(args.input, prompt_col=args.prompt_col)
+        tasks = load_csv(
+            args.input,
+            prompt_col=args.prompt_col,
+            id_col=args.id_col,
+            occ_col=args.occ_col,
+            attempter_col=args.attempter_col,
+            stage_col=args.stage_col,
+        )
     elif ext == '.pdf':
         tasks = load_pdf(args.input)
     else:

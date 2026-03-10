@@ -12,6 +12,8 @@ import sys
 import json
 import tempfile
 from collections import Counter
+from datetime import datetime
+from pathlib import Path
 
 import streamlit as st
 import pandas as pd
@@ -250,13 +252,41 @@ def _page_analysis():
             uploaded = st.file_uploader(
                 "Upload CSV or XLSX", type=["csv", "xlsx", "xlsm"]
             )
-            c1, c2, c3 = st.columns(3)
+            st.caption(
+                "Column names **or** letters (A, B, C…) are accepted. "
+                "Leave as default to auto-detect."
+            )
+            c1, c2, c3, c4 = st.columns(4)
             with c1:
-                prompt_col = st.text_input("Prompt column", value="prompt")
+                prompt_col = st.text_input(
+                    "Prompt column", value="prompt",
+                    help="Column containing the text to analyze. Use a name or a letter, e.g. A",
+                )
             with c2:
-                sheet_name = st.text_input("Sheet name (XLSX)", value="")
+                id_col_input = st.text_input(
+                    "Task ID column", value="task_id",
+                    help="Column for the task/submission ID. Use a name or a letter, e.g. B",
+                )
             with c3:
+                attempter_col_input = st.text_input(
+                    "Attempter column", value="attempter_name",
+                    help="Column for the person's name/ID. Use a name or a letter, e.g. C",
+                )
+            with c4:
+                occ_col_input = st.text_input(
+                    "Occupation column", value="occupation",
+                    help="Column for occupation/area. Use a name or a letter, e.g. D",
+                )
+            c5, c6, c7 = st.columns(3)
+            with c5:
+                sheet_name = st.text_input("Sheet name (XLSX)", value="")
+            with c6:
                 attempter_filter = st.text_input("Attempter filter", value="")
+            with c7:
+                stage_col_input = st.text_input(
+                    "Stage column", value="pipeline_stage_name",
+                    help="Column for pipeline stage (optional). Use a name or a letter, e.g. E",
+                )
             analyze_file_btn = st.button(
                 "\U0001f4c1 Analyze File", type="primary", key="analyze_file"
             )
@@ -345,10 +375,19 @@ def _page_analysis():
                         tmp_path,
                         sheet=sheet_name.strip() or None,
                         prompt_col=prompt_col.strip() or "prompt",
+                        id_col=id_col_input.strip() or "task_id",
+                        occ_col=occ_col_input.strip() or "occupation",
+                        attempter_col=attempter_col_input.strip() or "attempter_name",
+                        stage_col=stage_col_input.strip() or "pipeline_stage_name",
                     )
                 else:
                     tasks = load_csv(
-                        tmp_path, prompt_col=prompt_col.strip() or "prompt"
+                        tmp_path,
+                        prompt_col=prompt_col.strip() or "prompt",
+                        id_col=id_col_input.strip() or "task_id",
+                        occ_col=occ_col_input.strip() or "occupation",
+                        attempter_col=attempter_col_input.strip() or "attempter_name",
+                        stage_col=stage_col_input.strip() or "pipeline_stage_name",
                     )
             finally:
                 os.unlink(tmp_path)
@@ -390,12 +429,72 @@ def _page_analysis():
                 st.session_state["text_map"] = text_map
                 st.session_state["run_count"] += 1
                 progress.empty()
+
+                # ── Auto-save to output directory if configured ──
+                output_dir = st.session_state.get("output_dir", "").strip()
+                if output_dir:
+                    try:
+                        run_folder = (
+                            Path(output_dir)
+                            / datetime.now().strftime("run_%Y%m%d_%H%M%S")
+                        )
+                        run_folder.mkdir(parents=True, exist_ok=True)
+
+                        # Save results CSV
+                        flat = []
+                        for r in all_results:
+                            row = {k: v for k, v in r.items()
+                                   if k != "preamble_details"}
+                            row["preamble_details"] = str(
+                                r.get("preamble_details", [])
+                            )
+                            flat.append(row)
+                        csv_path = run_folder / "results.csv"
+                        pd.DataFrame(flat).to_csv(csv_path, index=False)
+
+                        # Save HTML report for flagged results
+                        flagged = [
+                            r for r in all_results
+                            if r["determination"] in ("RED", "AMBER", "MIXED")
+                        ]
+                        if flagged:
+                            from llm_detector.html_report import (
+                                generate_batch_html_report,
+                            )
+                            html_path = run_folder / "report.html"
+                            generate_batch_html_report(
+                                flagged, text_map, str(html_path)
+                            )
+
+                        # Auto-create memory store in the run folder if not
+                        # already configured
+                        if st.session_state.get("memory_store") is None:
+                            from llm_detector.memory import MemoryStore
+                            mem_path = run_folder / "memory"
+                            st.session_state["memory_store"] = MemoryStore(
+                                str(mem_path)
+                            )
+
+                        st.session_state["last_run_folder"] = str(run_folder)
+                    except Exception as _auto_err:
+                        st.session_state["last_run_folder_error"] = str(
+                            _auto_err
+                        )
+
                 st.rerun()
 
     # ── Display Results ────────────
     if results:
         st.markdown("---")
         st.markdown("### \U0001f4cb Results")
+
+        # Auto-save notifications
+        last_run_folder = st.session_state.pop("last_run_folder", None)
+        last_run_folder_error = st.session_state.pop("last_run_folder_error", None)
+        if last_run_folder:
+            st.success(f"\U0001f4be Results auto-saved to: `{last_run_folder}`")
+        if last_run_folder_error:
+            st.warning(f"Auto-save failed: {last_run_folder_error}")
 
         # Summary bar
         counts = Counter(r["determination"] for r in results)
@@ -877,6 +976,18 @@ def _page_configuration():
 
     # Output Options
     with st.expander("\U0001f4e4 Output Options", expanded=True):
+        output_dir = st.text_input(
+            "\U0001f4c2 Batch output folder",
+            key="output_dir",
+            placeholder="/path/to/output/folder",
+            help=(
+                "When set, a timestamped subfolder (run_YYYYMMDD_HHMMSS) is "
+                "created here after each batch analysis and all outputs are "
+                "saved automatically: results CSV, HTML report for flagged "
+                "submissions, and a memory store. Individual download buttons "
+                "are still available for manual export."
+            ),
+        )
         c1, c2 = st.columns(2)
         with c1:
             cost = st.number_input(
