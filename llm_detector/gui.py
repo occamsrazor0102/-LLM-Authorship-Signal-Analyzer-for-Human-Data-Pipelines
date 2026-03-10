@@ -53,6 +53,7 @@ class DetectorGUI:
         self.show_details_var = tk.BooleanVar(value=True)
         self.dna_model_var = tk.StringVar()
         self.dna_samples_var = tk.StringVar(value='3')
+        self.workers_var = tk.StringVar(value='4')
         self.no_layer3_var = tk.BooleanVar(value=False)
         self.verbose_var = tk.BooleanVar(value=False)
         self.output_csv_var = tk.StringVar()
@@ -197,6 +198,8 @@ class DetectorGUI:
         ttk.Entry(dna, textvariable=self.dna_model_var, width=24).grid(row=1, column=1, columnspan=2, sticky='w', pady=4)
         ttk.Label(dna, text='Samples').grid(row=1, column=2, sticky='e', padx=(12, 6), pady=4)
         ttk.Spinbox(dna, textvariable=self.dna_samples_var, from_=1, to=10, width=4).grid(row=1, column=3, sticky='w', pady=4)
+        ttk.Label(dna, text='Workers').grid(row=2, column=0, sticky='w', padx=6, pady=4)
+        ttk.Spinbox(dna, textvariable=self.workers_var, from_=1, to=16, width=4).grid(row=2, column=1, sticky='w', pady=4)
 
         # Similarity
         sim = ttk.LabelFrame(tab, text='Similarity Analysis')
@@ -569,11 +572,17 @@ class DetectorGUI:
         text_map = {}
         counts = Counter()
         n_tasks = len(tasks)
+        n_workers = max(1, int(self.workers_var.get() or 1))
 
         self._reset_progress()
 
-        for i, task in enumerate(tasks, 1):
-            r = analyze_prompt(
+        # Build text_map upfront
+        for i, task in enumerate(tasks):
+            tid = task.get('task_id', f'_row{i+1}')
+            text_map[tid] = task['prompt']
+
+        def _run(task):
+            return analyze_prompt(
                 task['prompt'],
                 task_id=task.get('task_id', ''),
                 occupation=task.get('occupation', ''),
@@ -581,13 +590,30 @@ class DetectorGUI:
                 stage=task.get('stage', ''),
                 **kwargs,
             )
-            results.append(r)
-            tid = task.get('task_id', f'_row{i}')
-            text_map[tid] = task['prompt']
-            counts[r['determination']] += 1
-            self._update_progress(i, n_tasks)
-            self._append(f"[{i}/{n_tasks}] ")
-            self._display_result(r)
+
+        if n_workers > 1:
+            from concurrent.futures import ThreadPoolExecutor
+            batch_size = n_workers
+            done = 0
+            for start in range(0, n_tasks, batch_size):
+                batch = tasks[start:start + batch_size]
+                with ThreadPoolExecutor(max_workers=n_workers) as pool:
+                    batch_results = list(pool.map(_run, batch))
+                for j, r in enumerate(batch_results):
+                    done += 1
+                    results.append(r)
+                    counts[r['determination']] += 1
+                    self._update_progress(done, n_tasks)
+                    self._append(f"[{done}/{n_tasks}] ")
+                    self._display_result(r)
+        else:
+            for i, task in enumerate(tasks, 1):
+                r = _run(task)
+                results.append(r)
+                counts[r['determination']] += 1
+                self._update_progress(i, n_tasks)
+                self._append(f"[{i}/{n_tasks}] ")
+                self._display_result(r)
 
         # Shadow model checks
         if self._memory_store:

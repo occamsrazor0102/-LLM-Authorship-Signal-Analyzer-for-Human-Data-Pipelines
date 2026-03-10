@@ -8,6 +8,7 @@ Ref: Yang et al. (2024) "DNA-GPT" (ICLR 2024)
 import re
 import statistics
 import copy
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 def _dna_ngrams(tokens, n):
@@ -49,21 +50,24 @@ def _dna_truncate_text(text, ratio=0.5):
 
 def _dna_call_anthropic(prefix, continuation_length, api_key,
                         model='claude-sonnet-4-20250514', n_samples=3, temperature=0.7):
-    """Generate continuations using Anthropic API."""
+    """Generate continuations using Anthropic API (parallel)."""
     try:
         import anthropic
     except ImportError:
         raise ImportError("pip install anthropic  (required for continuation analysis with Anthropic)")
     client = anthropic.Anthropic(api_key=api_key)
-    continuations = []
     max_tokens = min(max(continuation_length * 2, 200), 4096)
-    for _ in range(n_samples):
+    prompt = f"Continue the following text naturally, maintaining the same style, tone, and topic. Do not add any preamble or meta-commentary — just continue writing:\n\n{prefix}"
+
+    def _call(_):
         msg = client.messages.create(
             model=model, max_tokens=max_tokens, temperature=temperature,
-            messages=[{"role": "user",
-                       "content": f"Continue the following text naturally, maintaining the same style, tone, and topic. Do not add any preamble or meta-commentary — just continue writing:\n\n{prefix}"}]
+            messages=[{"role": "user", "content": prompt}],
         )
-        continuations.append(msg.content[0].text if msg.content else "")
+        return msg.content[0].text if msg.content else ""
+
+    with ThreadPoolExecutor(max_workers=n_samples) as pool:
+        continuations = list(pool.map(_call, range(n_samples)))
     return continuations
 
 
@@ -72,15 +76,15 @@ DNA_GPT_STORED_PROMPT_ID = 'pmpt_69a8ff3fd48081938b2de58954245ebf0f4f01733906fee
 
 def _dna_call_openai(prefix, continuation_length, api_key,
                      model='gpt-4o-mini', n_samples=3, temperature=0.7):
-    """Generate continuations using OpenAI Responses API with stored prompt."""
+    """Generate continuations using OpenAI Responses API (parallel)."""
     try:
         import openai
     except ImportError:
         raise ImportError("pip install openai  (required for continuation analysis with OpenAI)")
     client = openai.OpenAI(api_key=api_key)
-    continuations = []
     max_tokens = min(max(continuation_length * 2, 200), 4096)
-    for _ in range(n_samples):
+
+    def _call(_):
         resp = client.responses.create(
             model=model,
             max_output_tokens=max_tokens,
@@ -91,7 +95,10 @@ def _dna_call_openai(prefix, continuation_length, api_key,
             },
             input=prefix,
         )
-        continuations.append(resp.output_text or "")
+        return resp.output_text or ""
+
+    with ThreadPoolExecutor(max_workers=n_samples) as pool:
+        continuations = list(pool.map(_call, range(n_samples)))
     return continuations
 
 
@@ -185,22 +192,20 @@ def run_continuation_api_multi(text, api_key=None, provider='anthropic',
     measures stability of the BScore across truncation points. High stability
     (low variance) across truncation points is an AI signal.
     """
-    bscores = []
-    full_result = None
-
-    for ratio in truncation_ratios:
-        result = run_continuation_api(
+    def _run_ratio(ratio):
+        return ratio, run_continuation_api(
             text, api_key=api_key, provider=provider, model=model,
             truncation_ratio=ratio, n_samples=n_samples,
             temperature=temperature,
         )
-        bs = result.get('bscore', 0.0)
-        bscores.append(bs)
-        if ratio == 0.5:
-            full_result = copy.deepcopy(result)
 
-    if full_result is None:
-        full_result = copy.deepcopy(result)
+    ratio_results = {}
+    with ThreadPoolExecutor(max_workers=len(truncation_ratios)) as pool:
+        for ratio, result in pool.map(lambda r: _run_ratio(r), truncation_ratios):
+            ratio_results[ratio] = result
+
+    bscores = [ratio_results[r].get('bscore', 0.0) for r in truncation_ratios]
+    full_result = copy.deepcopy(ratio_results.get(0.5) or ratio_results[truncation_ratios[-1]])
 
     if len(bscores) >= 2:
         bscore_mean = statistics.mean(bscores)

@@ -635,6 +635,8 @@ def main():
                         help='Model name for DNA-GPT (default: auto per provider)')
     parser.add_argument('--dna-samples', type=int, default=3,
                         help='Number of regeneration samples for DNA-GPT (default: 3)')
+    parser.add_argument('--workers', type=int, default=1,
+                        help='Number of parallel workers for batch processing (default: 1)')
     parser.add_argument('--mode', default='auto', choices=['task_prompt', 'generic_aigt', 'auto'],
                         help='Detection mode: task_prompt (prompt-structure primary), '
                              'generic_aigt (all channels), auto (heuristic). Default: auto')
@@ -907,8 +909,17 @@ def main():
 
     results = []
     text_map = {}
+
+    # Build text_map upfront (needed regardless of parallelism)
     for i, task in enumerate(tasks):
-        r = analyze_prompt(
+        tid = task.get('task_id', f'_row{i}')
+        text_map[tid] = task['prompt']
+
+    n_workers = max(1, getattr(args, 'workers', 1))
+
+    def _analyze_task(idx_task):
+        i, task = idx_task
+        return i, analyze_prompt(
             task['prompt'],
             task_id=task.get('task_id', ''),
             occupation=task.get('occupation', ''),
@@ -924,11 +935,24 @@ def main():
             memory_store=store,
             disabled_channels=disabled_channels,
         )
-        results.append(r)
-        tid = task.get('task_id', f'_row{i}')
-        text_map[tid] = task['prompt']
-        if (i + 1) % 50 == 0:
-            print(f"  Processed {i+1}/{len(tasks)}...")
+
+    if n_workers > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        indexed_results = [None] * len(tasks)
+        done = 0
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            for i, r in pool.map(_analyze_task, enumerate(tasks)):
+                indexed_results[i] = r
+                done += 1
+                if done % 10 == 0:
+                    print(f"  Processed {done}/{len(tasks)}...")
+        results = indexed_results
+    else:
+        for i, task in enumerate(tasks):
+            _, r = _analyze_task((i, task))
+            results.append(r)
+            if (i + 1) % 50 == 0:
+                print(f"  Processed {i+1}/{len(tasks)}...")
 
     det_counts = Counter(r['determination'] for r in results)
     print(f"\n{'='*90}")
