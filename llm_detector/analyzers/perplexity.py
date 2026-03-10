@@ -1,4 +1,19 @@
-"""Local perplexity scoring via distilgpt2.
+"""Local perplexity scoring via a configurable causal language model.
+
+The model used defaults to ``distilgpt2`` but can be changed by setting the
+``PPL_MODEL_ID`` environment variable before the first analysis, e.g.::
+
+    # Unix/macOS
+    PPL_MODEL_ID=EleutherAI/gpt-neo-125m python -m llm_detector ...
+
+    # Windows CMD
+    set PPL_MODEL_ID=EleutherAI/gpt-neo-125m && python -m llm_detector ...
+
+Recommended alternatives (all available on HuggingFace Hub):
+  - ``gpt2``                     – 117 M params, slightly higher quality
+  - ``gpt2-medium``              – 345 M params, stronger baseline
+  - ``EleutherAI/gpt-neo-125m``  – 125 M params, trained on the Pile (2021)
+  - ``facebook/opt-125m``        – 125 M params, Meta OPT series (2022)
 
 AI text has low perplexity (< 20); human text typically > 35.
 Ref: GLTR (Gehrmann et al. 2019), DetectGPT (Mitchell et al. 2023)
@@ -26,10 +41,12 @@ _PPL_EMPTY = {
 
 
 def run_perplexity(text):
-    """Calculate token-level perplexity using distilgpt2.
+    """Calculate token-level perplexity using the configured causal LM.
 
-    Returns dict with perplexity, determination, confidence, and
-    surprisal diversity features (variance, half-variances, decay ratio).
+    The model is selected by the PPL_MODEL_ID environment variable
+    (default: ``distilgpt2``).  Returns dict with perplexity, determination,
+    confidence, and surprisal diversity features (variance, half-variances,
+    decay ratio).
     """
     if not HAS_PERPLEXITY:
         return {**_PPL_EMPTY, 'reason': 'Perplexity scoring unavailable (transformers/torch not installed)'}

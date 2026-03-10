@@ -138,7 +138,7 @@ def get_semantic_models():
 
 # ── transformers: local perplexity scoring ──────────────────────────────────
 try:
-    from transformers import GPT2LMHeadModel, GPT2TokenizerFast  # noqa: F401
+    from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: F401
     import torch  # noqa: F401
     HAS_PERPLEXITY = True
 except ImportError:
@@ -147,17 +147,40 @@ except Exception as e:
     HAS_PERPLEXITY = False
     logger.info("transformers/torch setup failed (%s). Perplexity scoring disabled.", e)
 
+# Model used for local perplexity scoring.  Override by setting the
+# PPL_MODEL_ID environment variable **before** importing this module, or by
+# assigning directly to ``llm_detector.compat.PPL_MODEL_ID`` before the first
+# call to ``get_perplexity_model()`` (the model is loaded lazily on first use).
+#
+# Environment variable syntax:
+#   Unix/macOS:  PPL_MODEL_ID=EleutherAI/gpt-neo-125m python -m llm_detector …
+#   Windows CMD: set PPL_MODEL_ID=EleutherAI/gpt-neo-125m && python -m llm_detector …
+#
+# Recommended alternatives (all are small causal LMs on HuggingFace Hub):
+#   distilgpt2               – 82 M params, very fast; default
+#   gpt2                     – 117 M params, slightly higher quality
+#   gpt2-medium              – 345 M params, stronger baseline
+#   EleutherAI/gpt-neo-125m  – 125 M params, trained on the Pile (2021)
+#   facebook/opt-125m        – 125 M params, Meta OPT series (2022)
+#   openai-community/gpt2    – same weights as gpt2, updated HF namespace
+PPL_MODEL_ID: str = os.environ.get('PPL_MODEL_ID', 'distilgpt2')
+
 _PPL_MODEL = None
 _PPL_TOKENIZER = None
 
 def get_perplexity_model():
-    """Return (model, tokenizer), loading on first call."""
+    """Return (model, tokenizer), loading on first call.
+
+    The model is selected by the PPL_MODEL_ID environment variable
+    (default: ``distilgpt2``).  Any causal language model available on
+    HuggingFace Hub can be used; see the comment above PPL_MODEL_ID for
+    recommended alternatives that are more recent than distilgpt2.
+    """
     global _PPL_MODEL, _PPL_TOKENIZER
     if _PPL_MODEL is None and HAS_PERPLEXITY:
-        from transformers import GPT2LMHeadModel, GPT2TokenizerFast
-        _PPL_MODEL_ID = 'distilgpt2'
-        _PPL_MODEL = GPT2LMHeadModel.from_pretrained(_PPL_MODEL_ID)
-        _PPL_TOKENIZER = GPT2TokenizerFast.from_pretrained(_PPL_MODEL_ID)
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        _PPL_MODEL = AutoModelForCausalLM.from_pretrained(PPL_MODEL_ID)
+        _PPL_TOKENIZER = AutoTokenizer.from_pretrained(PPL_MODEL_ID)
         _PPL_MODEL.eval()
     return _PPL_MODEL, _PPL_TOKENIZER
 
@@ -170,8 +193,8 @@ def get_binoculars_model():
     """Return GPT-2 base observer model for contrastive scoring, loading on first call."""
     global _BINO_MODEL
     if _BINO_MODEL is None and HAS_BINOCULARS:
-        from transformers import GPT2LMHeadModel
-        _BINO_MODEL = GPT2LMHeadModel.from_pretrained('gpt2')
+        from transformers import AutoModelForCausalLM
+        _BINO_MODEL = AutoModelForCausalLM.from_pretrained('gpt2')
         _BINO_MODEL.eval()
     return _BINO_MODEL
 
