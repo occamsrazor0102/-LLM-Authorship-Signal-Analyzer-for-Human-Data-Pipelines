@@ -179,7 +179,9 @@ class DetectorGUI:
         ttk.Combobox(dna, textvariable=self.provider_var, values=['anthropic', 'openai'],
                      width=12, state='readonly').grid(row=0, column=1, sticky='w', pady=4)
         ttk.Label(dna, text='API Key').grid(row=0, column=2, sticky='w', padx=(12, 6), pady=4)
-        ttk.Entry(dna, textvariable=self.api_key_var, show='*').grid(row=0, column=3, sticky='ew', padx=(0, 6), pady=4)
+        api_entry = ttk.Entry(dna, textvariable=self.api_key_var, show='*')
+        api_entry.grid(row=0, column=3, sticky='ew', padx=(0, 6), pady=4)
+        self._add_paste_menu(api_entry)
         dna.columnconfigure(3, weight=1)
         ttk.Label(dna, text='Model (optional)').grid(row=1, column=0, sticky='w', padx=6, pady=4)
         ttk.Entry(dna, textvariable=self.dna_model_var, width=24).grid(row=1, column=1, columnspan=2, sticky='w', pady=4)
@@ -363,6 +365,25 @@ class DetectorGUI:
             return float(self.cost_var.get())
         except ValueError:
             return 400.0
+
+    def _add_paste_menu(self, widget):
+        """Add right-click context menu with Cut/Copy/Paste and ensure Ctrl+V works."""
+        menu = tk.Menu(widget, tearoff=0)
+        menu.add_command(label='Cut', command=lambda: widget.event_generate('<<Cut>>'))
+        menu.add_command(label='Copy', command=lambda: widget.event_generate('<<Copy>>'))
+        menu.add_command(label='Paste', command=lambda: widget.event_generate('<<Paste>>'))
+        menu.add_separator()
+        menu.add_command(label='Select All', command=lambda: widget.event_generate('<<SelectAll>>'))
+
+        def _show_menu(event):
+            menu.tk_popup(event.x_root, event.y_root)
+
+        widget.bind('<Button-3>', _show_menu)
+        # macOS uses Button-2 for right-click
+        widget.bind('<Button-2>', _show_menu)
+        # Ensure Ctrl+V / Cmd+V paste works
+        widget.bind('<Control-v>', lambda e: widget.event_generate('<<Paste>>'))
+        widget.bind('<Control-V>', lambda e: widget.event_generate('<<Paste>>'))
 
     def _get_api_key(self):
         key = self.api_key_var.get().strip()

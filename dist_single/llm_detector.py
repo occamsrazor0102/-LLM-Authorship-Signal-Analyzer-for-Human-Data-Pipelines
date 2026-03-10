@@ -4784,7 +4784,9 @@ class DetectorGUI:
         ttk.Label(l3, text='Provider').grid(row=0, column=0, sticky='w', padx=6, pady=6)
         ttk.Combobox(l3, textvariable=self.provider_var, values=['anthropic', 'openai'], width=12, state='readonly').grid(row=0, column=1, sticky='w', pady=6)
         ttk.Label(l3, text='API Key (optional)').grid(row=0, column=2, sticky='w', padx=(16, 6), pady=6)
-        ttk.Entry(l3, textvariable=self.api_key_var, show='*').grid(row=0, column=3, sticky='ew', padx=(0, 6), pady=6)
+        api_entry = ttk.Entry(l3, textvariable=self.api_key_var, show='*')
+        api_entry.grid(row=0, column=3, sticky='ew', padx=(0, 6), pady=6)
+        self._add_paste_menu(api_entry)
         l3.columnconfigure(3, weight=1)
 
         ttk.Label(frame, text='Single text input (optional):').pack(anchor='w')
@@ -4802,6 +4804,23 @@ class DetectorGUI:
         self.output.pack(fill=tk.BOTH, expand=True)
 
         ttk.Label(frame, textvariable=self.status_var).pack(anchor='w', pady=(8, 0))
+
+    def _add_paste_menu(self, widget):
+        """Add right-click context menu with Cut/Copy/Paste and ensure Ctrl+V works."""
+        menu = tk.Menu(widget, tearoff=0)
+        menu.add_command(label='Cut', command=lambda: widget.event_generate('<<Cut>>'))
+        menu.add_command(label='Copy', command=lambda: widget.event_generate('<<Copy>>'))
+        menu.add_command(label='Paste', command=lambda: widget.event_generate('<<Paste>>'))
+        menu.add_separator()
+        menu.add_command(label='Select All', command=lambda: widget.event_generate('<<SelectAll>>'))
+
+        def _show_menu(event):
+            menu.tk_popup(event.x_root, event.y_root)
+
+        widget.bind('<Button-3>', _show_menu)
+        widget.bind('<Button-2>', _show_menu)
+        widget.bind('<Control-v>', lambda e: widget.event_generate('<<Paste>>'))
+        widget.bind('<Control-V>', lambda e: widget.event_generate('<<Paste>>'))
 
     def _browse_file(self):
         path = filedialog.askopenfilename(filetypes=[('Data files', '*.csv *.xlsx *.xlsm'), ('All files', '*.*')])
