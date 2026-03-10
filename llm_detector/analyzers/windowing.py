@@ -250,7 +250,8 @@ def score_windows(text, window_size=5, stride=2):
     }
 
 
-def get_hot_window_spans(text, threshold=0.30, window_size=5, stride=2):
+def get_hot_window_spans(text, threshold=0.30, window_size=5, stride=2,
+                         precomputed_result=None):
     """Return character-level spans for hot (high-scoring) sentence windows.
 
     Args:
@@ -258,6 +259,9 @@ def get_hot_window_spans(text, threshold=0.30, window_size=5, stride=2):
         threshold: Minimum window score to include (default 0.30).
         window_size: Sentences per window.
         stride: Sentence stride.
+        precomputed_result: Optional dict returned by a prior ``score_windows``
+            call for the same text/parameters.  When provided the function
+            skips the redundant ``score_windows`` computation.
 
     Returns list of (start_char, end_char, score, 'hot_window', window_index).
     """
@@ -265,7 +269,8 @@ def get_hot_window_spans(text, threshold=0.30, window_size=5, stride=2):
     if len(sent_spans) < window_size:
         return []
 
-    result = score_windows(text, window_size=window_size, stride=stride)
+    result = (precomputed_result if precomputed_result is not None
+              else score_windows(text, window_size=window_size, stride=stride))
     spans = []
 
     for w in result['windows']:

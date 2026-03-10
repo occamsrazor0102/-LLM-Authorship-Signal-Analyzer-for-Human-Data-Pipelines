@@ -12,6 +12,7 @@ import re
 import os
 import json
 import math
+import struct
 import hashlib
 import statistics
 from collections import defaultdict
@@ -68,11 +69,14 @@ def _shingle_fingerprint(shingle_set, n_hashes=128):
     if not shingle_set:
         return [0] * n_hashes
     minhashes = [float('inf')] * n_hashes
+    _pack = struct.pack
+    _md5 = hashlib.md5
     for shingle in shingle_set:
         shingle_bytes = ' '.join(shingle).encode('utf-8')
         for i in range(n_hashes):
-            h = int(hashlib.md5(f"{i}:{shingle_bytes.hex()}".encode()).hexdigest()[:8], 16)
-            minhashes[i] = min(minhashes[i], h)
+            h = int.from_bytes(_md5(_pack('>I', i) + shingle_bytes).digest()[:4], 'big')
+            if h < minhashes[i]:
+                minhashes[i] = h
     return minhashes
 
 
