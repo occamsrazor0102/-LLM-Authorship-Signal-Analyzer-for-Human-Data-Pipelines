@@ -12,7 +12,7 @@ from llm_detector.lexicon.integration import (
 )
 from llm_detector.analyzers.semantic_resonance import run_semantic_resonance
 from llm_detector.analyzers.self_similarity import run_self_similarity
-from llm_detector.analyzers.continuation_api import run_continuation_api
+from llm_detector.analyzers.continuation_api import run_continuation_api_multi
 from llm_detector.analyzers.continuation_local import run_continuation_local_multi
 from llm_detector.analyzers.perplexity import run_perplexity
 from llm_detector.analyzers.token_cohesiveness import run_token_cohesiveness
@@ -56,7 +56,7 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
 
     cont_result = None
     if run_l3 and api_key:
-        cont_result = run_continuation_api(
+        cont_result = run_continuation_api_multi(
             text_for_analysis, api_key=api_key, provider=dna_provider,
             model=dna_model, n_samples=dna_samples,
         )

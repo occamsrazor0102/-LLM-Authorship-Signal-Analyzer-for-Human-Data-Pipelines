@@ -7,6 +7,7 @@ Ref: Yang et al. (2024) "DNA-GPT" (ICLR 2024)
 
 import re
 import statistics
+import copy
 
 
 def _dna_ngrams(tokens, n):
@@ -172,3 +173,52 @@ def run_continuation_api(text, api_key=None, provider='anthropic', model=None,
         'n_samples': len(sample_scores), 'truncation_ratio': truncation_ratio,
         'continuation_words': continuation_word_count, 'word_count': word_count,
     }
+
+
+def run_continuation_api_multi(text, api_key=None, provider='anthropic',
+                                model=None, n_samples=3,
+                                truncation_ratios=(0.3, 0.5, 0.7),
+                                temperature=0.7):
+    """Multi-truncation DNA-GPT continuation analysis via LLM API.
+
+    Runs API-based continuation analysis at multiple truncation ratios and
+    measures stability of the BScore across truncation points. High stability
+    (low variance) across truncation points is an AI signal.
+    """
+    bscores = []
+    full_result = None
+
+    for ratio in truncation_ratios:
+        result = run_continuation_api(
+            text, api_key=api_key, provider=provider, model=model,
+            truncation_ratio=ratio, n_samples=n_samples,
+            temperature=temperature,
+        )
+        bs = result.get('bscore', 0.0)
+        bscores.append(bs)
+        if ratio == 0.5:
+            full_result = copy.deepcopy(result)
+
+    if full_result is None:
+        full_result = copy.deepcopy(result)
+
+    if len(bscores) >= 2:
+        bscore_mean = statistics.mean(bscores)
+        bscore_var = statistics.variance(bscores)
+        stability = max(0.0, 1.0 - (bscore_var / 0.02))
+    else:
+        bscore_mean = bscores[0] if bscores else 0.0
+        bscore_var = 0.0
+        stability = 0.0
+
+    full_result['multi_bscores'] = [round(b, 4) for b in bscores]
+    full_result['bscore_variance'] = round(bscore_var, 6)
+    full_result['bscore_stability'] = round(stability, 4)
+
+    # Stability boosts confidence when it agrees with the primary signal
+    if stability >= 0.75 and bscore_mean >= 0.15:
+        full_result['confidence'] = round(
+            min(full_result.get('confidence', 0.0) + 0.10, 1.0), 4
+        )
+
+    return full_result
