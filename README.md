@@ -376,6 +376,8 @@ python -m llm_detector --text "Your prompt text here"
 python -m llm_detector --gui
 ```
 
+The desktop interface uses a dashboard-style layout (tabbed workspace, card sections, top-line KPI metrics in the Analysis tab, and improved visual hierarchy) so it feels closer to a modern analytics UI while keeping the existing Tkinter workflow and features.
+
 ### File Mode (XLSX/CSV/PDF)
 
 ```bash
