@@ -150,6 +150,16 @@ class DetectorGUI:
         ttk.Button(actions, text='Save CSV', command=self._save_results_csv).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(actions, text='Save HTML Reports', command=self._save_html_reports).pack(side=tk.LEFT)
 
+        # Progress bar
+        progress_frame = ttk.Frame(tab)
+        progress_frame.pack(fill=tk.X, pady=(0, 6))
+        self.progress_var = tk.DoubleVar(value=0)
+        self.progress_bar = ttk.Progressbar(progress_frame, variable=self.progress_var,
+                                             maximum=100, mode='determinate')
+        self.progress_bar.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.progress_label = ttk.Label(progress_frame, text='', width=20)
+        self.progress_label.pack(side=tk.LEFT, padx=(6, 0))
+
         # Results output
         output_frame = ttk.Frame(tab)
         output_frame.pack(fill=tk.BOTH, expand=True)
@@ -179,7 +189,9 @@ class DetectorGUI:
         ttk.Combobox(dna, textvariable=self.provider_var, values=['anthropic', 'openai'],
                      width=12, state='readonly').grid(row=0, column=1, sticky='w', pady=4)
         ttk.Label(dna, text='API Key').grid(row=0, column=2, sticky='w', padx=(12, 6), pady=4)
-        ttk.Entry(dna, textvariable=self.api_key_var, show='*').grid(row=0, column=3, sticky='ew', padx=(0, 6), pady=4)
+        api_entry = ttk.Entry(dna, textvariable=self.api_key_var, show='*')
+        api_entry.grid(row=0, column=3, sticky='ew', padx=(0, 6), pady=4)
+        self._add_paste_menu(api_entry)
         dna.columnconfigure(3, weight=1)
         ttk.Label(dna, text='Model (optional)').grid(row=1, column=0, sticky='w', padx=6, pady=4)
         ttk.Entry(dna, textvariable=self.dna_model_var, width=24).grid(row=1, column=1, columnspan=2, sticky='w', pady=4)
@@ -210,9 +222,9 @@ class DetectorGUI:
         ttk.Entry(out, textvariable=self.output_csv_var).grid(row=0, column=1, sticky='ew', padx=(0, 6), pady=4)
         ttk.Button(out, text='...', width=3, command=lambda: self._browse_save(self.output_csv_var, [('CSV', '*.csv')])).grid(
             row=0, column=2, sticky='w', padx=2, pady=4)
-        ttk.Label(out, text='HTML report dir').grid(row=1, column=0, sticky='w', padx=6, pady=4)
+        ttk.Label(out, text='HTML report').grid(row=1, column=0, sticky='w', padx=6, pady=4)
         ttk.Entry(out, textvariable=self.html_report_var).grid(row=1, column=1, sticky='ew', padx=(0, 6), pady=4)
-        ttk.Button(out, text='...', width=3, command=lambda: self._browse_dir(self.html_report_var)).grid(
+        ttk.Button(out, text='...', width=3, command=lambda: self._browse_save(self.html_report_var, [('HTML', '*.html')])).grid(
             row=1, column=2, sticky='w', padx=2, pady=4)
         ttk.Label(out, text='Cost per prompt ($)').grid(row=2, column=0, sticky='w', padx=6, pady=4)
         ttk.Entry(out, textvariable=self.cost_var, width=8).grid(row=2, column=1, sticky='w', pady=4)
@@ -364,6 +376,25 @@ class DetectorGUI:
         except ValueError:
             return 400.0
 
+    def _add_paste_menu(self, widget):
+        """Add right-click context menu with Cut/Copy/Paste and ensure Ctrl+V works."""
+        menu = tk.Menu(widget, tearoff=0)
+        menu.add_command(label='Cut', command=lambda: widget.event_generate('<<Cut>>'))
+        menu.add_command(label='Copy', command=lambda: widget.event_generate('<<Copy>>'))
+        menu.add_command(label='Paste', command=lambda: widget.event_generate('<<Paste>>'))
+        menu.add_separator()
+        menu.add_command(label='Select All', command=lambda: widget.event_generate('<<SelectAll>>'))
+
+        def _show_menu(event):
+            menu.tk_popup(event.x_root, event.y_root)
+
+        widget.bind('<Button-3>', _show_menu)
+        # macOS uses Button-2 for right-click
+        widget.bind('<Button-2>', _show_menu)
+        # Ensure Ctrl+V / Cmd+V paste works
+        widget.bind('<Control-v>', lambda e: widget.event_generate('<<Paste>>'))
+        widget.bind('<Control-V>', lambda e: widget.event_generate('<<Paste>>'))
+
     def _get_api_key(self):
         key = self.api_key_var.get().strip()
         if not key:
@@ -396,8 +427,18 @@ class DetectorGUI:
         if path:
             self.corpus_path_var.set(path)
 
+    def _update_progress(self, current, total):
+        pct = current / max(total, 1) * 100
+        self.root.after(0, lambda: self.progress_var.set(pct))
+        self.root.after(0, lambda: self.progress_label.config(text=f'{current}/{total}'))
+
+    def _reset_progress(self):
+        self.root.after(0, lambda: self.progress_var.set(0))
+        self.root.after(0, lambda: self.progress_label.config(text=''))
+
     def _clear_output(self):
         self.output.delete('1.0', tk.END)
+        self._reset_progress()
         self.status_var.set('Ready')
 
     def _run_async(self, fn):
@@ -527,6 +568,9 @@ class DetectorGUI:
         results = []
         text_map = {}
         counts = Counter()
+        n_tasks = len(tasks)
+
+        self._reset_progress()
 
         for i, task in enumerate(tasks, 1):
             r = analyze_prompt(
@@ -541,7 +585,8 @@ class DetectorGUI:
             tid = task.get('task_id', f'_row{i}')
             text_map[tid] = task['prompt']
             counts[r['determination']] += 1
-            self._append(f"[{i}/{len(tasks)}] ")
+            self._update_progress(i, n_tasks)
+            self._append(f"[{i}/{n_tasks}] ")
             self._display_result(r)
 
         # Shadow model checks
@@ -700,25 +745,27 @@ class DetectorGUI:
         if not self._last_results:
             messagebox.showinfo('No results', 'Run an analysis first.')
             return
-        report_dir = self.html_report_var.get().strip()
-        if not report_dir:
-            report_dir = filedialog.askdirectory(title='Select HTML report directory')
-        if not report_dir:
-            return
 
         flagged = [r for r in self._last_results if r['determination'] in ('RED', 'AMBER', 'MIXED')]
         if not flagged:
             messagebox.showinfo('No flagged', 'No flagged submissions to report.')
             return
 
+        report_path = self.html_report_var.get().strip()
+        if not report_path:
+            report_path = filedialog.asksaveasfilename(
+                title='Save HTML Report',
+                defaultextension='.html',
+                filetypes=[('HTML files', '*.html')],
+                initialfile='batch_report.html',
+            )
+        if not report_path:
+            return
+
         try:
-            os.makedirs(report_dir, exist_ok=True)
-            from llm_detector.html_report import generate_html_report
-            for r in flagged:
-                tid = r.get('task_id', 'unknown')[:20].replace('/', '_')
-                path = os.path.join(report_dir, f"{tid}_{r['determination']}.html")
-                generate_html_report(self._last_text_map.get(r.get('task_id', ''), ''), r, path)
-            self.status_var.set(f'{len(flagged)} HTML reports written to {report_dir}')
+            from llm_detector.html_report import generate_batch_html_report
+            generate_batch_html_report(flagged, self._last_text_map, report_path)
+            self.status_var.set(f'HTML report written: {report_path} ({len(flagged)} submissions)')
         except Exception as e:
             messagebox.showerror('Error', str(e))
 

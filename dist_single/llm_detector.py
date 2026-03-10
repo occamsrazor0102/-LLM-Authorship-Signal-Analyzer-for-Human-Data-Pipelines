@@ -392,7 +392,8 @@ def load_xlsx(filepath, sheet=None, prompt_col='prompt', id_col='task_id',
     prompt_idx = find_col([prompt_col, 'prompt', 'text', 'content'])
     id_idx = find_col([id_col, 'task_id', 'id'])
     occ_idx = find_col([occ_col, 'occupation', 'occ'])
-    att_idx = find_col([attempter_col, 'attempter', 'claimed_by', 'claimed by'])
+    att_idx = find_col([attempter_col, 'attempter', 'claimed_by', 'claimed by',
+                        'fellow name', 'fellow_name', 'author', 'name'])
     stage_idx = find_col([stage_col, 'stage', 'pipeline_stage'])
 
     if prompt_idx is None:
@@ -442,7 +443,8 @@ def load_csv(filepath, prompt_col='prompt'):
     prompt_actual = resolve_col(prompt_col, 'prompt', 'text', 'content')
     id_actual = resolve_col('task_id', 'id')
     occ_actual = resolve_col('occupation', 'occ')
-    att_actual = resolve_col('attempter_name', 'attempter', 'claimed_by')
+    att_actual = resolve_col('attempter_name', 'attempter', 'claimed_by',
+                             'fellow name', 'fellow_name', 'author', 'name')
     stage_actual = resolve_col('pipeline_stage_name', 'stage')
 
     if prompt_actual is None:
@@ -4784,7 +4786,9 @@ class DetectorGUI:
         ttk.Label(l3, text='Provider').grid(row=0, column=0, sticky='w', padx=6, pady=6)
         ttk.Combobox(l3, textvariable=self.provider_var, values=['anthropic', 'openai'], width=12, state='readonly').grid(row=0, column=1, sticky='w', pady=6)
         ttk.Label(l3, text='API Key (optional)').grid(row=0, column=2, sticky='w', padx=(16, 6), pady=6)
-        ttk.Entry(l3, textvariable=self.api_key_var, show='*').grid(row=0, column=3, sticky='ew', padx=(0, 6), pady=6)
+        api_entry = ttk.Entry(l3, textvariable=self.api_key_var, show='*')
+        api_entry.grid(row=0, column=3, sticky='ew', padx=(0, 6), pady=6)
+        self._add_paste_menu(api_entry)
         l3.columnconfigure(3, weight=1)
 
         ttk.Label(frame, text='Single text input (optional):').pack(anchor='w')
@@ -4797,19 +4801,56 @@ class DetectorGUI:
         ttk.Button(actions, text='Analyze File', command=lambda: self._run_async(self._analyze_file)).pack(side=tk.LEFT, padx=8)
         ttk.Button(actions, text='Clear Output', command=self._clear_output).pack(side=tk.LEFT)
 
+        # Progress bar
+        progress_frame = ttk.Frame(frame)
+        progress_frame.pack(fill=tk.X, pady=(0, 6))
+        self.progress_var = tk.DoubleVar(value=0)
+        self.progress_bar = ttk.Progressbar(progress_frame, variable=self.progress_var,
+                                             maximum=100, mode='determinate')
+        self.progress_bar.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.progress_label = ttk.Label(progress_frame, text='', width=20)
+        self.progress_label.pack(side=tk.LEFT, padx=(6, 0))
+
         ttk.Label(frame, text='Results:').pack(anchor='w')
         self.output = tk.Text(frame, height=20, wrap=tk.WORD)
         self.output.pack(fill=tk.BOTH, expand=True)
 
         ttk.Label(frame, textvariable=self.status_var).pack(anchor='w', pady=(8, 0))
 
+    def _add_paste_menu(self, widget):
+        """Add right-click context menu with Cut/Copy/Paste and ensure Ctrl+V works."""
+        menu = tk.Menu(widget, tearoff=0)
+        menu.add_command(label='Cut', command=lambda: widget.event_generate('<<Cut>>'))
+        menu.add_command(label='Copy', command=lambda: widget.event_generate('<<Copy>>'))
+        menu.add_command(label='Paste', command=lambda: widget.event_generate('<<Paste>>'))
+        menu.add_separator()
+        menu.add_command(label='Select All', command=lambda: widget.event_generate('<<SelectAll>>'))
+
+        def _show_menu(event):
+            menu.tk_popup(event.x_root, event.y_root)
+
+        widget.bind('<Button-3>', _show_menu)
+        widget.bind('<Button-2>', _show_menu)
+        widget.bind('<Control-v>', lambda e: widget.event_generate('<<Paste>>'))
+        widget.bind('<Control-V>', lambda e: widget.event_generate('<<Paste>>'))
+
     def _browse_file(self):
         path = filedialog.askopenfilename(filetypes=[('Data files', '*.csv *.xlsx *.xlsm'), ('All files', '*.*')])
         if path:
             self.file_var.set(path)
 
+    def _update_progress(self, current, total):
+        pct = current / max(total, 1) * 100
+        self.root.after(0, lambda: self.progress_var.set(pct))
+        self.root.after(0, lambda: self.progress_label.config(text=f'{current}/{total}'))
+
+    def _reset_progress(self):
+        self.root.after(0, lambda: self.progress_var.set(0))
+        self.root.after(0, lambda: self.progress_label.config(text=''))
+
     def _clear_output(self):
         self.output.delete('1.0', tk.END)
+        self._reset_progress()
         self.status_var.set('Ready')
 
     def _run_async(self, fn):
@@ -4863,6 +4904,8 @@ class DetectorGUI:
 
         api_key = self.api_key_var.get().strip() or None
         counts = Counter()
+        n_tasks = len(tasks)
+        self._reset_progress()
         for i, task in enumerate(tasks, 1):
             r = analyze_prompt(
                 task['prompt'],
@@ -4875,7 +4918,8 @@ class DetectorGUI:
                 dna_provider=self.provider_var.get(),
             )
             counts[r['determination']] += 1
-            self._append(f"[{i}/{len(tasks)}] {self._format_result(r)}\n")
+            self._update_progress(i, n_tasks)
+            self._append(f"[{i}/{n_tasks}] {self._format_result(r)}\n")
 
         parts = []
         for det in ['RED', 'AMBER', 'MIXED', 'YELLOW', 'REVIEW', 'GREEN']:

@@ -50,7 +50,8 @@ def load_xlsx(filepath, sheet=None, prompt_col='prompt', id_col='task_id',
     prompt_idx = find_col([prompt_col, 'prompt', 'text', 'content'])
     id_idx = find_col([id_col, 'task_id', 'id'])
     occ_idx = find_col([occ_col, 'occupation', 'occ'])
-    att_idx = find_col([attempter_col, 'attempter', 'claimed_by', 'claimed by'])
+    att_idx = find_col([attempter_col, 'attempter', 'claimed_by', 'claimed by',
+                        'fellow name', 'fellow_name', 'author', 'name'])
     stage_idx = find_col([stage_col, 'stage', 'pipeline_stage'])
 
     if prompt_idx is None:
@@ -100,7 +101,8 @@ def load_csv(filepath, prompt_col='prompt'):
     prompt_actual = resolve_col(prompt_col, 'prompt', 'text', 'content')
     id_actual = resolve_col('task_id', 'id')
     occ_actual = resolve_col('occupation', 'occ')
-    att_actual = resolve_col('attempter_name', 'attempter', 'claimed_by')
+    att_actual = resolve_col('attempter_name', 'attempter', 'claimed_by',
+                             'fellow name', 'fellow_name', 'author', 'name')
     stage_actual = resolve_col('pipeline_stage_name', 'stage')
 
     if prompt_actual is None:

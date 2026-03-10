@@ -644,8 +644,8 @@ def main():
                         help='Path to calibration table JSON (load for scoring, or save target for --calibrate)')
     parser.add_argument('--cost-per-prompt', type=float, default=400.0,
                         help='Cost per prompt for financial impact estimate (default: $400)')
-    parser.add_argument('--html-report', metavar='DIR',
-                        help='Generate HTML reports for flagged submissions in DIR')
+    parser.add_argument('--html-report', metavar='FILE',
+                        help='Generate a consolidated HTML report for flagged submissions')
     parser.add_argument('--similarity-store', metavar='JSONL',
                         help='Path to persistent similarity fingerprint store (cross-batch)')
     parser.add_argument('--instructions', metavar='FILE',
@@ -1082,15 +1082,15 @@ def main():
         impact = financial_impact(results, cost_per_prompt=args.cost_per_prompt)
         print_financial_report(impact, cost_per_prompt=args.cost_per_prompt)
 
-    # HTML reports for flagged submissions
+    # Consolidated HTML report for flagged submissions
     if args.html_report and flagged:
-        os.makedirs(args.html_report, exist_ok=True)
-        from llm_detector.html_report import generate_html_report
-        for r in flagged:
-            tid = r.get('task_id', 'unknown')[:20].replace('/', '_')
-            path = os.path.join(args.html_report, f"{tid}_{r['determination']}.html")
-            generate_html_report(text_map.get(r.get('task_id', ''), ''), r, path)
-        print(f"\n  HTML reports written to {args.html_report}/ ({len(flagged)} files)")
+        report_path = args.html_report
+        if not report_path.endswith('.html'):
+            report_path += '.html'
+        os.makedirs(os.path.dirname(report_path) or '.', exist_ok=True)
+        from llm_detector.html_report import generate_batch_html_report
+        generate_batch_html_report(flagged, text_map, report_path)
+        print(f"\n  HTML report written to {report_path} ({len(flagged)} submissions)")
 
     if args.collect:
         collect_baselines(results, args.collect)
