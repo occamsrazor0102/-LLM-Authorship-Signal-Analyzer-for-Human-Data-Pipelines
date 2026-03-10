@@ -12,6 +12,7 @@ from llm_detector.io import load_xlsx, load_csv
 if HAS_TK:
     import tkinter as tk
     from tkinter import ttk, filedialog, messagebox
+    from tkinter import font as tkfont
 
 _DET_COLORS = {
     'RED': '#d32f2f',
@@ -23,6 +24,15 @@ _DET_COLORS = {
 }
 
 _CHANNELS = ['prompt_structure', 'stylometry', 'continuation', 'windowing']
+
+_DASHBOARD_THEME = {
+    'bg': '#f4f7fb',
+    'card': '#ffffff',
+    'text': '#1f2937',
+    'muted': '#6b7280',
+    'accent': '#2563eb',
+    'accent_light': '#dbeafe',
+}
 
 
 class DetectorGUI:
@@ -39,6 +49,7 @@ class DetectorGUI:
         self._last_text_map = {}
 
         self._init_vars()
+        self._configure_theme()
         self._build_layout()
 
     def _init_vars(self):
@@ -79,7 +90,14 @@ class DetectorGUI:
             self.ablation_vars[ch] = tk.BooleanVar(value=False)
 
     def _build_layout(self):
-        notebook = ttk.Notebook(self.root)
+        header = ttk.Frame(self.root, style='DashboardHeader.TFrame', padding=(12, 10))
+        header.pack(fill=tk.X, padx=6, pady=(6, 0))
+        ttk.Label(header, text='LLM Authorship Signal Analyzer',
+                  style='DashboardTitle.TLabel').pack(anchor='w')
+        ttk.Label(header, text='Analyst dashboard for prompt forensics, calibration, and reporting',
+                  style='DashboardSubtitle.TLabel').pack(anchor='w')
+
+        notebook = ttk.Notebook(self.root, style='Dashboard.TNotebook')
         notebook.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
 
         # Tab 1: Analysis
@@ -94,7 +112,9 @@ class DetectorGUI:
         self._build_reports_tab(notebook)
 
         # Status bar
-        ttk.Label(self.root, textvariable=self.status_var).pack(anchor='w', padx=10, pady=(0, 6))
+        status = ttk.Frame(self.root, style='DashboardStatus.TFrame', padding=(10, 6))
+        status.pack(fill=tk.X, padx=6, pady=(0, 6))
+        ttk.Label(status, textvariable=self.status_var, style='DashboardStatus.TLabel').pack(anchor='w')
 
     # ── Tab 1: Analysis ──────────────────────────────────────────────
 
@@ -155,7 +175,8 @@ class DetectorGUI:
         progress_frame.pack(fill=tk.X, pady=(0, 6))
         self.progress_var = tk.DoubleVar(value=0)
         self.progress_bar = ttk.Progressbar(progress_frame, variable=self.progress_var,
-                                             maximum=100, mode='determinate')
+                                             maximum=100, mode='determinate',
+                                             style='Dashboard.Horizontal.TProgressbar')
         self.progress_bar.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.progress_label = ttk.Label(progress_frame, text='', width=20)
         self.progress_label.pack(side=tk.LEFT, padx=(6, 0))
@@ -337,6 +358,68 @@ class DetectorGUI:
         bl.columnconfigure(1, weight=1)
 
     # ── Helpers ───────────────────────────────────────────────────────
+
+    def _configure_theme(self):
+        self.root.configure(bg=_DASHBOARD_THEME['bg'])
+        style = ttk.Style(self.root)
+        if 'clam' in style.theme_names():
+            style.theme_use('clam')
+
+        try:
+            base_font = tkfont.nametofont('TkDefaultFont')
+        except tk.TclError:
+            try:
+                base_font = tkfont.nametofont('TkTextFont')
+            except tk.TclError:
+                base_font = None
+
+        self._title_font = None
+        self._subtitle_font = None
+        self._section_font = None
+        if base_font is not None:
+            self._title_font = base_font.copy()
+            self._title_font.configure(size=14, weight='bold')
+            self._subtitle_font = base_font.copy()
+            self._subtitle_font.configure(size=10)
+            self._section_font = base_font.copy()
+            self._section_font.configure(size=10, weight='bold')
+
+        style.configure('TFrame', background=_DASHBOARD_THEME['bg'])
+        style.configure('TLabelframe', background=_DASHBOARD_THEME['card'])
+        style.configure('TLabelframe.Label', background=_DASHBOARD_THEME['card'],
+                        foreground=_DASHBOARD_THEME['text'])
+        if self._section_font is not None:
+            style.configure('TLabelframe.Label', font=self._section_font)
+        style.configure('TLabel', background=_DASHBOARD_THEME['bg'], foreground=_DASHBOARD_THEME['text'])
+        style.configure('TCheckbutton', background=_DASHBOARD_THEME['bg'], foreground=_DASHBOARD_THEME['text'])
+        style.configure('TButton', padding=(10, 6))
+        style.configure('TEntry', fieldbackground='white')
+        style.configure('TCombobox', fieldbackground='white')
+
+        style.configure('DashboardHeader.TFrame', background=_DASHBOARD_THEME['card'])
+        style.configure('DashboardTitle.TLabel', background=_DASHBOARD_THEME['card'],
+                        foreground=_DASHBOARD_THEME['text'])
+        style.configure('DashboardSubtitle.TLabel', background=_DASHBOARD_THEME['card'],
+                        foreground=_DASHBOARD_THEME['muted'])
+        if self._title_font is not None:
+            style.configure('DashboardTitle.TLabel', font=self._title_font)
+        if self._subtitle_font is not None:
+            style.configure('DashboardSubtitle.TLabel', font=self._subtitle_font)
+        style.configure('DashboardStatus.TFrame', background=_DASHBOARD_THEME['card'])
+        style.configure('DashboardStatus.TLabel', background=_DASHBOARD_THEME['card'],
+                        foreground=_DASHBOARD_THEME['muted'])
+
+        style.configure('Dashboard.TNotebook', background=_DASHBOARD_THEME['bg'], borderwidth=0)
+        style.configure('Dashboard.TNotebook.Tab', padding=(12, 8),
+                        background=_DASHBOARD_THEME['accent_light'], foreground=_DASHBOARD_THEME['text'])
+        style.map('Dashboard.TNotebook.Tab',
+                  background=[('selected', _DASHBOARD_THEME['accent'])],
+                  foreground=[('selected', '#ffffff')])
+        try:
+            style.configure('Dashboard.Horizontal.TProgressbar',
+                            troughcolor='#e5e7eb', background=_DASHBOARD_THEME['accent'])
+        except tk.TclError:
+            style.configure('Dashboard.Horizontal.TProgressbar')
 
     def _browse_file(self):
         path = filedialog.askopenfilename(filetypes=[('Data files', '*.csv *.xlsx *.xlsm *.pdf'), ('All files', '*.*')])
