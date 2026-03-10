@@ -42,6 +42,7 @@ from llm_detector.analyzers import (
     run_semantic_resonance,
     run_self_similarity,
     run_continuation_api,
+    run_continuation_api_multi,
     run_continuation_local,
     run_perplexity,
 )
