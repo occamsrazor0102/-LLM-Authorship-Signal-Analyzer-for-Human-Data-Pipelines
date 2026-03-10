@@ -1711,16 +1711,90 @@ def _dna_bscore(original_tokens, regenerated_tokens, ns=(2, 3, 4), weights=(0.25
     return sum(scores)
 
 
+def _detect_text_format(text):
+    """Detect structural features of the text for use in continuation prompts.
+
+    Returns a list of human-readable feature descriptions, e.g.
+    ``['paragraph breaks', 'numbered sections']``.
+    """
+    features = []
+    if '\n\n' in text:
+        features.append('paragraph breaks')
+    if re.search(r'^\d+[\.\)]\s', text, re.M):
+        features.append('numbered sections')
+    if re.search(r'^[-•]\s', text, re.M):
+        features.append('bullet points')
+    if re.search(r'^#+\s', text, re.M):
+        features.append('markdown headings')
+    return features
+
+
+def _format_hint_str(features):
+    """Return a grammatically correct sentence fragment for *features*,
+    or an empty string when there are no features.
+
+    Examples::
+
+        ['paragraph breaks']            ->  ' It uses paragraph breaks.'
+        ['paragraph breaks', 'bullets'] ->  ' It uses paragraph breaks and bullets.'
+    """
+    if not features:
+        return ""
+    if len(features) == 1:
+        return f" It uses {features[0]}."
+    return f" It uses {', '.join(features[:-1])} and {features[-1]}."
+
+
 def _dna_truncate_text(text, ratio=0.5):
-    """Truncate text at sentence boundary. Returns (prefix, continuation)."""
-    sentences = re.split(r'(?<=[.!?])\s+(?=[A-Z"\'])', text)
-    sentences = [s.strip() for s in sentences if len(s.strip()) > 5]
-    if len(sentences) < 4:
-        words = text.split()
-        mid = int(len(words) * ratio)
-        return ' '.join(words[:mid]), ' '.join(words[mid:])
-    cut = max(2, int(len(sentences) * ratio))
-    return ' '.join(sentences[:cut]), ' '.join(sentences[cut:])
+    """Truncate text at the nearest structural boundary to *ratio*.
+
+    Priority order:
+    1. Paragraph break — snaps to the paragraph boundary closest to *ratio*
+       (requires >= 3 paragraphs and that the continuation has >= 30 words).
+    2. Sentence boundary — uses ``get_sentences()`` (spaCy when available,
+       robust regex fallback).
+    3. Word-level fallback — used when < 4 sentences are detected.
+
+    Returns (prefix, continuation).
+    """
+    # 1. Paragraph-level split
+    paragraphs = re.split(r'\n\s*\n', text)
+    paragraphs = [p.strip() for p in paragraphs if len(p.strip()) > 10]
+
+    if len(paragraphs) >= 3:
+        target_chars = int(len(text) * ratio)
+        cumulative = 0
+        best_cut_idx = None
+        best_cut_dist = None
+        for i, para in enumerate(paragraphs):
+            cumulative += len(para) + 2  # +2 for the \n\n separator
+            # Must keep at least one paragraph on each side
+            if 1 <= i < len(paragraphs) - 1:
+                dist = abs(cumulative - target_chars)
+                if best_cut_idx is None or dist < best_cut_dist:
+                    best_cut_idx = i + 1
+                    best_cut_dist = dist
+        if best_cut_idx is not None:
+            prefix = '\n\n'.join(paragraphs[:best_cut_idx])
+            continuation = '\n\n'.join(paragraphs[best_cut_idx:])
+            if len(continuation.split()) >= 30:
+                return prefix, continuation
+
+    # 2. Sentence-level split
+    sentences = get_sentences(text)
+    sentences = [s for s in sentences if len(s.strip()) > 5]
+
+    if len(sentences) >= 4:
+        cut = max(2, int(len(sentences) * ratio))
+        prefix = ' '.join(sentences[:cut])
+        continuation = ' '.join(sentences[cut:])
+        if len(continuation.split()) >= 30:
+            return prefix, continuation
+
+    # 3. Word-level fallback
+    words = text.split()
+    mid = int(len(words) * ratio)
+    return ' '.join(words[:mid]), ' '.join(words[mid:])
 
 
 def _dna_call_anthropic(prefix, continuation_length, api_key,
@@ -1732,7 +1806,14 @@ def _dna_call_anthropic(prefix, continuation_length, api_key,
         raise ImportError("pip install anthropic  (required for continuation analysis with Anthropic)")
     client = anthropic.Anthropic(api_key=api_key)
     max_tokens = min(max(continuation_length * 2, 200), 4096)
-    prompt = f"Continue the following text naturally, maintaining the same style, tone, and topic. Do not add any preamble or meta-commentary — just continue writing:\n\n{prefix}"
+    format_hints = _detect_text_format(prefix)
+    format_str = _format_hint_str(format_hints)
+    prompt = (
+        "Continue the following text naturally, maintaining the same "
+        f"style, tone, format, and topic.{format_str} "
+        "Do not add any preamble or meta-commentary — "
+        f"just continue writing:\n\n{prefix}"
+    )
 
     def _call(_):
         msg = client.messages.create(
@@ -1929,9 +2010,12 @@ def _prepare_batch_requests(texts, task_ids, model='claude-sonnet-4-20250514',
             orig_tokens = original_continuation.lower().split()
             continuation_word_count = len(orig_tokens)
             max_tokens = min(max(continuation_word_count * 2, 200), 4096)
+            format_hints = _detect_text_format(prefix)
+            format_str = _format_hint_str(format_hints)
             prompt = (
                 "Continue the following text naturally, maintaining the same "
-                "style, tone, and topic. Do not add any preamble or "
+                f"style, tone, format, and topic.{format_str} "
+                "Do not add any preamble or "
                 "meta-commentary — just continue writing:\n\n" + prefix
             )
 
