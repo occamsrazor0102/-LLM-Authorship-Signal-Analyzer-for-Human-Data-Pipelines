@@ -17,24 +17,29 @@ __version__ = '0.61.0'
 from collections import Counter
 from collections import Counter, defaultdict
 from collections import defaultdict
+from datetime import datetime
+from pathlib import Path
 from typing import Dict, Optional
 from typing import List, Tuple, Dict, Optional, FrozenSet
 import argparse
+import copy
+import hashlib
 import json
 import logging
-import copy
 import math
 import os
 import re
 import sys
 import threading
-import time
 import unicodedata
-from concurrent.futures import ThreadPoolExecutor
 
 # ── Third-party (conditional) ────────────────────────────────────────
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+import random
 import statistics
+import struct
+import time
 import zlib
 
 
@@ -93,30 +98,77 @@ except Exception as e:
 _EMBEDDER = None
 _AI_CENTROIDS = None
 _HUMAN_CENTROIDS = None
+_EXTRA_CENTROID_PATHS = []
+
+
+def register_centroid_path(directory):
+    """Register an additional directory to search for centroid files.
+
+    Call this before the first analysis so that get_semantic_models()
+    picks up centroids from a custom --memory store directory.
+    Resets cached centroids so the new path takes effect.
+    """
+    global _AI_CENTROIDS, _HUMAN_CENTROIDS
+    centroid_file = os.path.join(str(directory), 'centroids', 'centroids_latest.npz')
+    if centroid_file not in _EXTRA_CENTROID_PATHS:
+        _EXTRA_CENTROID_PATHS.insert(0, centroid_file)
+        # Reset cached centroids so they reload from the new path
+        _AI_CENTROIDS = None
+        _HUMAN_CENTROIDS = None
+
 
 def get_semantic_models():
-    """Return (embedder, ai_centroids, human_centroids), loading on first call."""
+    """Return (embedder, ai_centroids, human_centroids), loading on first call.
+
+    Checks for data-derived centroids in .beet/centroids/centroids_latest.npz
+    before falling back to hardcoded archetypes.
+    """
     global _EMBEDDER, _AI_CENTROIDS, _HUMAN_CENTROIDS
     if _EMBEDDER is None and HAS_SEMANTIC:
         from sentence_transformers import SentenceTransformer
+        import numpy as np
+
         _EMBEDDER = SentenceTransformer('all-MiniLM-L6-v2')
-        _AI_ARCHETYPES = [
-            "As an AI language model, I cannot provide personal opinions.",
-            "Here is a comprehensive breakdown of the key factors to consider.",
-            "To address this challenge, we must consider multiple perspectives.",
-            "This thorough analysis demonstrates the critical importance of the topic.",
-            "Furthermore, it is essential to note that this approach ensures alignment.",
-            "In conclusion, by leveraging these strategies we can achieve optimal results.",
+
+        centroid_paths = [
+            '.beet/centroids/centroids_latest.npz',
+            os.path.expanduser('~/.beet/centroids/centroids_latest.npz'),
         ]
-        _HUMAN_ARCHETYPES = [
-            "honestly idk maybe try restarting it lol",
-            "so I went ahead and just hacked together a quick script",
-            "tbh the whole thing is kinda janky but it works",
-            "yeah no that's totally wrong, here's what actually happened",
-            "I messed around with it for a bit and got something working",
-        ]
-        _AI_CENTROIDS = _EMBEDDER.encode(_AI_ARCHETYPES)
-        _HUMAN_CENTROIDS = _EMBEDDER.encode(_HUMAN_ARCHETYPES)
+
+        loaded = False
+        for cpath in centroid_paths:
+            if os.path.exists(cpath):
+                try:
+                    data = np.load(cpath)
+                    if 'ai_multi' in data and data['ai_multi'].shape[0] > 1:
+                        _AI_CENTROIDS = data['ai_multi']
+                        _HUMAN_CENTROIDS = data['human_multi']
+                    else:
+                        _AI_CENTROIDS = data['ai_centroid']
+                        _HUMAN_CENTROIDS = data['human_centroid']
+                    loaded = True
+                    break
+                except Exception:
+                    continue
+
+        if not loaded:
+            _AI_ARCHETYPES = [
+                "As an AI language model, I cannot provide personal opinions.",
+                "Here is a comprehensive breakdown of the key factors to consider.",
+                "To address this challenge, we must consider multiple perspectives.",
+                "This thorough analysis demonstrates the critical importance of the topic.",
+                "Furthermore, it is essential to note that this approach ensures alignment.",
+                "In conclusion, by leveraging these strategies we can achieve optimal results.",
+            ]
+            _HUMAN_ARCHETYPES = [
+                "honestly idk maybe try restarting it lol",
+                "so I went ahead and just hacked together a quick script",
+                "tbh the whole thing is kinda janky but it works",
+                "yeah no that's totally wrong, here's what actually happened",
+                "I messed around with it for a bit and got something working",
+            ]
+            _AI_CENTROIDS = _EMBEDDER.encode(_AI_ARCHETYPES)
+            _HUMAN_CENTROIDS = _EMBEDDER.encode(_HUMAN_ARCHETYPES)
     return _EMBEDDER, _AI_CENTROIDS, _HUMAN_CENTROIDS
 
 # ── transformers: local perplexity scoring ──────────────────────────────────
@@ -130,6 +182,14 @@ except Exception as e:
     HAS_PERPLEXITY = False
     logger.info("transformers/torch setup failed (%s). Perplexity scoring disabled.", e)
 
+# Default and available perplexity models (model_id -> short label)
+PPL_MODELS = {
+    'Qwen/Qwen2.5-0.5B': 'Qwen2.5-0.5B',
+    'HuggingFaceTB/SmolLM2-360M': 'SmolLM2-360M',
+    'HuggingFaceTB/SmolLM2-135M': 'SmolLM2-135M',
+    'distilgpt2': 'DistilGPT-2 (legacy)',
+    'gpt2': 'GPT-2',
+}
 PPL_DEFAULT_MODEL = 'Qwen/Qwen2.5-0.5B'
 
 _PPL_MODEL = None
@@ -137,7 +197,13 @@ _PPL_TOKENIZER = None
 _PPL_MODEL_ID = None
 
 def get_perplexity_model(model_id=None):
-    """Return (model, tokenizer), loading on first call."""
+    """Return (model, tokenizer), loading on first call.
+
+    Args:
+        model_id: HuggingFace model identifier. Defaults to PPL_DEFAULT_MODEL.
+                  If a different model_id is passed than what's currently loaded,
+                  the model is reloaded.
+    """
     global _PPL_MODEL, _PPL_TOKENIZER, _PPL_MODEL_ID
     if model_id is None:
         model_id = PPL_DEFAULT_MODEL
@@ -149,6 +215,23 @@ def get_perplexity_model(model_id=None):
         _PPL_TOKENIZER = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
         _PPL_MODEL.eval()
     return _PPL_MODEL, _PPL_TOKENIZER
+
+# ── Binoculars: contrastive LM scoring (observer model) ─────────────────────
+HAS_BINOCULARS = HAS_PERPLEXITY  # Same deps, just needs second model
+
+_BINO_MODEL = None
+_BINO_TOKENIZER = None
+
+def get_binoculars_model():
+    """Return (observer_model, observer_tokenizer) for contrastive scoring."""
+    global _BINO_MODEL, _BINO_TOKENIZER
+    if _BINO_MODEL is None and HAS_BINOCULARS:
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        # Use distilgpt2 as observer — small and different enough for contrastive signal
+        _BINO_MODEL = AutoModelForCausalLM.from_pretrained('distilgpt2')
+        _BINO_TOKENIZER = AutoTokenizer.from_pretrained('distilgpt2')
+        _BINO_MODEL.eval()
+    return _BINO_MODEL, _BINO_TOKENIZER
 
 # ── pypdf: PDF text extraction ──────────────────────────────────────────────
 try:
@@ -174,6 +257,13 @@ ENGLISH_FUNCTION_WORDS = frozenset([
 ])
 
 
+def type_token_ratio(tokens):
+    """Type-Token Ratio: vocabulary richness (unique tokens / total tokens)."""
+    if not tokens:
+        return 0.0
+    return len(set(tokens)) / len(tokens)
+
+
 def get_sentences(text):
     """Segment text into sentences using spacy sentencizer or regex fallback."""
     if HAS_SPACY:
@@ -183,6 +273,26 @@ def get_sentences(text):
     else:
         sents = re.split(r'(?<=[.!?])\s+', text)
         return [s for s in sents if s.strip()]
+
+
+def get_sentence_spans(text):
+    """Segment text into sentences with character offsets.
+
+    Returns list of (sentence_text, start_char, end_char) tuples.
+    """
+    if HAS_SPACY:
+        nlp = get_nlp()
+        doc = nlp(text)
+        return [(s.text, s.start_char, s.end_char) for s in doc.sents]
+    else:
+        spans = []
+        for m in re.finditer(r'[^.!?]*[.!?]+\s*|[^.!?]+$', text):
+            t = m.group().strip()
+            if t:
+                spans.append((t, m.start(), m.start() + len(t)))
+        if not spans and text.strip():
+            spans.append((text.strip(), 0, len(text.strip())))
+        return spans
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -338,6 +448,19 @@ def normalize_text(text):
 
     obfuscation_delta = changes / original_len
 
+    # Classify detected evasion attack types for per-attack analysis
+    attack_types = []
+    if invisible_count > 0:
+        attack_types.append('invisible_char')
+    if homoglyph_count > 0:
+        attack_types.append('homoglyph')
+    if interspacing_spans > 0:
+        attack_types.append('interspacing')
+    if ftfy_applied:
+        attack_types.append('encoding')
+    if ws_collapsed:
+        attack_types.append('whitespace')
+
     return text, {
         'obfuscation_delta': round(obfuscation_delta, 4),
         'invisible_chars': invisible_count,
@@ -345,6 +468,7 @@ def normalize_text(text):
         'interspacing_spans': interspacing_spans,
         'whitespace_collapsed': ws_collapsed,
         'ftfy_applied': ftfy_applied,
+        'attack_types': attack_types,
     }
 
 
@@ -358,9 +482,29 @@ if HAS_PYPDF:
     from pypdf import PdfReader
 
 
+def _col_letter_to_index(spec):
+    """Convert a column letter (A-Z) or 1-based number string to a 0-based index.
+
+    Returns the integer index if *spec* is a positional reference, else None.
+    Supports single letters A-Z (case-insensitive) and positive integer strings.
+    """
+    s = str(spec).strip()
+    if len(s) == 1 and s.upper() in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ':
+        return ord(s.upper()) - ord('A')
+    if s.isdigit() and int(s) >= 1:
+        return int(s) - 1  # convert 1-based to 0-based
+    return None
+
+
 def load_xlsx(filepath, sheet=None, prompt_col='prompt', id_col='task_id',
               occ_col='occupation', attempter_col='attempter_name', stage_col='pipeline_stage_name'):
-    """Load tasks from an xlsx file. Returns list of dicts."""
+    """Load tasks from an xlsx file. Returns list of dicts.
+
+    Column parameters accept either a column header name (matched case-insensitively
+    with fuzzy fallback) or a positional reference: a single letter A–Z (e.g. ``'A'``
+    for the first column) or a 1-based integer string (e.g. ``'1'`` for the first
+    column).  Positional references take priority over name matching.
+    """
     import openpyxl
     wb = openpyxl.load_workbook(filepath, read_only=True)
 
@@ -381,13 +525,21 @@ def load_xlsx(filepath, sheet=None, prompt_col='prompt', id_col='task_id',
         return []
 
     headers = [str(h).strip().lower() if h else '' for h in rows[0]]
+    n_cols = len(headers)
 
     def find_col(candidates):
+        # Positional spec takes priority (first matching candidate wins)
+        for c in candidates:
+            idx = _col_letter_to_index(c)
+            if idx is not None and idx < n_cols:
+                return idx
+        # Exact name match
         for c in candidates:
             cl = c.lower()
             for i, h in enumerate(headers):
                 if cl == h:
                     return i
+        # Substring match (skip bare 'id' to avoid false positives)
         for c in candidates:
             cl = c.lower()
             if cl == 'id':
@@ -427,18 +579,33 @@ def load_xlsx(filepath, sheet=None, prompt_col='prompt', id_col='task_id',
     return tasks
 
 
-def load_csv(filepath, prompt_col='prompt'):
-    """Load tasks from CSV."""
+def load_csv(filepath, prompt_col='prompt', id_col='task_id',
+             occ_col='occupation', attempter_col='attempter_name',
+             stage_col='pipeline_stage_name'):
+    """Load tasks from CSV.
+
+    Column parameters accept either a column header name (matched
+    case-insensitively with fuzzy fallback) or a positional reference: a single
+    letter A–Z (e.g. ``'A'``) or a 1-based integer string (e.g. ``'1'``).
+    """
     df = pd.read_csv(filepath)
     df = df.fillna('')
 
-    col_map = {c.lower().strip(): c for c in df.columns}
+    col_list = list(df.columns)
+    col_map = {c.lower().strip(): c for c in col_list}
 
     def resolve_col(*candidates):
+        # Positional spec takes priority
+        for c in candidates:
+            idx = _col_letter_to_index(c)
+            if idx is not None and idx < len(col_list):
+                return col_list[idx]
+        # Exact name match
         for c in candidates:
             key = c.lower().strip()
             if key in col_map:
                 return col_map[key]
+        # Substring match
         for c in candidates:
             key = c.lower().strip()
             if key == 'id':
@@ -449,11 +616,11 @@ def load_csv(filepath, prompt_col='prompt'):
         return None
 
     prompt_actual = resolve_col(prompt_col, 'prompt', 'text', 'content')
-    id_actual = resolve_col('task_id', 'id')
-    occ_actual = resolve_col('occupation', 'occ')
-    att_actual = resolve_col('attempter_name', 'attempter', 'claimed_by',
+    id_actual = resolve_col(id_col, 'task_id', 'id')
+    occ_actual = resolve_col(occ_col, 'occupation', 'occ')
+    att_actual = resolve_col(attempter_col, 'attempter_name', 'attempter', 'claimed_by',
                              'fellow name', 'fellow_name', 'author', 'name')
-    stage_actual = resolve_col('pipeline_stage_name', 'stage')
+    stage_actual = resolve_col(stage_col, 'pipeline_stage_name', 'stage')
 
     if prompt_actual is None:
         print(f"ERROR: Could not find prompt column. Columns: {list(df.columns)}")
@@ -528,11 +695,9 @@ def _jaccard(a, b):
 
 
 _STRUCT_FEATURES = [
-    # Original v0.53 features
     'prompt_signature_composite', 'prompt_signature_cfd', 'prompt_signature_mfsr',
     'prompt_signature_must_rate', 'instruction_density_idi',
     'voice_dissonance_spec_score', 'voice_dissonance_voice_score',
-    # v0.58+ additions
     'self_similarity_nssi_score', 'self_similarity_comp_ratio',
     'self_similarity_hapax_ratio', 'self_similarity_sent_length_cv',
     'window_max_score', 'window_mean_score',
@@ -545,16 +710,77 @@ def _structural_similarity(r1, r2):
     return 1.0 / (1.0 + math.sqrt(diff_sq))
 
 
-def analyze_similarity(results, text_map, jaccard_threshold=0.40, struct_threshold=0.90):
-    """Analyze cross-submission similarity within occupation groups."""
+# ── FEAT 12: Semantic similarity ──────────────────────────────────────────
+
+def _semantic_similarity(text_a, text_b):
+    """Cosine similarity between full-text embeddings."""
+    if not HAS_SEMANTIC:
+        return 0.0
+    from sklearn.metrics.pairwise import cosine_similarity
+    embedder, _, _ = get_semantic_models()
+    vecs = embedder.encode([text_a, text_b])
+    return float(cosine_similarity([vecs[0]], [vecs[1]])[0][0])
+
+
+# ── FEAT 14: MinHash fingerprinting ──────────────────────────────────────
+
+def _shingle_fingerprint(shingle_set, n_hashes=128):
+    """MinHash fingerprint from shingle set for compact storage."""
+    if not shingle_set:
+        return [0] * n_hashes
+    minhashes = [float('inf')] * n_hashes
+    _pack = struct.pack
+    _md5 = hashlib.md5
+    for shingle in shingle_set:
+        shingle_bytes = ' '.join(shingle).encode('utf-8')
+        for i in range(n_hashes):
+            h = int.from_bytes(_md5(_pack('>I', i) + shingle_bytes).digest()[:4], 'big')
+            if h < minhashes[i]:
+                minhashes[i] = h
+    return minhashes
+
+
+def _minhash_similarity(fp_a, fp_b):
+    """Estimate Jaccard similarity from MinHash fingerprints."""
+    if not fp_a or not fp_b or len(fp_a) != len(fp_b):
+        return 0.0
+    agreement = sum(1 for a, b in zip(fp_a, fp_b) if a == b)
+    return agreement / len(fp_a)
+
+
+# ── FEAT 11 + 12 + 15: Main similarity analysis ─────────────────────────
+
+def analyze_similarity(results, text_map, jaccard_threshold=0.40,
+                       struct_threshold=0.90, semantic_threshold=0.92,
+                       adaptive=True, instruction_text=None):
+    """Analyze cross-submission similarity within occupation groups.
+
+    Args:
+        results: List of pipeline result dicts.
+        text_map: {task_id: text} mapping.
+        jaccard_threshold: Absolute Jaccard threshold (catches copy-paste).
+        struct_threshold: Absolute structural similarity threshold.
+        semantic_threshold: Absolute semantic similarity threshold (FEAT 12).
+        adaptive: If True, compute per-occupation baselines and flag outliers (FEAT 11).
+        instruction_text: Optional shared instructions to factor out (FEAT 15).
+    """
     by_occ = defaultdict(list)
     for r in results:
         occ = r.get('occupation', '(unknown)')
         by_occ[occ].append(r)
 
+    # FEAT 15: Factor out instruction shingles
+    instruction_shingles = set()
+    if instruction_text:
+        instruction_shingles = _word_shingles(instruction_text)
+
     shingle_cache = {}
     for tid, text in text_map.items():
-        shingle_cache[tid] = _word_shingles(text)
+        raw_shingles = _word_shingles(text)
+        if instruction_shingles:
+            shingle_cache[tid] = raw_shingles - instruction_shingles
+        else:
+            shingle_cache[tid] = raw_shingles
 
     flagged_pairs = []
 
@@ -562,61 +788,371 @@ def analyze_similarity(results, text_map, jaccard_threshold=0.40, struct_thresho
         if len(group) < 2:
             continue
 
+        # Phase 1: Compute ALL pairwise similarities within group
+        all_jaccards = []
+        all_structurals = []
+        all_semantics = []
+        pair_data = []
+
+        # Pre-compute semantic embeddings for this group if available
+        sem_matrix = None
+        group_tids = [r.get('task_id', '') for r in group]
+        if HAS_SEMANTIC:
+            try:
+                from sklearn.metrics.pairwise import cosine_similarity as cos_sim
+                embedder, _, _ = get_semantic_models()
+                group_texts = [text_map.get(tid, '') for tid in group_tids]
+                if all(t for t in group_texts):
+                    group_embeddings = embedder.encode(group_texts)
+                    sem_matrix = cos_sim(group_embeddings)
+            except Exception:
+                sem_matrix = None
+
+        # Pre-compute attempter names once per group member to avoid
+        # repeated .get()/.strip()/.lower() inside the O(n²) inner loop.
+        attempters = [r.get('attempter', '').strip().lower() for r in group]
+
         for i in range(len(group)):
             for j in range(i + 1, len(group)):
                 r_a, r_b = group[i], group[j]
-                att_a = r_a.get('attempter', '').strip().lower()
-                att_b = r_b.get('attempter', '').strip().lower()
-
-                if att_a and att_b and att_a == att_b:
-                    continue
+                att_a = attempters[i]
+                att_b = attempters[j]
 
                 tid_a = r_a.get('task_id', '')
                 tid_b = r_b.get('task_id', '')
 
                 jac = _jaccard(
                     shingle_cache.get(tid_a, set()),
-                    shingle_cache.get(tid_b, set())
+                    shingle_cache.get(tid_b, set()),
                 )
                 struct = _structural_similarity(r_a, r_b)
 
-                flags = []
-                if jac >= jaccard_threshold:
-                    flags.append('text')
-                if struct >= struct_threshold:
-                    flags.append('structural')
+                sem = 0.0
+                if sem_matrix is not None:
+                    sem = float(sem_matrix[i][j])
 
-                if flags:
-                    flagged_pairs.append({
-                        'id_a': tid_a,
-                        'id_b': tid_b,
-                        'attempter_a': r_a.get('attempter', ''),
-                        'attempter_b': r_b.get('attempter', ''),
-                        'occupation': occ,
-                        'jaccard': jac,
-                        'structural': struct,
-                        'flag_type': '+'.join(flags),
-                        'det_a': r_a['determination'],
-                        'det_b': r_b['determination'],
-                    })
+                all_jaccards.append(jac)
+                all_structurals.append(struct)
+                all_semantics.append(sem)
+                pair_data.append((i, j, jac, struct, sem, att_a, att_b, tid_a, tid_b))
 
-    flagged_pairs.sort(key=lambda p: p['jaccard'], reverse=True)
+        # Phase 2: Compute occupation baseline (FEAT 11)
+        jac_median = jac_std = 0.0
+        struct_median = struct_std = 0.0
+        sem_median = sem_std = 0.0
+        adaptive_jac_threshold = jaccard_threshold
+        adaptive_struct_threshold = struct_threshold
+        adaptive_sem_threshold = semantic_threshold
+
+        if adaptive and len(all_jaccards) >= 3:
+            jac_median = statistics.median(all_jaccards)
+            jac_std = statistics.stdev(all_jaccards)
+            struct_median = statistics.median(all_structurals)
+            struct_std = statistics.stdev(all_structurals)
+
+            adaptive_jac_threshold = jac_median + 2.0 * max(jac_std, 0.02)
+            adaptive_struct_threshold = struct_median + 2.0 * max(struct_std, 0.02)
+
+            if all_semantics and any(s > 0 for s in all_semantics):
+                sem_median = statistics.median(all_semantics)
+                sem_std = statistics.stdev(all_semantics) if len(all_semantics) >= 3 else 0.02
+                adaptive_sem_threshold = sem_median + 2.0 * max(sem_std, 0.01)
+
+        # Phase 3: Flag pairs exceeding thresholds
+        for i, j, jac, struct, sem, att_a, att_b, tid_a, tid_b in pair_data:
+            r_a, r_b = group[i], group[j]
+
+            if att_a and att_b and att_a == att_b:
+                continue
+
+            flags = []
+            flag_details = {}
+
+            # Absolute threshold (catches copy-paste)
+            if jac >= jaccard_threshold:
+                flags.append('text')
+
+            # Adaptive threshold (catches same-template generation)
+            if adaptive and jac >= adaptive_jac_threshold and jac > jac_median + 0.05:
+                if 'text' not in flags:
+                    flags.append('text_adaptive')
+                flag_details['jac_z'] = round(
+                    (jac - jac_median) / max(jac_std, 0.01), 2
+                )
+
+            # Structural similarity
+            if struct >= struct_threshold:
+                flags.append('structural')
+            if adaptive and struct >= adaptive_struct_threshold and struct > struct_median + 0.03:
+                if 'structural' not in flags:
+                    flags.append('structural_adaptive')
+                flag_details['struct_z'] = round(
+                    (struct - struct_median) / max(struct_std, 0.01), 2
+                )
+
+            # Semantic similarity (FEAT 12)
+            if sem >= semantic_threshold:
+                flags.append('semantic')
+            if adaptive and sem > 0 and sem >= adaptive_sem_threshold and sem > sem_median + 0.03:
+                if 'semantic' not in flags:
+                    flags.append('semantic_adaptive')
+                flag_details['sem_z'] = round(
+                    (sem - sem_median) / max(sem_std, 0.01), 2
+                )
+
+            if flags:
+                pair_dict = {
+                    'id_a': tid_a,
+                    'id_b': tid_b,
+                    'attempter_a': r_a.get('attempter', ''),
+                    'attempter_b': r_b.get('attempter', ''),
+                    'occupation': occ,
+                    'jaccard': round(jac, 4),
+                    'structural': round(struct, 4),
+                    'semantic': round(sem, 4),
+                    'flag_type': '+'.join(flags),
+                    'det_a': r_a['determination'],
+                    'det_b': r_b['determination'],
+                    'occ_jac_median': round(jac_median, 4),
+                    'occ_jac_std': round(jac_std, 4) if jac_std else 0.0,
+                    'occ_struct_median': round(struct_median, 4),
+                }
+                pair_dict.update(flag_details)
+                flagged_pairs.append(pair_dict)
+
+        # Emit baseline stats for this occupation group
+        if len(all_jaccards) >= 3:
+            flagged_pairs.append({
+                '_type': 'baseline',
+                'occupation': occ,
+                'n_pairs': len(all_jaccards),
+                'jac_median': round(jac_median, 4),
+                'jac_std': round(jac_std, 4),
+                'jac_p90': round(statistics.quantiles(all_jaccards, n=10)[8], 4),
+                'struct_median': round(struct_median, 4),
+                'struct_std': round(struct_std, 4),
+                'sem_median': round(sem_median, 4),
+                'adaptive_jac_threshold': round(adaptive_jac_threshold, 4),
+                'adaptive_struct_threshold': round(adaptive_struct_threshold, 4),
+                'adaptive_sem_threshold': round(adaptive_sem_threshold, 4),
+            })
+
+    flagged_pairs.sort(key=lambda p: p.get('jaccard', 0), reverse=True)
     return flagged_pairs
 
 
+# ── FEAT 13: Similarity feedback into determination ──────────────────────
+
+def apply_similarity_adjustments(results, sim_pairs, text_map):
+    """Adjust determinations based on similarity findings.
+
+    Rules:
+    - If a prompt is in a flagged similarity pair AND its current
+      determination is YELLOW or GREEN, upgrade to the next level.
+    - If a prompt has 2+ similarity flags with different partners,
+      upgrade more aggressively (indicates systematic template use).
+    - Never downgrade a determination based on similarity.
+    - Add similarity context to the result's audit trail.
+
+    Returns modified results list.
+    """
+    sim_profile = defaultdict(list)
+    for p in sim_pairs:
+        if p.get('_type') == 'baseline':
+            continue
+        sim_profile[p['id_a']].append(p)
+        sim_profile[p['id_b']].append(p)
+
+    upgrade_map = {'GREEN': 'YELLOW', 'REVIEW': 'YELLOW', 'YELLOW': 'AMBER'}
+
+    for r in results:
+        tid = r.get('task_id', '')
+        pairs = sim_profile.get(tid, [])
+        if not pairs:
+            continue
+
+        n_partners = len(set(
+            p['id_b'] if p['id_a'] == tid else p['id_a']
+            for p in pairs
+        ))
+
+        max_jac = max(p.get('jaccard', 0) for p in pairs)
+        max_sem = max(p.get('semantic', 0) for p in pairs)
+        has_semantic = any('semantic' in p.get('flag_type', '') for p in pairs)
+        has_adaptive = any('adaptive' in p.get('flag_type', '') for p in pairs)
+
+        current_det = r['determination']
+        new_det = current_det
+        sim_reason = None
+
+        if has_semantic and n_partners >= 2:
+            if current_det in upgrade_map:
+                new_det = 'AMBER'
+                sim_reason = (f"Semantic similarity with {n_partners} other submissions "
+                             f"(max={max_sem:.2f}) suggests shared LLM template")
+        elif has_semantic and current_det in ('GREEN', 'REVIEW', 'YELLOW'):
+            new_det = upgrade_map.get(current_det, current_det)
+            sim_reason = (f"High semantic similarity (max={max_sem:.2f}) with another "
+                         f"submission from a different attempter")
+        elif has_adaptive and current_det in ('GREEN', 'REVIEW'):
+            new_det = 'YELLOW'
+            sim_reason = (f"Similarity exceeds occupation baseline "
+                         f"(Jaccard={max_jac:.2f}, z-score in pair data)")
+
+        if new_det != current_det:
+            r['determination'] = new_det
+            r['similarity_upgrade'] = {
+                'original_determination': current_det,
+                'upgraded_to': new_det,
+                'reason': sim_reason,
+                'n_similar_partners': n_partners,
+                'max_jaccard': round(max_jac, 4),
+                'max_semantic': round(max_sem, 4),
+            }
+            r['reason'] = f"{r['reason']} + SIM: {sim_reason}"
+
+        r['similarity_partners'] = n_partners
+        r['similarity_max_jaccard'] = round(max_jac, 4)
+        r['similarity_max_semantic'] = round(max_sem, 4)
+
+    return results
+
+
+# ── FEAT 14: Cross-batch similarity store ────────────────────────────────
+
+def save_similarity_store(results, text_map, store_path):
+    """Append fingerprints from current batch to persistent store.
+
+    Stores MinHash fingerprints and structural features — NOT full text.
+    """
+    import datetime
+    records = []
+    for r in results:
+        tid = r.get('task_id', '')
+        text = text_map.get(tid, '')
+        if not text:
+            continue
+
+        shingles = _word_shingles(text)
+        minhash = _shingle_fingerprint(shingles)
+        struct_vec = {f: r.get(f, 0) for f in _STRUCT_FEATURES}
+
+        records.append({
+            'task_id': tid,
+            'attempter': r.get('attempter', ''),
+            'occupation': r.get('occupation', ''),
+            'determination': r['determination'],
+            'minhash': minhash,
+            'structural': struct_vec,
+            'word_count': r.get('word_count', 0),
+            '_batch_timestamp': datetime.datetime.now().isoformat(),
+        })
+
+    with open(store_path, 'a') as f:
+        for rec in records:
+            f.write(json.dumps(rec) + '\n')
+
+    print(f"  Similarity store: {len(records)} fingerprints appended to {store_path}")
+
+
+def load_similarity_store(store_path):
+    """Load previously stored fingerprints."""
+    if not os.path.exists(store_path):
+        return []
+
+    records = []
+    with open(store_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    return records
+
+
+def cross_batch_similarity(current_results, text_map, store_path,
+                           minhash_threshold=0.50):
+    """Compare current batch against previously stored fingerprints.
+
+    Returns list of cross-batch similarity flags.
+    """
+    historical = load_similarity_store(store_path)
+    if not historical:
+        return []
+
+    flags = []
+
+    for r in current_results:
+        tid = r.get('task_id', '')
+        text = text_map.get(tid, '')
+        if not text:
+            continue
+
+        current_shingles = _word_shingles(text)
+        current_minhash = _shingle_fingerprint(current_shingles)
+        # Compute once per outer iteration — att_curr doesn't depend on hist.
+        att_curr = r.get('attempter', '').strip().lower()
+
+        for hist in historical:
+            if hist['task_id'] == tid:
+                continue
+
+            att_hist = hist.get('attempter', '').strip().lower()
+            if att_curr and att_hist and att_curr == att_hist:
+                continue
+
+            mh_sim = _minhash_similarity(current_minhash, hist.get('minhash', []))
+
+            if mh_sim >= minhash_threshold:
+                struct = _structural_similarity(r, hist.get('structural', {}))
+
+                flags.append({
+                    'current_id': tid,
+                    'historical_id': hist['task_id'],
+                    'current_attempter': r.get('attempter', ''),
+                    'historical_attempter': hist.get('attempter', ''),
+                    'occupation': r.get('occupation', ''),
+                    'minhash_similarity': round(mh_sim, 3),
+                    'structural_similarity': round(struct, 4),
+                    'historical_determination': hist.get('determination', '?'),
+                    'historical_batch': hist.get('_batch_timestamp', '?'),
+                })
+
+    flags.sort(key=lambda f: f['minhash_similarity'], reverse=True)
+    return flags
+
+
+# ── Print helpers ────────────────────────────────────────────────────────
+
 def print_similarity_report(pairs):
     """Print cross-submission similarity findings."""
-    if not pairs:
+    actual_pairs = [p for p in pairs if p.get('_type') != 'baseline']
+    baselines = [p for p in pairs if p.get('_type') == 'baseline']
+
+    if not actual_pairs:
         print("\n  No cross-attempter similarity clusters detected.")
+        if baselines:
+            for b in baselines:
+                print(f"    Baseline [{b['occupation'][:30]}]: "
+                      f"Jac median={b['jac_median']:.3f} (n={b['n_pairs']} pairs)")
         return
 
     print(f"\n{'='*90}")
-    print(f"  SIMILARITY CLUSTERS: {len(pairs)} flagged pairs")
+    print(f"  SIMILARITY CLUSTERS: {len(actual_pairs)} flagged pairs")
     print(f"{'='*90}")
 
-    for p in pairs:
+    for b in baselines:
+        print(f"\n  Baseline [{b['occupation'][:30]}]: "
+              f"Jac median={b['jac_median']:.3f} p90={b['jac_p90']:.3f} "
+              f"sem median={b.get('sem_median', 0):.3f} "
+              f"(n={b['n_pairs']} pairs)")
+
+    for p in actual_pairs:
         icon = 'RED' if p['jaccard'] >= 0.70 else 'AMBER' if p['jaccard'] >= 0.50 else 'YELLOW'
-        print(f"\n  [{icon}] Jaccard={p['jaccard']:.2f}  Struct={p['structural']:.2f}  [{p['flag_type']}]")
+        sem_str = f"  Sem={p.get('semantic', 0):.2f}" if p.get('semantic', 0) > 0 else ""
+        print(f"\n  [{icon}] Jac={p['jaccard']:.2f}  Struct={p['structural']:.2f}{sem_str}  [{p['flag_type']}]")
         print(f"     {p['id_a'][:15]:15s} ({p['attempter_a'] or '?':20s}) [{p['det_a']}]")
         print(f"     {p['id_b'][:15]:15s} ({p['attempter_b'] or '?':20s}) [{p['det_b']}]")
         print(f"     Occupation: {p['occupation'][:50]}")
@@ -792,7 +1328,8 @@ _BASELINE_FIELDS = [
     'self_similarity_nssi_score', 'self_similarity_nssi_signals', 'self_similarity_determination',
     'continuation_bscore', 'continuation_determination',
     'self_similarity_sent_length_cv', 'self_similarity_comp_ratio', 'self_similarity_hapax_ratio',
-    'norm_obfuscation_delta', 'norm_invisible_chars', 'norm_homoglyphs',
+    'norm_obfuscation_delta', 'norm_invisible_chars', 'norm_homoglyphs', 'norm_attack_types',
+    'attack_type',
     'lang_support_level', 'lang_fw_coverage', 'lang_non_latin_ratio',
     'ground_truth', 'language', 'domain', 'mode',
     'window_max_score', 'window_mean_score', 'window_variance',
@@ -808,7 +1345,29 @@ _BASELINE_FIELDS = [
     'tocsin_cohesiveness', 'perplexity_zlib_normalized_ppl',
     'self_similarity_structural_compression_delta',
     'surprisal_trajectory_cv', 'surprisal_stationarity',
+    'binoculars_score',
 ]
+
+
+def derive_attack_type(record):
+    """Derive categorical attack_type from normalization fields."""
+    homoglyphs = record.get('norm_homoglyphs', 0) or 0
+    invisible = record.get('norm_invisible_chars', 0) or 0
+    delta = record.get('norm_obfuscation_delta', 0) or 0
+
+    tags = []
+    if homoglyphs > 0:
+        tags.append('homoglyph')
+    if invisible > 0:
+        tags.append('zero_width')
+    if delta >= 0.02 and not tags:
+        tags.append('encoding')
+
+    if len(tags) > 1:
+        return 'combined'
+    elif len(tags) == 1:
+        return tags[0]
+    return 'none'
 
 
 def collect_baselines(results, output_path):
@@ -819,8 +1378,9 @@ def collect_baselines(results, output_path):
     with open(output_path, 'a') as f:
         for r in results:
             record = {k: r.get(k) for k in _BASELINE_FIELDS}
+            record['attack_type'] = derive_attack_type(record)
             record['_timestamp'] = timestamp
-            record['_version'] = 'v0.65'
+            record['_version'] = 'v0.66'
             wc = r.get('word_count', 0)
             if wc < 100:
                 record['length_bin'] = 'short'
@@ -997,17 +1557,35 @@ PREAMBLE_PATTERNS = [
     (r"(?i)\bstep \d+\s*:", "cot_step_numbering", "MEDIUM"),
 ]
 
+# Pre-compiled patterns with a flag indicating whether to search only the first
+# 500 characters.  Compiling once at import time avoids repeated compilation on
+# every run_preamble() call.
+_TRUNCATED_NAMES = frozenset(('assistant_ack', 'artifact_delivery', 'first_person_creation', 'cot_leakage'))
+_PREAMBLE_COMPILED = [
+    (re.compile(pat), name, sev, name in _TRUNCATED_NAMES)
+    for pat, name, sev in PREAMBLE_PATTERNS
+]
+
 
 def run_preamble(text):
-    """Detect LLM preamble artifacts. Returns (score, severity, hits)."""
+    """Detect LLM preamble artifacts. Returns (score, severity, hits, spans)."""
     first_500 = text[:500]
     hits = []
+    spans = []
     severity = 'NONE'
 
-    for pat, name, sev in PREAMBLE_PATTERNS:
-        search_text = first_500 if name in ('assistant_ack', 'artifact_delivery', 'first_person_creation', 'cot_leakage') else text
-        if re.search(pat, search_text):
+    for compiled_pat, name, sev, use_truncated in _PREAMBLE_COMPILED:
+        search_text = first_500 if use_truncated else text
+        match = compiled_pat.search(search_text)
+        if match:
             hits.append((name, sev))
+            spans.append({
+                'start': match.start(),
+                'end': match.end(),
+                'text': match.group()[:80],
+                'pattern': name,
+                'severity': sev,
+            })
             if sev == 'CRITICAL':
                 severity = 'CRITICAL'
             elif sev == 'HIGH' and severity not in ('CRITICAL',):
@@ -1016,7 +1594,18 @@ def run_preamble(text):
                 severity = 'MEDIUM'
 
     score = {'CRITICAL': 0.99, 'HIGH': 0.75, 'MEDIUM': 0.50, 'NONE': 0.0}[severity]
-    return score, severity, hits
+    return score, severity, hits, spans
+
+
+def run_preamble_spans(text):
+    """Return character-level spans for preamble pattern hits.
+
+    Thin wrapper around run_preamble() for backward compatibility.
+    Returns list of (start_char, end_char, matched_text, pattern_name, severity).
+    """
+    _, _, _, spans = run_preamble(text)
+    return [(s['start'], s['end'], s['text'], s['pattern'], s['severity'])
+            for s in spans]
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -1048,6 +1637,17 @@ def run_fingerprint(text):
     rate = hits / max(word_count / 1000, 1)
     score = min(rate / 5.0, 1.0)
     return score, hits, rate
+
+
+def run_fingerprint_spans(text):
+    """Return character-level spans for fingerprint word hits.
+
+    Returns list of (start_char, end_char, matched_text, 'fingerprint', word).
+    """
+    spans = []
+    for m in _FINGERPRINT_RE.finditer(text):
+        spans.append((m.start(), m.end(), m.group(), 'fingerprint', m.group().lower()))
+    return spans
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -1087,6 +1687,10 @@ META_DESIGN_PATTERNS = [
     r'(?i)grounded in\b',
 ]
 
+# Pre-compiled versions to avoid re-compiling on every call.
+_CONSTRAINT_FRAMES_RE = [re.compile(pat, re.IGNORECASE) for pat in CONSTRAINT_FRAMES]
+_META_DESIGN_RE = [re.compile(pat) for pat in META_DESIGN_PATTERNS]
+
 
 def run_prompt_signature(text):
     """Detect prompt-engineering signatures. Returns dict of metrics."""
@@ -1096,8 +1700,8 @@ def run_prompt_signature(text):
 
     total_frames = 0
     distinct_pats = set()
-    for pat in CONSTRAINT_FRAMES:
-        matches = re.findall(pat, text, re.IGNORECASE)
+    for pat, compiled_pat in zip(CONSTRAINT_FRAMES, _CONSTRAINT_FRAMES_RE):
+        matches = compiled_pat.findall(text)
         if matches:
             total_frames += len(matches)
             distinct_pats.add(pat)
@@ -1105,7 +1709,7 @@ def run_prompt_signature(text):
 
     multi_frame = 0
     for sent in sents:
-        ct = sum(1 for pat in CONSTRAINT_FRAMES if re.search(pat, sent, re.IGNORECASE))
+        ct = sum(1 for compiled_pat in _CONSTRAINT_FRAMES_RE if compiled_pat.search(sent))
         if ct >= 2:
             multi_frame += 1
     mfsr = multi_frame / n_sents
@@ -1120,7 +1724,8 @@ def run_prompt_signature(text):
     cond_count += len(re.findall(r'\bunless\b', text, re.IGNORECASE))
     cond_density = cond_count / n_sents
 
-    meta_hits = [pat for pat in META_DESIGN_PATTERNS if re.search(pat, text)]
+    meta_hits = [pat for pat, compiled_pat in zip(META_DESIGN_PATTERNS, _META_DESIGN_RE)
+                 if compiled_pat.search(text)]
 
     contractions = len(re.findall(r"\b\w+'(?:t|re|ve|s|d|ll|m)\b", text, re.IGNORECASE))
 
@@ -1202,6 +1807,8 @@ def _build_marker_pattern(marker):
 
 _CASUAL_RE = [re.compile(_build_marker_pattern(m), re.IGNORECASE) for m in CASUAL_MARKERS]
 _TYPO_RE = [re.compile(r'\b' + re.escape(t) + r'\b', re.IGNORECASE) for t in MANUFACTURED_TYPOS]
+# Combined em-dash pattern (covers unicode dashes and spaced hyphens in one pass)
+_EM_DASH_RE = re.compile(r'(?<!\d)\s?[—–]\s?(?!\d)| - ')
 
 
 def run_voice_dissonance(text):
@@ -1215,8 +1822,7 @@ def run_voice_dissonance(text):
 
     contractions = len(re.findall(r"\b\w+'(?:t|re|ve|s|d|ll|m)\b", text, re.IGNORECASE))
 
-    em_dashes = len(re.findall(r'(?<!\d)\s?[—–]\s?(?!\d)', text))
-    em_dashes += len(re.findall(r' - ', text))
+    em_dashes = len(_EM_DASH_RE.findall(text))
 
     lowercase_starts = sum(1 for line in text.split('\n') if line.strip() and line.strip()[0].islower())
 
@@ -1610,10 +2216,9 @@ def run_self_similarity(text):
     if s12 > 0: signals.append(('hapax_deficit', s12))
 
     # s13: Structural compression delta (original vs shuffled) -- FEAT 5
-    import random as _random
     shuffled_words = list(clean_words)
-    _random.seed(42)
-    _random.shuffle(shuffled_words)
+    random.seed(42)
+    random.shuffle(shuffled_words)
     shuffled_text = ' '.join(shuffled_words)
     shuffled_bytes = shuffled_text.encode('utf-8')
     shuffled_comp_len = len(zlib.compress(shuffled_bytes))
@@ -1711,6 +2316,44 @@ def _dna_bscore(original_tokens, regenerated_tokens, ns=(2, 3, 4), weights=(0.25
     return sum(scores)
 
 
+def _dna_bscore_determination(bscore, bscore_max):
+    """Map DNA-GPT BScore to (determination, confidence, reason) tuple."""
+    if bscore >= 0.20 and bscore_max >= 0.22:
+        det, conf = 'RED', min(0.90, 0.60 + bscore)
+        reason = f"DNA-GPT: high continuation overlap (BScore={bscore:.3f}, max={bscore_max:.3f})"
+    elif bscore >= 0.12:
+        det, conf = 'AMBER', min(0.70, 0.40 + bscore)
+        reason = f"DNA-GPT: elevated continuation overlap (BScore={bscore:.3f})"
+    elif bscore >= 0.08:
+        det, conf = 'YELLOW', min(0.40, 0.20 + bscore)
+        reason = f"DNA-GPT: moderate continuation overlap (BScore={bscore:.3f})"
+    else:
+        det, conf = 'GREEN', max(0.0, 0.10 - bscore)
+        reason = f"DNA-GPT: low continuation overlap (BScore={bscore:.3f}) -- likely human"
+    return det, conf, reason
+
+
+def _merge_multi_bscore_stability(full_result, bscores):
+    """Attach multi-bscore stability fields to *full_result* in-place."""
+    if len(bscores) >= 2:
+        bscore_mean = statistics.mean(bscores)
+        bscore_var = statistics.variance(bscores)
+        stability = max(0.0, 1.0 - (bscore_var / 0.02))
+    else:
+        bscore_mean = bscores[0] if bscores else 0.0
+        bscore_var = 0.0
+        stability = 0.0
+
+    full_result['multi_bscores'] = [round(b, 4) for b in bscores]
+    full_result['bscore_variance'] = round(bscore_var, 6)
+    full_result['bscore_stability'] = round(stability, 4)
+
+    if stability >= 0.75 and bscore_mean >= 0.15:
+        full_result['confidence'] = round(
+            min(full_result.get('confidence', 0.0) + 0.10, 1.0), 4
+        )
+
+
 def _detect_text_format(text):
     """Detect structural features of the text for use in continuation prompts.
 
@@ -1751,8 +2394,8 @@ def _dna_truncate_text(text, ratio=0.5):
     Priority order:
     1. Paragraph break — snaps to the paragraph boundary closest to *ratio*
        (requires >= 3 paragraphs and that the continuation has >= 30 words).
-    2. Sentence boundary — uses ``get_sentences()`` (spaCy when available,
-       robust regex fallback).
+    2. Sentence boundary — uses ``get_sentences()`` from text_utils (spaCy
+       when available, robust regex fallback).
     3. Word-level fallback — used when < 4 sentences are detected.
 
     Returns (prefix, continuation).
@@ -1916,18 +2559,7 @@ def run_continuation_api(text, api_key=None, provider='anthropic', model=None,
     bscore = statistics.mean(sample_scores)
     bscore_max = max(sample_scores)
 
-    if bscore >= 0.20 and bscore_max >= 0.22:
-        det, conf = 'RED', min(0.90, 0.60 + bscore)
-        reason = f"DNA-GPT: high continuation overlap (BScore={bscore:.3f}, max={bscore_max:.3f})"
-    elif bscore >= 0.12:
-        det, conf = 'AMBER', min(0.70, 0.40 + bscore)
-        reason = f"DNA-GPT: elevated continuation overlap (BScore={bscore:.3f})"
-    elif bscore >= 0.08:
-        det, conf = 'YELLOW', min(0.40, 0.20 + bscore)
-        reason = f"DNA-GPT: moderate continuation overlap (BScore={bscore:.3f})"
-    else:
-        det, conf = 'GREEN', max(0.0, 0.10 - bscore)
-        reason = f"DNA-GPT: low continuation overlap (BScore={bscore:.3f}) -- likely human"
+    det, conf, reason = _dna_bscore_determination(bscore, bscore_max)
 
     return {
         'bscore': round(bscore, 4), 'bscore_max': round(bscore_max, 4),
@@ -1963,24 +2595,7 @@ def run_continuation_api_multi(text, api_key=None, provider='anthropic',
     bscores = [ratio_results[r].get('bscore', 0.0) for r in truncation_ratios]
     full_result = copy.deepcopy(ratio_results.get(0.5) or ratio_results[truncation_ratios[-1]])
 
-    if len(bscores) >= 2:
-        bscore_mean = statistics.mean(bscores)
-        bscore_var = statistics.variance(bscores)
-        stability = max(0.0, 1.0 - (bscore_var / 0.02))
-    else:
-        bscore_mean = bscores[0] if bscores else 0.0
-        bscore_var = 0.0
-        stability = 0.0
-
-    full_result['multi_bscores'] = [round(b, 4) for b in bscores]
-    full_result['bscore_variance'] = round(bscore_var, 6)
-    full_result['bscore_stability'] = round(stability, 4)
-
-    # Stability boosts confidence when it agrees with the primary signal
-    if stability >= 0.75 and bscore_mean >= 0.15:
-        full_result['confidence'] = round(
-            min(full_result.get('confidence', 0.0) + 0.10, 1.0), 4
-        )
+    _merge_multi_bscore_stability(full_result, bscores)
 
     return full_result
 
@@ -1991,10 +2606,14 @@ def run_continuation_api_multi(text, api_key=None, provider='anthropic',
 def _prepare_batch_requests(texts, task_ids, model='claude-sonnet-4-20250514',
                             n_samples=3, truncation_ratios=(0.3, 0.5, 0.7),
                             temperature=0.7):
-    """Pre-compute truncation prefixes and build batch request list."""
+    """Pre-compute truncation prefixes and build batch request list.
+
+    Returns (requests, metadata) where metadata maps custom_id back to
+    (task_idx, ratio, sample_idx, orig_tokens, continuation_word_count).
+    """
     requests = []
     metadata = {}
-    skipped = {}
+    skipped = {}  # task_idx -> reason
 
     for task_idx, (text, task_id) in enumerate(zip(texts, task_ids)):
         word_count = len(text.split())
@@ -2040,7 +2659,12 @@ def _prepare_batch_requests(texts, task_ids, model='claude-sonnet-4-20250514',
 
 def _score_batch_results(raw_results, metadata, texts, task_ids,
                          n_samples=3, truncation_ratios=(0.3, 0.5, 0.7)):
-    """Convert raw batch API results into per-task continuation dicts."""
+    """Convert raw batch API results into per-task continuation dicts.
+
+    Returns dict mapping task_idx -> continuation result (same format as
+    run_continuation_api_multi).
+    """
+    # Group regenerated texts: task_idx -> ratio -> [texts]
     regen_map = {}
     for custom_id, regen_text in raw_results.items():
         if custom_id not in metadata:
@@ -2077,18 +2701,7 @@ def _score_batch_results(raw_results, metadata, texts, task_ids,
             bscore = statistics.mean(sample_scores)
             bscore_max = max(sample_scores)
 
-            if bscore >= 0.20 and bscore_max >= 0.22:
-                det, conf = 'RED', min(0.90, 0.60 + bscore)
-                reason = f"DNA-GPT: high continuation overlap (BScore={bscore:.3f}, max={bscore_max:.3f})"
-            elif bscore >= 0.12:
-                det, conf = 'AMBER', min(0.70, 0.40 + bscore)
-                reason = f"DNA-GPT: elevated continuation overlap (BScore={bscore:.3f})"
-            elif bscore >= 0.08:
-                det, conf = 'YELLOW', min(0.40, 0.20 + bscore)
-                reason = f"DNA-GPT: moderate continuation overlap (BScore={bscore:.3f})"
-            else:
-                det, conf = 'GREEN', max(0.0, 0.10 - bscore)
-                reason = f"DNA-GPT: low continuation overlap (BScore={bscore:.3f}) -- likely human"
+            det, conf, reason = _dna_bscore_determination(bscore, bscore_max)
 
             ratio_results[ratio] = {
                 'bscore': round(bscore, 4), 'bscore_max': round(bscore_max, 4),
@@ -2101,29 +2714,14 @@ def _score_batch_results(raw_results, metadata, texts, task_ids,
         if not ratio_results:
             continue
 
+        # Merge multi-ratio results (same logic as run_continuation_api_multi)
         bscores = [ratio_results[r].get('bscore', 0.0)
                     for r in truncation_ratios if r in ratio_results]
         full_result = copy.deepcopy(
             ratio_results.get(0.5) or next(iter(ratio_results.values()))
         )
 
-        if len(bscores) >= 2:
-            bscore_mean = statistics.mean(bscores)
-            bscore_var = statistics.variance(bscores)
-            stability = max(0.0, 1.0 - (bscore_var / 0.02))
-        else:
-            bscore_mean = bscores[0] if bscores else 0.0
-            bscore_var = 0.0
-            stability = 0.0
-
-        full_result['multi_bscores'] = [round(b, 4) for b in bscores]
-        full_result['bscore_variance'] = round(bscore_var, 6)
-        full_result['bscore_stability'] = round(stability, 4)
-
-        if stability >= 0.75 and bscore_mean >= 0.15:
-            full_result['confidence'] = round(
-                min(full_result.get('confidence', 0.0) + 0.10, 1.0), 4
-            )
+        _merge_multi_bscore_stability(full_result, bscores)
 
         task_results[task_idx] = full_result
 
@@ -2133,7 +2731,23 @@ def _score_batch_results(raw_results, metadata, texts, task_ids,
 def run_continuation_batch(texts, task_ids, api_key, model=None,
                            n_samples=3, truncation_ratios=(0.3, 0.5, 0.7),
                            temperature=0.7, poll_interval=10, progress_fn=None):
-    """Run DNA-GPT continuation analysis for multiple texts via Anthropic Batches API."""
+    """Run DNA-GPT continuation analysis for multiple texts via Anthropic Batches API.
+
+    Args:
+        texts: List of text strings to analyze.
+        task_ids: List of task ID strings (same length as texts).
+        api_key: Anthropic API key.
+        model: Model name (default: claude-sonnet-4-20250514).
+        n_samples: Regeneration samples per truncation ratio.
+        truncation_ratios: Truncation ratios to test.
+        temperature: Sampling temperature.
+        poll_interval: Seconds between batch status polls.
+        progress_fn: Optional callback(status_str) for progress updates.
+
+    Returns:
+        Dict mapping task_idx (int) -> continuation result dict.
+        Tasks that were skipped (too short, etc.) won't have entries.
+    """
     try:
         import anthropic
     except ImportError:
@@ -2142,6 +2756,7 @@ def run_continuation_batch(texts, task_ids, api_key, model=None,
     if model is None:
         model = 'claude-sonnet-4-20250514'
 
+    # 1. Prepare all requests
     requests, metadata, skipped = _prepare_batch_requests(
         texts, task_ids, model=model, n_samples=n_samples,
         truncation_ratios=truncation_ratios, temperature=temperature,
@@ -2153,6 +2768,7 @@ def run_continuation_batch(texts, task_ids, api_key, model=None,
     if progress_fn:
         progress_fn(f"Submitting batch of {len(requests)} API calls...")
 
+    # 2. Submit batch
     client = anthropic.Anthropic(api_key=api_key)
     batch = client.messages.batches.create(requests=requests)
     batch_id = batch.id
@@ -2160,6 +2776,7 @@ def run_continuation_batch(texts, task_ids, api_key, model=None,
     if progress_fn:
         progress_fn(f"Batch {batch_id} submitted. Polling for completion...")
 
+    # 3. Poll for completion
     while True:
         batch = client.messages.batches.retrieve(batch_id)
         status = batch.processing_status
@@ -2174,6 +2791,7 @@ def run_continuation_batch(texts, task_ids, api_key, model=None,
             break
         time.sleep(poll_interval)
 
+    # 4. Collect results
     raw_results = {}
     for entry in client.messages.batches.results(batch_id):
         if entry.result.type == 'succeeded':
@@ -2181,6 +2799,7 @@ def run_continuation_batch(texts, task_ids, api_key, model=None,
             text_out = msg.content[0].text if msg.content else ""
             raw_results[entry.custom_id] = text_out
 
+    # 5. Score and merge
     return _score_batch_results(
         raw_results, metadata, texts, task_ids,
         n_samples=n_samples, truncation_ratios=truncation_ratios,
@@ -2320,13 +2939,6 @@ def _conditional_surprisal(lm, prefix_tokens, suffix_tokens):
     return total / max(1, len(suffix_tokens))
 
 
-def _type_token_ratio(tokens):
-    """Type-Token Ratio: vocabulary richness."""
-    if not tokens:
-        return 0.0
-    return len(set(tokens)) / len(tokens)
-
-
 def _surprisal_improvement_curve(lm, full_tokens, splits=(0.25, 0.50, 0.75)):
     """Measure how conditional surprisal changes with increasing prefix length.
 
@@ -2439,7 +3051,7 @@ def run_continuation_local(text, gamma=0.5, K=32, order=5):
     internal_overlap = _internal_ngram_overlap(prefix_tokens, suffix_tokens)
     cond_surp = _conditional_surprisal(lm, prefix_tokens, suffix_tokens)
     repeat4 = _repeated_ngram_rate(suffix_tokens, 4)
-    ttr = _type_token_ratio(suffix_tokens)
+    ttr = type_token_ratio(suffix_tokens)
 
     # FEAT 2: Cross-prefix surprisal improvement curve
     all_tokens = _proxy_tokenize(text)
@@ -2575,6 +3187,7 @@ _PPL_EMPTY = {
     'surprisal_second_half_var': 0.0, 'volatility_decay_ratio': 1.0,
     'comp_ratio': 0.0, 'zlib_normalized_ppl': 0.0, 'comp_ppl_ratio': 0.0,
     'token_losses': None,
+    'binoculars_score': 0.0, 'binoculars_determination': None,
 }
 
 
@@ -2609,6 +3222,30 @@ def run_perplexity(text, model_id=None):
         loss = outputs.loss
 
     ppl = _torch.exp(loss).item()
+
+    # ── Binoculars: contrastive cross-model ratio ──
+    # Ref: Hans et al. (2024) "Spotting LLMs With Binoculars"
+    # Low ratio (performer/observer) indicates AI-generated text.
+    binoculars_score = 0.0
+    binoculars_det = None
+    if HAS_BINOCULARS:
+        try:
+            observer, obs_tokenizer = get_binoculars_model()
+            if observer is not None:
+                # Re-tokenize with observer's tokenizer (may differ from primary model)
+                obs_enc = obs_tokenizer(text, return_tensors='pt', truncation=True,
+                                        max_length=1024)
+                obs_ids = obs_enc.input_ids
+                with _torch.no_grad():
+                    obs_outputs = observer(obs_ids, labels=obs_ids)
+                    obs_ppl = _torch.exp(obs_outputs.loss).item()
+                binoculars_score = round(ppl / max(obs_ppl, 1e-6), 4)
+                if binoculars_score < 0.70:
+                    binoculars_det = 'AMBER'
+                elif binoculars_score < 0.85:
+                    binoculars_det = 'YELLOW'
+        except Exception:
+            pass  # Binoculars is supplementary; don't fail the analyzer
 
     # ── FEAT 7: Compression-perplexity divergence ──
     text_bytes = text.encode('utf-8')
@@ -2712,6 +3349,8 @@ def run_perplexity(text, model_id=None):
         'zlib_normalized_ppl': round(zlib_normalized_ppl, 2),
         'comp_ppl_ratio': round(comp_ppl_ratio, 4),
         'token_losses': token_losses_list,
+        'binoculars_score': binoculars_score,
+        'binoculars_determination': binoculars_det,
     }
 
 
@@ -2747,10 +3386,8 @@ def mask_topical_content(text):
         (_TOPIC_CAMELCASE_RE, ' _IDENT_ '),
         (_TOPIC_ALLCAPS_RE, ' _ACRO_ '),
     ]:
-        hits = len(pattern.findall(text))
-        if hits:
-            text = pattern.sub(repl, text)
-            count += hits
+        text, n = pattern.subn(repl, text)
+        count += n
     return text, count
 
 
@@ -2799,7 +3436,7 @@ def extract_stylometric_features(text, masked_text=None):
     # Type-token ratio
     orig_words = re.findall(r'\w+', text.lower())
     n_orig = max(len(orig_words), 1)
-    type_token_ratio = len(set(orig_words)) / n_orig
+    type_token_ratio_val = type_token_ratio(orig_words)
 
     # Average word length
     word_lengths = [len(w) for w in orig_words]
@@ -2814,7 +3451,7 @@ def extract_stylometric_features(text, masked_text=None):
         'function_word_ratio': round(function_word_ratio, 4),
         'punct_bigrams': dict(punct_bigrams.most_common(20)),
         'sent_length_dispersion': round(sent_length_dispersion, 4),
-        'type_token_ratio': round(type_token_ratio, 4),
+        'type_token_ratio': round(type_token_ratio_val, 4),
         'avg_word_length': round(avg_word_length, 2),
         'short_word_ratio': round(short_word_ratio, 4),
     }
@@ -3061,6 +3698,41 @@ def score_windows(text, window_size=5, stride=2):
         'comp_trajectory_cv': round(comp_trajectory_cv, 4),
         'changepoint': changepoint,
     }
+
+
+def get_hot_window_spans(text, threshold=0.30, window_size=5, stride=2,
+                         precomputed_result=None):
+    """Return character-level spans for hot (high-scoring) sentence windows.
+
+    Args:
+        text: Original text.
+        threshold: Minimum window score to include (default 0.30).
+        window_size: Sentences per window.
+        stride: Sentence stride.
+        precomputed_result: Optional dict returned by a prior ``score_windows``
+            call for the same text/parameters.  When provided the function
+            skips the redundant ``score_windows`` computation.
+
+    Returns list of (start_char, end_char, score, 'hot_window', window_index).
+    """
+    sent_spans = get_sentence_spans(text)
+    if len(sent_spans) < window_size:
+        return []
+
+    result = (precomputed_result if precomputed_result is not None
+              else score_windows(text, window_size=window_size, stride=stride))
+    spans = []
+
+    for w in result['windows']:
+        if w['score'] >= threshold:
+            w_start = w['start']
+            w_end = min(w['end'] - 1, len(sent_spans) - 1)
+            if w_start < len(sent_spans) and w_end < len(sent_spans):
+                char_start = sent_spans[w_start][1]
+                char_end = sent_spans[w_end][2]
+                spans.append((char_start, char_end, w['score'], 'hot_window', w_start))
+
+    return spans
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -3692,6 +4364,7 @@ class PackScore:
     raw_score: float = 0.0
     capped_score: float = 0.0
     matches: List[str] = field(default_factory=list)
+    spans: List[dict] = field(default_factory=list)
 
 
 def score_pack(text: str, pack_name: str, n_sentences: int = 1) -> PackScore:
@@ -3703,7 +4376,8 @@ def score_pack(text: str, pack_name: str, n_sentences: int = 1) -> PackScore:
         n_sentences: Sentence count for density normalization.
 
     Returns:
-        PackScore with hits, weighted score (density-normalized), and capped score.
+        PackScore with hits, weighted score (density-normalized), capped score,
+        and character-level spans for each match.
     """
     pack = PACK_REGISTRY[pack_name]
     compiled = _COMPILED_PACKS[pack_name]
@@ -3711,25 +4385,49 @@ def score_pack(text: str, pack_name: str, n_sentences: int = 1) -> PackScore:
 
     result = PackScore(pack_name=pack_name, category=pack.category)
 
-    # Pattern matching
+    # Pattern matching (finditer for span capture)
     for compiled_re, weight in compiled:
-        found = compiled_re.findall(text)
-        if found:
-            result.raw_hits += len(found)
-            result.weighted_hits += len(found) * weight
-            result.matches.extend(found[:3])  # Keep first 3 for diagnostics
+        for m in compiled_re.finditer(text):
+            result.raw_hits += 1
+            result.weighted_hits += weight
+            if len(result.matches) < 3:
+                result.matches.append(m.group())
+            result.spans.append({
+                'start': m.start(),
+                'end': m.end(),
+                'text': m.group()[:80],
+                'pack': pack_name,
+                'weight': weight,
+            })
 
-    # Keyword matching (fast path, no weight — counted separately)
+    # Keyword matching (finditer for span capture, no weight — counted separately)
     kw_re = _KEYWORD_RES.get(pack_name)
     if kw_re:
-        result.keyword_hits = len(kw_re.findall(text))
+        for m in kw_re.finditer(text):
+            result.keyword_hits += 1
+            result.spans.append({
+                'start': m.start(),
+                'end': m.end(),
+                'text': m.group(),
+                'pack': pack_name,
+                'weight': 0.0,
+                'type': 'keyword',
+            })
 
-    # Uppercase keyword matching (case-sensitive)
+    # Uppercase keyword matching (case-sensitive, finditer for span capture)
     uc_re = _UPPERCASE_RES.get(pack_name)
     if uc_re:
-        result.uppercase_hits = len(uc_re.findall(text))
-        # Uppercase normative forms get bonus weight
-        result.weighted_hits += result.uppercase_hits * 2.0
+        for m in uc_re.finditer(text):
+            result.uppercase_hits += 1
+            result.weighted_hits += 2.0
+            result.spans.append({
+                'start': m.start(),
+                'end': m.end(),
+                'text': m.group(),
+                'pack': pack_name,
+                'weight': 2.0,
+                'type': 'uppercase',
+            })
 
     # Density-normalized score: weighted_hits per sentence × family_weight
     density = result.weighted_hits / n_sents
@@ -3753,6 +4451,45 @@ def score_packs(text: str, pack_names: Optional[List[str]] = None,
     """
     names = pack_names or list(PACK_REGISTRY.keys())
     return {name: score_pack(text, name, n_sentences) for name in names}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SPAN-LEVEL EXPLAINABILITY ("X-RAY" VIEW)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def score_pack_spans(text: str, pack_name: str) -> List[Tuple[int, int, str, str, float]]:
+    """Return character-level spans for all regex/keyword hits in a pack.
+
+    Delegates to score_pack() and extracts span data from PackScore.spans.
+
+    Returns:
+        List of (start_char, end_char, matched_text, pack_name, weight) tuples,
+        sorted by start_char.
+    """
+    ps = score_pack(text, pack_name)
+    spans = [(s['start'], s['end'], s['text'], s['pack'], s['weight'])
+             for s in ps.spans]
+    spans.sort(key=lambda s: s[0])
+    return spans
+
+
+def score_all_pack_spans(text: str, pack_names: Optional[List[str]] = None
+                         ) -> List[Tuple[int, int, str, str, float]]:
+    """Return merged character-level spans across multiple packs.
+
+    Args:
+        text: The original (normalized) text.
+        pack_names: Pack names to scan. If None, scans all registered packs.
+
+    Returns:
+        Sorted list of (start_char, end_char, matched_text, pack_name, weight).
+    """
+    names = pack_names or list(PACK_REGISTRY.keys())
+    all_spans = []
+    for name in names:
+        all_spans.extend(score_pack_spans(text, name))
+    all_spans.sort(key=lambda s: s[0])
+    return all_spans
 
 
 def get_packs_for_layer(target_layer: str) -> List[str]:
@@ -4015,6 +4752,13 @@ def run_prompt_signature_enhanced(text: str, base_result: Optional[dict] = None)
 
     enhanced_composite = min(legacy_composite + pack_boost, 1.0)
 
+    # Collect spans from all packs with hits
+    all_pack_spans = []
+    for s in all_pack_scores.values():
+        if s.raw_hits > 0:
+            all_pack_spans.extend(s.spans)
+    all_pack_spans.sort(key=lambda x: x['start'])
+
     result = dict(base_result)
     result.update({
         'composite': enhanced_composite,
@@ -4033,6 +4777,7 @@ def run_prompt_signature_enhanced(text: str, base_result: Optional[dict] = None)
             for name, s in all_pack_scores.items()
             if s.raw_hits > 0
         },
+        'pack_spans': all_pack_spans,
     })
 
     return result
@@ -4078,6 +4823,13 @@ def run_voice_dissonance_enhanced(text: str, base_result: Optional[dict] = None)
         and n_words >= 150
     )
 
+    # Collect spans from all packs with hits
+    all_pack_spans = []
+    for s in all_pack_scores.values():
+        if s.raw_hits > 0:
+            all_pack_spans.extend(s.spans)
+    all_pack_spans.sort(key=lambda x: x['start'])
+
     result = dict(base_result)
     result.update({
         'spec_score': round(enhanced_spec, 2),
@@ -4098,6 +4850,7 @@ def run_voice_dissonance_enhanced(text: str, base_result: Optional[dict] = None)
             for name, s in all_pack_scores.items()
             if s.raw_hits > 0
         },
+        'pack_spans': all_pack_spans,
     })
 
     return result
@@ -4137,6 +4890,13 @@ def run_instruction_density_enhanced(text: str, base_result: Optional[dict] = No
     legacy_idi = base_result.get('idi', 0.0)
     enhanced_idi = legacy_idi + pack_idi_boost
 
+    # Collect spans from all packs with hits
+    all_pack_spans = []
+    for s in idi_scores.values():
+        if s.raw_hits > 0:
+            all_pack_spans.extend(s.spans)
+    all_pack_spans.sort(key=lambda x: x['start'])
+
     result = dict(base_result)
     result.update({
         'idi': round(enhanced_idi, 1),
@@ -4154,6 +4914,7 @@ def run_instruction_density_enhanced(text: str, base_result: Optional[dict] = No
             for name, s in idi_scores.items()
             if s.raw_hits > 0
         },
+        'pack_spans': all_pack_spans,
     })
 
     return result
@@ -4166,19 +4927,20 @@ def run_instruction_density_enhanced(text: str, base_result: Optional[dict] = No
 class ChannelResult:
     """Result from a single detection channel."""
     __slots__ = ('channel', 'score', 'severity', 'explanation',
-                 'mode_eligibility', 'sub_signals')
+                 'mode_eligibility', 'sub_signals', 'data_sufficient')
 
     SEVERITIES = ('GREEN', 'YELLOW', 'AMBER', 'RED')
     SEV_ORDER = {'GREEN': 0, 'YELLOW': 1, 'AMBER': 2, 'RED': 3}
 
     def __init__(self, channel, score=0.0, severity='GREEN', explanation='',
-                 mode_eligibility=None, sub_signals=None):
+                 mode_eligibility=None, sub_signals=None, data_sufficient=True):
         self.channel = channel
         self.score = score
         self.severity = severity
         self.explanation = explanation
         self.mode_eligibility = mode_eligibility or ['task_prompt', 'generic_aigt']
         self.sub_signals = sub_signals or {}
+        self.data_sufficient = data_sufficient
 
     @property
     def sev_level(self):
@@ -4418,6 +5180,25 @@ def score_stylometric(fingerprint_score, self_sim, voice_dis=None, semantic=None
             score = min(score + 0.05, 1.0)
             parts.append(f"TOCSIN=YELLOW(supporting)")
 
+    # Binoculars contrastive LM ratio: supporting signal
+    if ppl and ppl.get('binoculars_determination'):
+        bino_det = ppl['binoculars_determination']
+        bino_score = ppl.get('binoculars_score', 0)
+        sub['binoculars_score'] = bino_score
+
+        if bino_det == 'AMBER':
+            if severity in ('RED', 'AMBER'):
+                score = min(score + 0.10, 1.0)
+                parts.append(f"Bino={bino_score:.2f}(AMBER,boost)")
+            else:
+                score = max(score, ppl.get('confidence', 0.55))
+                severity = max(severity, 'AMBER',
+                               key=lambda s: ChannelResult.SEV_ORDER.get(s, 0))
+                parts.append(f"Bino={bino_score:.2f}(AMBER)")
+        elif bino_det == 'YELLOW' and severity != 'GREEN':
+            score = min(score + 0.05, 1.0)
+            parts.append(f"Bino={bino_score:.2f}(YELLOW,supporting)")
+
     # Fingerprints add supporting weight if any stylometric signal is active
     if fingerprint_score >= 0.30 and severity != 'GREEN':
         score = min(score + 0.10, 1.0)
@@ -4425,10 +5206,15 @@ def score_stylometric(fingerprint_score, self_sim, voice_dis=None, semantic=None
 
     explanation = f"Stylometry: {', '.join(parts)}" if parts else 'Stylometry: no signals'
 
+    # Mark data_sufficient=False when no analyzers could run
+    # (no NSSI, no semantic, no perplexity, no TOCSIN produced results)
+    has_data = bool(sub)
+
     return ChannelResult(
         'stylometry', score, severity, explanation,
         mode_eligibility=['generic_aigt'],
         sub_signals=sub,
+        data_sufficient=has_data,
     )
 
 
@@ -4442,6 +5228,7 @@ def score_continuation(cont_result):
     score = 0.0
     severity = 'GREEN'
     parts = []
+    has_data = cont_result is not None
 
     if cont_result and cont_result.get('determination'):
         dna_det = cont_result['determination']
@@ -4476,6 +5263,7 @@ def score_continuation(cont_result):
         'continuation', score, severity, explanation,
         mode_eligibility=['task_prompt', 'generic_aigt'],
         sub_signals=sub,
+        data_sufficient=has_data,
     )
 
 
@@ -4491,6 +5279,7 @@ def score_windowed(window_result=None):
             'Windowing: insufficient text for windows',
             mode_eligibility=['generic_aigt'],
             sub_signals={},
+            data_sufficient=False,
         )
 
     sub = {
@@ -4568,7 +5357,7 @@ def determine(preamble_score, preamble_severity, prompt_sig, voice_dis,
               instr_density=None, word_count=0,
               self_sim=None, cont_result=None, lang_gate=None, norm_report=None,
               mode='auto', fingerprint_score=0.0, semantic=None, ppl=None,
-              tocsin=None, **kwargs):
+              tocsin=None, disabled_channels=None, **kwargs):
     """Evidence fusion with channel-based corroboration.
 
     Returns (determination, reason, confidence, channel_details).
@@ -4584,13 +5373,24 @@ def determine(preamble_score, preamble_severity, prompt_sig, voice_dis,
     ch_window = score_windowed(window_result=kwargs.get('window_result'))
 
     channels = [ch_prompt, ch_style, ch_cont, ch_window]
+
+    _disabled = set(disabled_channels or [])
+
     channel_details = {
         'mode': mode,
+        'disabled_channels': sorted(_disabled) if _disabled else [],
         'channels': {ch.channel: {
             'score': ch.score, 'severity': ch.severity,
-            'explanation': ch.explanation, 'mode_eligible': mode in ch.mode_eligibility,
+            'explanation': f'{ch.channel} disabled (ablation)' if ch.channel in _disabled else ch.explanation,
+            'mode_eligible': mode in ch.mode_eligibility,
+            'data_sufficient': ch.data_sufficient,
+            'disabled': ch.channel in _disabled,
         } for ch in channels},
     }
+
+    # Channel ablation: remove disabled channels from fusion
+    if _disabled:
+        channels = [ch for ch in channels if ch.channel not in _disabled]
 
     # Fairness severity cap
     severity_cap = None
@@ -4621,16 +5421,16 @@ def determine(preamble_score, preamble_severity, prompt_sig, voice_dis,
         primary_channels = channels
         supporting_channels = []
 
-    # Evidence fusion
+    # Evidence fusion — only count channels with sufficient data for convergence
     all_active = sorted(
-        [ch for ch in channels if ch.severity != 'GREEN'],
+        [ch for ch in channels if ch.severity != 'GREEN' and ch.data_sufficient],
         key=lambda c: c.sev_level, reverse=True,
     )
     primary_active = sorted(
-        [ch for ch in primary_channels if ch.severity != 'GREEN'],
+        [ch for ch in primary_channels if ch.severity != 'GREEN' and ch.data_sufficient],
         key=lambda c: c.sev_level, reverse=True,
     )
-    support_active = [ch for ch in supporting_channels if ch.severity != 'GREEN']
+    support_active = [ch for ch in supporting_channels if ch.severity != 'GREEN' and ch.data_sufficient]
 
     n_red = sum(1 for ch in all_active if ch.severity == 'RED')
     n_amber_plus = sum(1 for ch in all_active if ch.sev_level >= 2)
@@ -4643,9 +5443,23 @@ def determine(preamble_score, preamble_severity, prompt_sig, voice_dis,
     combined_reason = ' + '.join(top_explanations) if top_explanations else 'No significant signals'
     top_score = max((ch.score for ch in all_active), default=0.0)
 
+    # Short-text active channel accounting
+    n_active_channels = sum(1 for ch in channels if ch.score > 0 or ch.severity != 'GREEN')
+    short_text = word_count > 0 and word_count < 100
+    short_text_penalty = 0.15 if (short_text and n_active_channels <= 2) else 0.0
+    channel_details['active_channels'] = n_active_channels
+    channel_details['short_text_adjustment'] = bool(short_text_penalty)
+
     # RED: strong primary + supporting, or two AMBER+ channels
     if n_primary_red >= 1 and n_yellow_plus >= 2:
         det, reason, conf = _apply_cap('RED', combined_reason, top_score)
+        return det, reason, conf, channel_details
+
+    # Short-text relaxation: 1 RED + 1 yellow is enough when few channels can run
+    if short_text_penalty and n_primary_red >= 1 and n_yellow_plus >= 1:
+        det, reason, conf = _apply_cap(
+            'RED', f"{combined_reason} [short-text relaxed]",
+            min(top_score - short_text_penalty, 0.75))
         return det, reason, conf, channel_details
 
     if n_primary_amber >= 2:
@@ -4718,9 +5532,10 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
                    run_l3=True, api_key=None, dna_provider='anthropic',
                    dna_model=None, dna_samples=3,
                    ground_truth=None, language=None, domain=None,
-                   mode='auto', cal_table=None, precomputed_continuation=None,
+                   mode='auto', cal_table=None, memory_store=None,
+                   disabled_channels=None, precomputed_continuation=None,
                    ppl_model=None):
-    """Run full v0.65 pipeline on a single prompt. Returns result dict."""
+    """Run full v0.66 pipeline on a single prompt. Returns result dict."""
     # Normalization pre-pass
     normalized_text, norm_report = normalize_text(text)
     word_count_raw = len(text.split())
@@ -4732,7 +5547,7 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
     text_for_analysis = normalized_text
 
     # Run all analyzers
-    preamble_score, preamble_severity, preamble_hits = run_preamble(text_for_analysis)
+    preamble_score, preamble_severity, preamble_hits, preamble_spans = run_preamble(text_for_analysis)
     fingerprint_score, fingerprint_hits, fingerprint_rate = run_fingerprint(text_for_analysis)
     prompt_sig = run_prompt_signature_enhanced(text_for_analysis)
     voice_dis = run_voice_dissonance_enhanced(text_for_analysis)
@@ -4774,6 +5589,22 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
     # Windowed scoring
     window_result = score_windows(text_for_analysis)
 
+    # Detection spans — merged from all annotation sources
+    detection_spans = list(preamble_spans)
+    detection_spans.extend(
+        {'start': s, 'end': e, 'text': t, 'source': 'fingerprint', 'label': w, 'type': 'fingerprint'}
+        for s, e, t, _, w in run_fingerprint_spans(text_for_analysis)
+    )
+    detection_spans.extend(prompt_sig.get('pack_spans', []))
+    detection_spans.extend(voice_dis.get('pack_spans', []))
+    detection_spans.extend(instr_density.get('pack_spans', []))
+    for hw in get_hot_window_spans(text_for_analysis, precomputed_result=window_result):
+        detection_spans.append({
+            'start': hw[0], 'end': hw[1], 'text': '', 'source': 'hot_window',
+            'label': f'score={hw[2]:.2f}', 'type': 'window',
+        })
+    detection_spans.sort(key=lambda x: x.get('start', 0))
+
     # Evidence fusion
     det, reason, confidence, channel_details = determine(
         preamble_score, preamble_severity, prompt_sig, voice_dis, instr_density, word_count,
@@ -4783,6 +5614,7 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         semantic=semantic, ppl=ppl,
         tocsin=tocsin,
         window_result=window_result,
+        disabled_channels=disabled_channels,
     )
 
     # Conformal calibration
@@ -4799,7 +5631,7 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
 
     # Audit trail
     audit_trail = {
-        'pipeline_version': 'v0.65',
+        'pipeline_version': 'v0.66',
         'mode_resolved': channel_details.get('mode', mode),
         'channels': channel_details.get('channels', {}),
         'fairness_gate': {
@@ -4833,11 +5665,14 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         'mode': channel_details.get('mode', mode),
         'channel_details': channel_details,
         'audit_trail': audit_trail,
-        'pipeline_version': 'v0.65',
+        'pipeline_version': 'v0.66',
+        # Detection spans (v0.66 span-level annotation)
+        'detection_spans': detection_spans,
         # Normalization
         'norm_obfuscation_delta': norm_report.get('obfuscation_delta', 0.0),
         'norm_invisible_chars': norm_report.get('invisible_chars', 0),
         'norm_homoglyphs': norm_report.get('homoglyphs', 0),
+        'norm_attack_types': norm_report.get('attack_types', []),
         # Fairness gate
         'lang_support_level': lang_gate.get('support_level', 'SUPPORTED'),
         'lang_fw_coverage': lang_gate.get('function_word_coverage', 0.0),
@@ -4936,6 +5771,8 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         'surprisal_first_half_var': ppl.get('surprisal_first_half_var', 0.0),
         'surprisal_second_half_var': ppl.get('surprisal_second_half_var', 0.0),
         'volatility_decay_ratio': ppl.get('volatility_decay_ratio', 1.0),
+        'binoculars_score': ppl.get('binoculars_score', 0.0),
+        'binoculars_determination': ppl.get('binoculars_determination'),
     })
 
     # Self-similarity (NSSI)
@@ -5035,6 +5872,14 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         'surprisal_stationarity': surprisal_traj.get('surprisal_stationarity', 0.0),
     })
 
+    # Shadow model disagreement check (if memory store is active)
+    shadow_disagreement = None
+    if memory_store is not None:
+        shadow_disagreement = memory_store.check_shadow_disagreement(result)
+
+    result['shadow_disagreement'] = shadow_disagreement
+    result['shadow_ai_prob'] = (shadow_disagreement or {}).get('shadow_ai_prob')
+
     return result
 
 
@@ -5045,15 +5890,143 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
 if HAS_TK:
     import tkinter as tk
     from tkinter import ttk, filedialog, messagebox
+    from tkinter import font as tkfont
+
+_DET_COLORS = {
+    'RED': '#d32f2f',
+    'AMBER': '#f57c00',
+    'MIXED': '#7b1fa2',
+    'YELLOW': '#fbc02d',
+    'REVIEW': '#0288d1',
+    'GREEN': '#388e3c',
+}
+
+_CHANNELS = ['prompt_structure', 'stylometry', 'continuation', 'windowing']
+
+# Maximum number of preamble patterns printed in verbose output to avoid overflow.
+_MAX_PREAMBLE_PATTERNS = 20
+
+_DASHBOARD_THEME = {
+    'bg': '#f4f7fb',
+    'card': '#ffffff',
+    'text': '#1f2937',
+    'muted': '#6b7280',
+    'accent': '#2563eb',
+    'accent_light': '#dbeafe',
+}
+
+# Descriptions shown when hovering each notebook tab header.
+_TAB_TOOLTIPS = [
+    None,  # Analysis tab — self-explanatory
+    (
+        'Configuration\n\n'
+        'Set the API key for Layer 3 continuation analysis (DNA-GPT), '
+        'choose the LLM provider, tune similarity detection thresholds, '
+        'and configure output paths for CSV and HTML reports.'
+    ),
+    (
+        'Memory & Learning\n\n'
+        'Load the BEET memory store that persists analysis history, '
+        'attempter profiles, and learned models across sessions. '
+        'Record ground-truth labels, view attempter history, and '
+        'rebuild shadow models or centroids from a labeled corpus.'
+    ),
+    (
+        'Calibration & Baselines\n\n'
+        'Load or build a conformal calibration table to convert raw '
+        'confidence scores into well-calibrated probabilities. '
+        'Analyze a baselines JSONL to compute score distributions and '
+        'tune detection thresholds for your specific domain.'
+    ),
+    None,  # Reports tab — self-explanatory
+]
+
+
+if HAS_TK:
+    class _NotebookToolTip:
+        """Shows a brief tooltip when the mouse hovers over a notebook tab."""
+
+        def __init__(self, notebook, tab_texts):
+            """
+            notebook  : ttk.Notebook instance
+            tab_texts : list whose index matches the tab index; None = no tip
+            """
+            self._nb = notebook
+            self._texts = tab_texts
+            self._tip_win = None
+            self._after_id = None
+            notebook.bind('<Motion>', self._on_motion)
+            notebook.bind('<Leave>', self._cancel)
+            notebook.bind('<ButtonPress>', self._cancel)
+
+        # ------------------------------------------------------------------
+        def _on_motion(self, event):
+            try:
+                idx = self._nb.index('@%d,%d' % (event.x, event.y))
+            except Exception:
+                self._cancel()
+                return
+            text = (self._texts[idx]
+                    if 0 <= idx < len(self._texts) else None)
+            if not text:
+                self._cancel()
+                return
+            if self._after_id is None:
+                self._after_id = self._nb.after(
+                    550,
+                    lambda x=event.x_root, y=event.y_root: self._show(text, x, y),
+                )
+
+        def _cancel(self, event=None):
+            if self._after_id is not None:
+                self._nb.after_cancel(self._after_id)
+                self._after_id = None
+            self._hide()
+
+        def _show(self, text, x, y):
+            self._after_id = None
+            self._hide()
+            self._tip_win = tk.Toplevel(self._nb)
+            self._tip_win.wm_overrideredirect(True)
+            self._tip_win.wm_geometry('+%d+%d' % (x + 12, y + 20))
+            tk.Label(
+                self._tip_win,
+                text=text,
+                justify=tk.LEFT,
+                background='#ffffcc',
+                foreground='#333333',
+                relief=tk.SOLID,
+                borderwidth=1,
+                font=('Segoe UI', 9),
+                wraplength=320,
+                padx=8,
+                pady=6,
+            ).pack()
+
+        def _hide(self):
+            if self._tip_win is not None:
+                self._tip_win.destroy()
+                self._tip_win = None
+
 
 class DetectorGUI:
-    """Simple desktop GUI for single-text and file analysis."""
+    """Full-featured desktop GUI exposing all pipeline capabilities."""
 
     def __init__(self, root):
         self.root = root
-        self.root.title("LLM Detector Pipeline v0.61")
-        self.root.geometry("1040x760")
+        self.root.title("LLM Authorship Signal Analyzer v0.67")
+        self.root.geometry("1180x920")
 
+        self._memory_store = None
+        self._cal_table = None
+        self._last_results = []
+        self._last_text_map = {}
+
+        self._init_vars()
+        self._configure_theme()
+        self._build_layout()
+
+    def _init_vars(self):
         self.file_var = tk.StringVar()
         self.prompt_col_var = tk.StringVar(value='prompt')
         self.sheet_var = tk.StringVar()
@@ -5061,63 +6034,471 @@ class DetectorGUI:
         self.provider_var = tk.StringVar(value='anthropic')
         self.api_key_var = tk.StringVar()
         self.status_var = tk.StringVar(value='Ready')
+        self.mode_var = tk.StringVar(value='auto')
+        self.show_details_var = tk.BooleanVar(value=True)
+        self.dna_model_var = tk.StringVar()
+        self.dna_samples_var = tk.StringVar(value='3')
+        self.workers_var = tk.StringVar(value='4')
+        self.batch_var = tk.BooleanVar(value=False)
+        self.no_layer3_var = tk.BooleanVar(value=False)
+        self.ppl_model_var = tk.StringVar(value='Qwen/Qwen2.5-0.5B')
+        self.verbose_var = tk.BooleanVar(value=False)
+        self.output_csv_var = tk.StringVar()
+        self.html_report_var = tk.StringVar()
+        self.cost_var = tk.StringVar(value='400.0')
+        self.no_similarity_var = tk.BooleanVar(value=False)
+        self.sim_threshold_var = tk.StringVar(value='0.40')
+        self.sim_store_var = tk.StringVar()
+        self.instructions_var = tk.StringVar()
+        self.memory_var = tk.StringVar()
+        self.collect_var = tk.StringVar()
+        self.cal_table_var = tk.StringVar()
+        self.calibrate_var = tk.StringVar()
+        self.baselines_jsonl_var = tk.StringVar()
+        self.baselines_csv_var = tk.StringVar()
+        self.labeled_corpus_var = tk.StringVar()
+        self.confirm_task_var = tk.StringVar()
+        self.confirm_label_var = tk.StringVar(value='ai')
+        self.confirm_reviewer_var = tk.StringVar()
+        self.attempter_history_var = tk.StringVar()
+        # KPI metric variables for Analysis tab dashboard cards.
+        self.metric_total_var = tk.StringVar(value='0')
+        self.metric_top_det_var = tk.StringVar(value='N/A')
+        self.metric_avg_conf_var = tk.StringVar(value='0.00')
+        self.metric_mode_var = tk.StringVar(value='auto')
 
-        self._build_layout()
+        self.ablation_vars = {}
+        for ch in _CHANNELS:
+            self.ablation_vars[ch] = tk.BooleanVar(value=False)
+        # Sync mode metric card whenever detection mode is changed.
+        self.mode_var.trace_add('write', self._sync_mode_metric)
+        # Memory store status label variable.
+        self.memory_status_var = tk.StringVar(value='Not loaded')
 
     def _build_layout(self):
-        frame = ttk.Frame(self.root, padding=10)
-        frame.pack(fill=tk.BOTH, expand=True)
+        header = ttk.Frame(self.root, style='DashboardHeader.TFrame', padding=(12, 10))
+        header.pack(fill=tk.X, padx=6, pady=(6, 0))
+        ttk.Label(header, text='LLM Authorship Signal Analyzer',
+                  style='DashboardTitle.TLabel').pack(anchor='w')
+        ttk.Label(header, text='Analyst dashboard for prompt forensics, calibration, and reporting',
+                  style='DashboardSubtitle.TLabel').pack(anchor='w')
 
-        file_row = ttk.Frame(frame)
-        file_row.pack(fill=tk.X, pady=(0, 8))
-        ttk.Label(file_row, text='Input file (CSV/XLSX):').pack(side=tk.LEFT)
-        ttk.Entry(file_row, textvariable=self.file_var).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=8)
+        notebook = ttk.Notebook(self.root, style='Dashboard.TNotebook')
+        notebook.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+
+        # Tab 1: Analysis
+        self._build_analysis_tab(notebook)
+        # Tab 2: Configuration
+        self._build_config_tab(notebook)
+        # Tab 3: Memory & Learning
+        self._build_memory_tab(notebook)
+        # Tab 4: Calibration & Baselines
+        self._build_calibration_tab(notebook)
+        # Tab 5: Reports
+        self._build_reports_tab(notebook)
+
+        # Hover tooltips on tab headers
+        _NotebookToolTip(notebook, _TAB_TOOLTIPS)
+
+        # Status bar
+        status = ttk.Frame(self.root, style='DashboardStatus.TFrame', padding=(10, 6))
+        status.pack(fill=tk.X, padx=6, pady=(0, 6))
+        ttk.Label(status, textvariable=self.status_var, style='DashboardStatus.TLabel').pack(anchor='w')
+
+    # ── Tab 1: Analysis ──────────────────────────────────────────────
+
+    def _build_analysis_tab(self, notebook):
+        tab = ttk.Frame(notebook, padding=8)
+        notebook.add(tab, text='  Analysis  ')
+
+        metrics = ttk.Frame(tab)
+        metrics.pack(fill=tk.X, pady=(0, 8))
+        self._build_metric_card(metrics, 'Total Results', self.metric_total_var).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+        self._build_metric_card(metrics, 'Top Determination', self.metric_top_det_var).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
+        self._build_metric_card(metrics, 'Avg Confidence', self.metric_avg_conf_var).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
+        self._build_metric_card(metrics, 'Mode', self.metric_mode_var).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 0))
+
+        # File input
+        file_row = ttk.Frame(tab)
+        file_row.pack(fill=tk.X, pady=(0, 6))
+        ttk.Label(file_row, text='Input file:').pack(side=tk.LEFT)
+        ttk.Entry(file_row, textvariable=self.file_var).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
         ttk.Button(file_row, text='Browse', command=self._browse_file).pack(side=tk.LEFT)
 
-        opts = ttk.Frame(frame)
-        opts.pack(fill=tk.X, pady=(0, 8))
-        ttk.Label(opts, text='Prompt column').grid(row=0, column=0, sticky='w')
-        ttk.Entry(opts, textvariable=self.prompt_col_var, width=18).grid(row=0, column=1, sticky='w', padx=6)
-        ttk.Label(opts, text='Sheet (xlsx)').grid(row=0, column=2, sticky='w')
-        ttk.Entry(opts, textvariable=self.sheet_var, width=16).grid(row=0, column=3, sticky='w', padx=6)
-        ttk.Label(opts, text='Attempter filter').grid(row=0, column=4, sticky='w')
-        ttk.Entry(opts, textvariable=self.attempter_var, width=18).grid(row=0, column=5, sticky='w', padx=6)
+        # File options
+        opts = ttk.Frame(tab)
+        opts.pack(fill=tk.X, pady=(0, 6))
+        ttk.Label(opts, text='Prompt col').grid(row=0, column=0, sticky='w')
+        ttk.Entry(opts, textvariable=self.prompt_col_var, width=14).grid(row=0, column=1, sticky='w', padx=4)
+        ttk.Label(opts, text='Sheet').grid(row=0, column=2, sticky='w')
+        ttk.Entry(opts, textvariable=self.sheet_var, width=14).grid(row=0, column=3, sticky='w', padx=4)
+        ttk.Label(opts, text='Attempter').grid(row=0, column=4, sticky='w')
+        ttk.Entry(opts, textvariable=self.attempter_var, width=14).grid(row=0, column=5, sticky='w', padx=4)
 
-        l3 = ttk.LabelFrame(frame, text='Continuation Analysis (DNA-GPT)')
-        l3.pack(fill=tk.X, pady=(0, 8))
-        ttk.Label(l3, text='Provider').grid(row=0, column=0, sticky='w', padx=6, pady=6)
-        ttk.Combobox(l3, textvariable=self.provider_var, values=['anthropic', 'openai'], width=12, state='readonly').grid(row=0, column=1, sticky='w', pady=6)
-        ttk.Label(l3, text='API Key (optional)').grid(row=0, column=2, sticky='w', padx=(16, 6), pady=6)
-        api_entry = ttk.Entry(l3, textvariable=self.api_key_var, show='*')
-        api_entry.grid(row=0, column=3, sticky='ew', padx=(0, 6), pady=6)
-        self._add_paste_menu(api_entry)
-        l3.columnconfigure(3, weight=1)
+        # Mode & detection options
+        mode_row = ttk.Frame(tab)
+        mode_row.pack(fill=tk.X, pady=(0, 6))
+        ttk.Label(mode_row, text='Mode:').pack(side=tk.LEFT)
+        ttk.Combobox(mode_row, textvariable=self.mode_var,
+                     values=['auto', 'task_prompt', 'generic_aigt'],
+                     width=14, state='readonly').pack(side=tk.LEFT, padx=(4, 12))
+        ttk.Checkbutton(mode_row, text='Show details', variable=self.show_details_var).pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Checkbutton(mode_row, text='Verbose', variable=self.verbose_var).pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Checkbutton(mode_row, text='Skip Layer 3', variable=self.no_layer3_var).pack(side=tk.LEFT)
 
-        ttk.Label(frame, text='Single text input (optional):').pack(anchor='w')
-        self.text_input = tk.Text(frame, height=10, wrap=tk.WORD)
-        self.text_input.pack(fill=tk.BOTH, pady=(4, 8))
+        # Perplexity model selector
+        ppl_row = ttk.Frame(tab)
+        ppl_row.pack(fill=tk.X, pady=(0, 6))
+        ttk.Label(ppl_row, text='PPL Model:').pack(side=tk.LEFT)
+        ttk.Combobox(ppl_row, textvariable=self.ppl_model_var,
+                     values=['Qwen/Qwen2.5-0.5B', 'HuggingFaceTB/SmolLM2-360M',
+                             'HuggingFaceTB/SmolLM2-135M', 'distilgpt2', 'gpt2'],
+                     width=30, state='readonly').pack(side=tk.LEFT, padx=(4, 0))
 
-        actions = ttk.Frame(frame)
-        actions.pack(fill=tk.X, pady=(0, 8))
-        ttk.Button(actions, text='Analyze Text', command=lambda: self._run_async(self._analyze_text)).pack(side=tk.LEFT)
-        ttk.Button(actions, text='Analyze File', command=lambda: self._run_async(self._analyze_file)).pack(side=tk.LEFT, padx=8)
-        ttk.Button(actions, text='Clear Output', command=self._clear_output).pack(side=tk.LEFT)
+        # Channel ablation — check a channel to *disable* it during analysis
+        abl = ttk.LabelFrame(tab, text='Disable Channels (check to skip)')
+        abl.pack(fill=tk.X, pady=(0, 6))
+        for ch in _CHANNELS:
+            ttk.Checkbutton(abl, text=ch, variable=self.ablation_vars[ch]).pack(side=tk.LEFT, padx=6, pady=3)
+
+        # Text input
+        ttk.Label(tab, text='Single text analysis (paste or type below):').pack(anchor='w')
+        self.text_input = tk.Text(tab, height=7, wrap=tk.WORD)
+        self.text_input.pack(fill=tk.BOTH, pady=(2, 6))
+        self._add_paste_menu(self.text_input)
+
+        # Action buttons
+        actions = ttk.Frame(tab)
+        actions.pack(fill=tk.X, pady=(0, 6))
+        ttk.Button(actions, text='▶ Analyze Text', style='DashboardPrimary.TButton',
+                   command=lambda: self._run_async(self._analyze_text)).pack(side=tk.LEFT)
+        ttk.Button(actions, text='📂 Analyze File', style='DashboardPrimary.TButton',
+                   command=lambda: self._run_async(self._analyze_file)).pack(side=tk.LEFT, padx=6)
+        ttk.Button(actions, text='Clear', command=self._clear_output).pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Button(actions, text='💾 Save CSV', command=self._save_results_csv).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(actions, text='Save HTML Reports', command=self._save_html_reports).pack(side=tk.LEFT)
 
         # Progress bar
-        progress_frame = ttk.Frame(frame)
+        progress_frame = ttk.Frame(tab)
         progress_frame.pack(fill=tk.X, pady=(0, 6))
         self.progress_var = tk.DoubleVar(value=0)
         self.progress_bar = ttk.Progressbar(progress_frame, variable=self.progress_var,
-                                             maximum=100, mode='determinate')
+                                             maximum=100, mode='determinate',
+                                             style='Dashboard.Horizontal.TProgressbar')
         self.progress_bar.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.progress_label = ttk.Label(progress_frame, text='', width=20)
         self.progress_label.pack(side=tk.LEFT, padx=(6, 0))
 
-        ttk.Label(frame, text='Results:').pack(anchor='w')
-        self.output = tk.Text(frame, height=20, wrap=tk.WORD)
+        # Results output
+        output_frame = ttk.Frame(tab)
+        output_frame.pack(fill=tk.BOTH, expand=True)
+        scrollbar = ttk.Scrollbar(output_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.output = tk.Text(output_frame, height=16, wrap=tk.WORD,
+                              font=('Consolas', 10), yscrollcommand=scrollbar.set)
         self.output.pack(fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.output.yview)
 
-        ttk.Label(frame, textvariable=self.status_var).pack(anchor='w', pady=(8, 0))
+        for det, color in _DET_COLORS.items():
+            self.output.tag_configure(det, foreground=color)
+        self.output.tag_configure('HEADER', foreground='#1565c0', font=('Consolas', 10, 'bold'))
+        self.output.tag_configure('DIM', foreground='#757575')
+        self.output.tag_configure('ALERT', foreground='#d32f2f', font=('Consolas', 10, 'bold'))
+
+    # ── Tab 2: Configuration ─────────────────────────────────────────
+
+    def _build_config_tab(self, notebook):
+        tab = ttk.Frame(notebook, padding=8)
+        notebook.add(tab, text='  Configuration  ')
+
+        # DNA-GPT / Continuation
+        dna = ttk.LabelFrame(tab, text='Continuation Analysis (DNA-GPT)')
+        dna.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(dna, text='Provider').grid(row=0, column=0, sticky='w', padx=6, pady=4)
+        ttk.Combobox(dna, textvariable=self.provider_var, values=['anthropic', 'openai'],
+                     width=12, state='readonly').grid(row=0, column=1, sticky='w', pady=4)
+        ttk.Label(dna, text='API Key').grid(row=0, column=2, sticky='w', padx=(12, 6), pady=4)
+        api_entry = ttk.Entry(dna, textvariable=self.api_key_var, show='*')
+        api_entry.grid(row=0, column=3, sticky='ew', padx=(0, 6), pady=4)
+        self._add_paste_menu(api_entry)
+        dna.columnconfigure(3, weight=1)
+        ttk.Label(dna, text='Model (optional)').grid(row=1, column=0, sticky='w', padx=6, pady=4)
+        ttk.Entry(dna, textvariable=self.dna_model_var, width=24).grid(row=1, column=1, columnspan=2, sticky='w', pady=4)
+        ttk.Label(dna, text='Samples').grid(row=1, column=2, sticky='e', padx=(12, 6), pady=4)
+        ttk.Spinbox(dna, textvariable=self.dna_samples_var, from_=1, to=10, width=4).grid(row=1, column=3, sticky='w', pady=4)
+        ttk.Label(dna, text='Workers').grid(row=2, column=0, sticky='w', padx=6, pady=4)
+        ttk.Spinbox(dna, textvariable=self.workers_var, from_=1, to=16, width=4).grid(row=2, column=1, sticky='w', pady=4)
+        ttk.Checkbutton(dna, text='Batch API (50% cheaper)',
+                        variable=self.batch_var).grid(row=2, column=2, columnspan=2, sticky='w', padx=(12, 0), pady=4)
+
+        # Similarity
+        sim = ttk.LabelFrame(tab, text='Similarity Analysis')
+        sim.pack(fill=tk.X, pady=(0, 10))
+        ttk.Checkbutton(sim, text='Disable similarity', variable=self.no_similarity_var).grid(
+            row=0, column=0, sticky='w', padx=6, pady=4)
+        ttk.Label(sim, text='Threshold').grid(row=0, column=1, sticky='w', padx=(12, 6), pady=4)
+        ttk.Entry(sim, textvariable=self.sim_threshold_var, width=6).grid(row=0, column=2, sticky='w', pady=4)
+        ttk.Label(sim, text='Sim store (JSONL)').grid(row=1, column=0, sticky='w', padx=6, pady=4)
+        ttk.Entry(sim, textvariable=self.sim_store_var).grid(row=1, column=1, columnspan=2, sticky='ew', padx=(0, 6), pady=4)
+        ttk.Button(sim, text='...', width=3, command=lambda: self._browse_save(self.sim_store_var, [('JSONL', '*.jsonl')])).grid(
+            row=1, column=3, sticky='w', padx=2, pady=4)
+        ttk.Label(sim, text='Instructions file').grid(row=2, column=0, sticky='w', padx=6, pady=4)
+        ttk.Entry(sim, textvariable=self.instructions_var).grid(row=2, column=1, columnspan=2, sticky='ew', padx=(0, 6), pady=4)
+        ttk.Button(sim, text='...', width=3, command=lambda: self._browse_open(self.instructions_var)).grid(
+            row=2, column=3, sticky='w', padx=2, pady=4)
+        sim.columnconfigure(2, weight=1)
+
+        # Output
+        out = ttk.LabelFrame(tab, text='Output Options')
+        out.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(out, text='Output CSV').grid(row=0, column=0, sticky='w', padx=6, pady=4)
+        ttk.Entry(out, textvariable=self.output_csv_var).grid(row=0, column=1, sticky='ew', padx=(0, 6), pady=4)
+        ttk.Button(out, text='...', width=3, command=lambda: self._browse_save(self.output_csv_var, [('CSV', '*.csv')])).grid(
+            row=0, column=2, sticky='w', padx=2, pady=4)
+        ttk.Label(out, text='HTML report').grid(row=1, column=0, sticky='w', padx=6, pady=4)
+        ttk.Entry(out, textvariable=self.html_report_var).grid(row=1, column=1, sticky='ew', padx=(0, 6), pady=4)
+        ttk.Button(out, text='...', width=3, command=lambda: self._browse_save(self.html_report_var, [('HTML', '*.html')])).grid(
+            row=1, column=2, sticky='w', padx=2, pady=4)
+        ttk.Label(out, text='Cost per prompt ($)').grid(row=2, column=0, sticky='w', padx=6, pady=4)
+        ttk.Entry(out, textvariable=self.cost_var, width=8).grid(row=2, column=1, sticky='w', pady=4)
+        out.columnconfigure(1, weight=1)
+
+        # Baseline collection
+        bl = ttk.LabelFrame(tab, text='Baseline Collection')
+        bl.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(bl, text='Collect to JSONL').grid(row=0, column=0, sticky='w', padx=6, pady=4)
+        ttk.Entry(bl, textvariable=self.collect_var).grid(row=0, column=1, sticky='ew', padx=(0, 6), pady=4)
+        ttk.Button(bl, text='...', width=3, command=lambda: self._browse_save(self.collect_var, [('JSONL', '*.jsonl')])).grid(
+            row=0, column=2, sticky='w', padx=2, pady=4)
+        bl.columnconfigure(1, weight=1)
+
+    # ── Tab 3: Memory & Learning ─────────────────────────────────────
+
+    def _build_memory_tab(self, notebook):
+        tab = ttk.Frame(notebook, padding=8)
+        notebook.add(tab, text='  Memory & Learning  ')
+
+        # Memory store directory
+        mem = ttk.LabelFrame(tab, text='BEET Memory Store')
+        mem.pack(fill=tk.X, pady=(0, 10))
+
+        ttk.Label(mem, text=(
+            'The memory store persists analysis history across sessions.\n'
+            'Use the default ".beet" folder or choose a custom location.'
+        ), style='DashboardSubtitle.TLabel').grid(
+            row=0, column=0, columnspan=5, sticky='w', padx=6, pady=(4, 2))
+
+        ttk.Label(mem, text='Store directory').grid(row=1, column=0, sticky='w', padx=6, pady=4)
+        ttk.Entry(mem, textvariable=self.memory_var).grid(row=1, column=1, sticky='ew', padx=(0, 6), pady=4)
+        ttk.Button(mem, text='...', width=3, command=lambda: self._browse_dir(self.memory_var)).grid(
+            row=1, column=2, sticky='w', padx=2, pady=4)
+        ttk.Button(mem, text='Use Default (.beet)', command=self._use_default_memory).grid(
+            row=1, column=3, sticky='w', padx=(4, 2), pady=4)
+        ttk.Button(mem, text='Load', command=self._load_memory).grid(row=1, column=4, sticky='w', padx=6, pady=4)
+        mem.columnconfigure(1, weight=1)
+
+        # Status label
+        status_frame = ttk.Frame(mem)
+        status_frame.grid(row=2, column=0, columnspan=5, sticky='w', padx=6, pady=(0, 4))
+        ttk.Label(status_frame, text='Status:').pack(side=tk.LEFT)
+        self._memory_status_label = ttk.Label(
+            status_frame, textvariable=self.memory_status_var,
+            foreground=_DASHBOARD_THEME['muted'])
+        self._memory_status_label.pack(side=tk.LEFT, padx=(4, 0))
+
+        btn_row = ttk.Frame(mem)
+        btn_row.grid(row=3, column=0, columnspan=5, sticky='w', padx=6, pady=4)
+        ttk.Button(btn_row, text='Print Summary', command=lambda: self._run_async(self._memory_summary)).pack(side=tk.LEFT, padx=(0, 6))
+
+        # Confirmations
+        conf = ttk.LabelFrame(tab, text='Record Ground Truth Confirmation')
+        conf.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(conf, text='Task ID').grid(row=0, column=0, sticky='w', padx=6, pady=4)
+        ttk.Entry(conf, textvariable=self.confirm_task_var, width=24).grid(row=0, column=1, sticky='w', padx=(0, 6), pady=4)
+        ttk.Label(conf, text='Label').grid(row=0, column=2, sticky='w', padx=(12, 6), pady=4)
+        ttk.Combobox(conf, textvariable=self.confirm_label_var, values=['ai', 'human'],
+                     width=8, state='readonly').grid(row=0, column=3, sticky='w', pady=4)
+        ttk.Label(conf, text='Reviewer').grid(row=0, column=4, sticky='w', padx=(12, 6), pady=4)
+        ttk.Entry(conf, textvariable=self.confirm_reviewer_var, width=16).grid(row=0, column=5, sticky='w', padx=(0, 6), pady=4)
+        ttk.Button(conf, text='Confirm', command=self._record_confirmation).grid(row=0, column=6, sticky='w', padx=6, pady=4)
+
+        # Attempter history
+        hist = ttk.LabelFrame(tab, text='Attempter History')
+        hist.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(hist, text='Attempter name').grid(row=0, column=0, sticky='w', padx=6, pady=4)
+        ttk.Entry(hist, textvariable=self.attempter_history_var, width=24).grid(row=0, column=1, sticky='w', padx=(0, 6), pady=4)
+        ttk.Button(hist, text='Show History', command=lambda: self._run_async(self._show_attempter_history)).grid(
+            row=0, column=2, sticky='w', padx=6, pady=4)
+
+        # Learning tools
+        learn = ttk.LabelFrame(tab, text='Learning Tools (require memory store)')
+        learn.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(learn, text='Labeled corpus (JSONL)').grid(row=0, column=0, sticky='w', padx=6, pady=4)
+        ttk.Entry(learn, textvariable=self.labeled_corpus_var).grid(row=0, column=1, sticky='ew', padx=(0, 6), pady=4)
+        ttk.Button(learn, text='...', width=3, command=lambda: self._browse_open(self.labeled_corpus_var, [('JSONL', '*.jsonl')])).grid(
+            row=0, column=2, sticky='w', padx=2, pady=4)
+        learn.columnconfigure(1, weight=1)
+
+        btn_row2 = ttk.Frame(learn)
+        btn_row2.grid(row=1, column=0, columnspan=3, sticky='w', padx=6, pady=4)
+        ttk.Button(btn_row2, text='Rebuild Shadow Model', command=lambda: self._run_async(self._rebuild_shadow)).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(btn_row2, text='Rebuild Centroids', command=lambda: self._run_async(self._rebuild_centroids)).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(btn_row2, text='Discover Lexicon', command=lambda: self._run_async(self._discover_lexicon)).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(btn_row2, text='Rebuild All', command=lambda: self._run_async(self._rebuild_all)).pack(side=tk.LEFT)
+
+    # ── Tab 4: Calibration & Baselines ───────────────────────────────
+
+    def _build_calibration_tab(self, notebook):
+        tab = ttk.Frame(notebook, padding=8)
+        notebook.add(tab, text='  Calibration & Baselines  ')
+
+        # Calibration
+        cal = ttk.LabelFrame(tab, text='Conformal Calibration')
+        cal.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(cal, text='Cal table (JSON)').grid(row=0, column=0, sticky='w', padx=6, pady=4)
+        ttk.Entry(cal, textvariable=self.cal_table_var).grid(row=0, column=1, sticky='ew', padx=(0, 6), pady=4)
+        ttk.Button(cal, text='...', width=3, command=lambda: self._browse_open(self.cal_table_var, [('JSON', '*.json')])).grid(
+            row=0, column=2, sticky='w', padx=2, pady=4)
+        ttk.Button(cal, text='Load', command=self._load_cal_table).grid(row=0, column=3, sticky='w', padx=6, pady=4)
+        cal.columnconfigure(1, weight=1)
+
+        ttk.Label(cal, text='Build from JSONL').grid(row=1, column=0, sticky='w', padx=6, pady=4)
+        ttk.Entry(cal, textvariable=self.calibrate_var).grid(row=1, column=1, sticky='ew', padx=(0, 6), pady=4)
+        ttk.Button(cal, text='...', width=3, command=lambda: self._browse_open(self.calibrate_var, [('JSONL', '*.jsonl')])).grid(
+            row=1, column=2, sticky='w', padx=2, pady=4)
+        ttk.Button(cal, text='Build & Save', command=lambda: self._run_async(self._build_calibration)).grid(
+            row=1, column=3, sticky='w', padx=6, pady=4)
+
+        ttk.Button(cal, text='Rebuild from Memory', command=lambda: self._run_async(self._rebuild_calibration)).grid(
+            row=2, column=0, columnspan=2, sticky='w', padx=6, pady=4)
+
+        # Baseline analysis
+        bl = ttk.LabelFrame(tab, text='Baseline Analysis')
+        bl.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(bl, text='Baselines JSONL').grid(row=0, column=0, sticky='w', padx=6, pady=4)
+        ttk.Entry(bl, textvariable=self.baselines_jsonl_var).grid(row=0, column=1, sticky='ew', padx=(0, 6), pady=4)
+        ttk.Button(bl, text='...', width=3, command=lambda: self._browse_open(self.baselines_jsonl_var, [('JSONL', '*.jsonl')])).grid(
+            row=0, column=2, sticky='w', padx=2, pady=4)
+        ttk.Label(bl, text='Output CSV').grid(row=1, column=0, sticky='w', padx=6, pady=4)
+        ttk.Entry(bl, textvariable=self.baselines_csv_var).grid(row=1, column=1, sticky='ew', padx=(0, 6), pady=4)
+        ttk.Button(bl, text='...', width=3, command=lambda: self._browse_save(self.baselines_csv_var, [('CSV', '*.csv')])).grid(
+            row=1, column=2, sticky='w', padx=2, pady=4)
+        ttk.Button(bl, text='Analyze Baselines', command=lambda: self._run_async(self._analyze_baselines)).grid(
+            row=2, column=0, columnspan=2, sticky='w', padx=6, pady=4)
+        bl.columnconfigure(1, weight=1)
+
+    # ── Helpers ───────────────────────────────────────────────────────
+
+    def _configure_theme(self):
+        self.root.configure(bg=_DASHBOARD_THEME['bg'])
+        style = ttk.Style(self.root)
+        if 'clam' in style.theme_names():
+            style.theme_use('clam')
+
+        try:
+            base_font = tkfont.nametofont('TkDefaultFont')
+        except tk.TclError:
+            try:
+                base_font = tkfont.nametofont('TkTextFont')
+            except tk.TclError:
+                base_font = None
+
+        self._title_font = None
+        self._subtitle_font = None
+        self._section_font = None
+        if base_font is not None:
+            self._title_font = base_font.copy()
+            self._title_font.configure(size=14, weight='bold')
+            self._subtitle_font = base_font.copy()
+            self._subtitle_font.configure(size=10)
+            self._section_font = base_font.copy()
+            self._section_font.configure(size=10, weight='bold')
+
+        style.configure('TFrame', background=_DASHBOARD_THEME['bg'])
+        style.configure('TLabelframe', background=_DASHBOARD_THEME['card'])
+        style.configure('TLabelframe.Label', background=_DASHBOARD_THEME['card'],
+                        foreground=_DASHBOARD_THEME['text'])
+        if self._section_font is not None:
+            style.configure('TLabelframe.Label', font=self._section_font)
+        style.configure('TLabel', background=_DASHBOARD_THEME['bg'], foreground=_DASHBOARD_THEME['text'])
+        style.configure('TCheckbutton', background=_DASHBOARD_THEME['bg'], foreground=_DASHBOARD_THEME['text'])
+        style.configure('TButton', padding=(10, 6))
+        style.configure('TEntry', fieldbackground='white')
+        style.configure('TCombobox', fieldbackground='white')
+        style.configure('DashboardCard.TFrame', background=_DASHBOARD_THEME['card'])
+        style.configure('DashboardCardLabel.TLabel', background=_DASHBOARD_THEME['card'],
+                        foreground=_DASHBOARD_THEME['muted'])
+        style.configure('DashboardCardValue.TLabel', background=_DASHBOARD_THEME['card'],
+                        foreground=_DASHBOARD_THEME['text'])
+        if self._section_font is not None:
+            style.configure('DashboardCardValue.TLabel', font=self._section_font)
+
+        style.configure('DashboardHeader.TFrame', background=_DASHBOARD_THEME['card'])
+        style.configure('DashboardTitle.TLabel', background=_DASHBOARD_THEME['card'],
+                        foreground=_DASHBOARD_THEME['text'])
+        style.configure('DashboardSubtitle.TLabel', background=_DASHBOARD_THEME['card'],
+                        foreground=_DASHBOARD_THEME['muted'])
+        if self._title_font is not None:
+            style.configure('DashboardTitle.TLabel', font=self._title_font)
+        if self._subtitle_font is not None:
+            style.configure('DashboardSubtitle.TLabel', font=self._subtitle_font)
+        style.configure('DashboardStatus.TFrame', background=_DASHBOARD_THEME['card'])
+        style.configure('DashboardStatus.TLabel', background=_DASHBOARD_THEME['card'],
+                        foreground=_DASHBOARD_THEME['muted'])
+        style.configure('DashboardPrimary.TButton', padding=(12, 6))
+        style.map('DashboardPrimary.TButton',
+                  background=[('!disabled', _DASHBOARD_THEME['accent']), ('active', '#1d4ed8')],
+                  foreground=[('!disabled', '#ffffff')])
+
+        style.configure('Dashboard.TNotebook', background=_DASHBOARD_THEME['bg'], borderwidth=0)
+        style.configure('Dashboard.TNotebook.Tab', padding=(12, 8),
+                        background=_DASHBOARD_THEME['accent_light'], foreground=_DASHBOARD_THEME['text'])
+        style.map('Dashboard.TNotebook.Tab',
+                  background=[('selected', _DASHBOARD_THEME['accent'])],
+                  foreground=[('selected', '#ffffff')])
+        try:
+            style.configure('Dashboard.Horizontal.TProgressbar',
+                            troughcolor='#e5e7eb', background=_DASHBOARD_THEME['accent'])
+        except tk.TclError:
+            style.configure('Dashboard.Horizontal.TProgressbar')
+
+    def _browse_file(self):
+        path = filedialog.askopenfilename(filetypes=[('Data files', '*.csv *.xlsx *.xlsm *.pdf'), ('All files', '*.*')])
+        if path:
+            self.file_var.set(path)
+
+    def _browse_open(self, var, filetypes=None):
+        filetypes = filetypes or [('All files', '*.*')]
+        path = filedialog.askopenfilename(filetypes=filetypes)
+        if path:
+            var.set(path)
+
+    def _browse_save(self, var, filetypes=None):
+        filetypes = filetypes or [('All files', '*.*')]
+        path = filedialog.asksaveasfilename(filetypes=filetypes)
+        if path:
+            var.set(path)
+
+    def _browse_dir(self, var):
+        path = filedialog.askdirectory()
+        if path:
+            var.set(path)
+
+    def _get_disabled_channels(self):
+        disabled = [ch for ch, var in self.ablation_vars.items() if var.get()]
+        return disabled or None
+
+    def _get_dna_samples(self):
+        try:
+            return int(self.dna_samples_var.get())
+        except ValueError:
+            return 3
+
+    def _get_cost(self):
+        try:
+            return float(self.cost_var.get())
+        except ValueError:
+            return 400.0
 
     def _add_paste_menu(self, widget):
         """Add right-click context menu with Cut/Copy/Paste and ensure Ctrl+V works."""
@@ -5132,14 +6513,43 @@ class DetectorGUI:
             menu.tk_popup(event.x_root, event.y_root)
 
         widget.bind('<Button-3>', _show_menu)
+        # macOS uses Button-2 for right-click
         widget.bind('<Button-2>', _show_menu)
+        # Ensure Ctrl+V / Cmd+V paste works
         widget.bind('<Control-v>', lambda e: widget.event_generate('<<Paste>>'))
         widget.bind('<Control-V>', lambda e: widget.event_generate('<<Paste>>'))
 
-    def _browse_file(self):
-        path = filedialog.askopenfilename(filetypes=[('Data files', '*.csv *.xlsx *.xlsm'), ('All files', '*.*')])
+    def _get_api_key(self):
+        key = self.api_key_var.get().strip()
+        if not key:
+            env_var = ('ANTHROPIC_API_KEY' if self.provider_var.get() == 'anthropic'
+                       else 'OPENAI_API_KEY')
+            key = os.environ.get(env_var, '')
+        return key or None
+
+    def _get_sim_threshold(self):
+        try:
+            return float(self.sim_threshold_var.get())
+        except ValueError:
+            return 0.40
+
+    def _browse_sim_store(self):
+        path = filedialog.askopenfilename(
+            filetypes=[('JSONL', '*.jsonl'), ('All', '*.*')])
         if path:
-            self.file_var.set(path)
+            self.sim_store_var.set(path)
+
+    def _browse_instructions(self):
+        path = filedialog.askopenfilename(
+            filetypes=[('Text', '*.txt *.md'), ('All', '*.*')])
+        if path:
+            self.instructions_var.set(path)
+
+    def _browse_corpus(self):
+        path = filedialog.askopenfilename(
+            filetypes=[('JSONL', '*.jsonl'), ('All', '*.*')])
+        if path:
+            self.corpus_path_var.set(path)
 
     def _update_progress(self, current, total):
         pct = current / max(total, 1) * 100
@@ -5150,9 +6560,37 @@ class DetectorGUI:
         self.root.after(0, lambda: self.progress_var.set(0))
         self.root.after(0, lambda: self.progress_label.config(text=''))
 
+    def _build_metric_card(self, parent, label, value_var):
+        card = ttk.Frame(parent, style='DashboardCard.TFrame', padding=(10, 8))
+        ttk.Label(card, text=label, style='DashboardCardLabel.TLabel').pack(anchor='w')
+        ttk.Label(card, textvariable=value_var, style='DashboardCardValue.TLabel').pack(anchor='w', pady=(2, 0))
+        return card
+
+    def _sync_mode_metric(self, *args):
+        self.metric_mode_var.set(self.mode_var.get())
+
+    def _update_dashboard_metrics(self, results):
+        n_results = len(results)
+        determinations = [r.get('determination') for r in results if r.get('determination')]
+        counts = Counter(determinations)
+        top_det = 'N/A'
+        if counts:
+            top_det = counts.most_common(1)[0][0]
+        avg_conf = 0.0
+        if n_results > 0:
+            avg_conf = sum(float(r.get('confidence') or 0) for r in results) / n_results
+
+        def apply():
+            self.metric_total_var.set(str(n_results))
+            self.metric_top_det_var.set(top_det)
+            self.metric_avg_conf_var.set(f'{avg_conf:.2f}')
+            self.metric_mode_var.set(self.mode_var.get())
+        self.root.after(0, apply)
+
     def _clear_output(self):
         self.output.delete('1.0', tk.END)
         self._reset_progress()
+        self._update_dashboard_metrics([])
         self.status_var.set('Ready')
 
     def _run_async(self, fn):
@@ -5164,39 +6602,122 @@ class DetectorGUI:
                 self.root.after(0, lambda: self.status_var.set('Done'))
             except Exception as exc:
                 self.root.after(0, lambda: self.status_var.set('Error'))
-                self.root.after(0, lambda: messagebox.showerror('Analysis Error', str(exc)))
+                self.root.after(0, lambda e=exc: messagebox.showerror('Error', str(e)))
 
         threading.Thread(target=runner, daemon=True).start()
 
-    def _append(self, text):
-        self.root.after(0, lambda: (self.output.insert(tk.END, text), self.output.see(tk.END)))
+    def _append(self, text, tag=None):
+        def do_append():
+            if tag:
+                self.output.insert(tk.END, text, tag)
+            else:
+                self.output.insert(tk.END, text)
+            self.output.see(tk.END)
+        self.root.after(0, do_append)
+
+    # ── Memory Store ──────────────────────────────────────────────────
+
+    def _ensure_memory(self):
+        if self._memory_store is not None:
+            return True
+        path = self.memory_var.get().strip()
+        if not path:
+            self.root.after(0, lambda: messagebox.showinfo('Memory required', 'Set a memory store directory first.'))
+            return False
+        self._load_memory()
+        return self._memory_store is not None
+
+    def _use_default_memory(self):
+        """Set memory store to the default .beet directory and load it."""
+        self.memory_var.set('.beet')
+        self._load_memory()
+
+    def _load_memory(self):
+        path = self.memory_var.get().strip()
+        if not path:
+            messagebox.showinfo('Memory required', 'Set a memory store directory first.')
+            return
+        self._memory_store = MemoryStore(path)
+        cfg = self._memory_store._config
+        n_subs = cfg.get('total_submissions', 0)
+        n_batches = cfg.get('total_batches', 0)
+        self.memory_status_var.set(
+            f'✓ Loaded: {path}  ({n_subs} submissions, {n_batches} batches)')
+        if hasattr(self, '_memory_status_label'):
+            self._memory_status_label.configure(foreground='#388e3c')
+        self.status_var.set(f'Memory store loaded: {path}')
+
+    def _load_cal_table(self):
+        path = self.cal_table_var.get().strip()
+        if not path or not os.path.exists(path):
+            messagebox.showinfo('Cal table', 'Select a valid calibration table JSON file.')
+            return
+        self._cal_table = load_calibration(path)
+        self.status_var.set(f"Calibration loaded: {self._cal_table['n_calibration']} records, "
+                            f"{len(self._cal_table.get('strata', {}))} strata")
+
+    # ── Analysis Actions ──────────────────────────────────────────────
+
+    def _build_analyze_kwargs(self):
+        kwargs = {
+            'run_l3': not self.no_layer3_var.get(),
+            'api_key': self._get_api_key(),
+            'dna_provider': self.provider_var.get(),
+            'dna_model': self.dna_model_var.get().strip() or None,
+            'dna_samples': self._get_dna_samples(),
+            'mode': self.mode_var.get(),
+            'disabled_channels': self._get_disabled_channels(),
+            'cal_table': self._cal_table,
+            'memory_store': self._memory_store,
+            'ppl_model': self.ppl_model_var.get() or None,
+        }
+        return kwargs
 
     def _analyze_text(self):
         text = self.text_input.get('1.0', tk.END).strip()
         if not text:
             self.root.after(0, lambda: messagebox.showinfo('Input required', 'Enter text to analyze.'))
             return
-        result = analyze_prompt(
-            text,
-            run_l3=True,
-            api_key=self.api_key_var.get().strip() or None,
-            dna_provider=self.provider_var.get(),
-        )
-        self._append(self._format_result(result) + '\n')
+        kwargs = self._build_analyze_kwargs()
+        result = analyze_prompt(text, **kwargs)
+
+        # Shadow model check
+        if self._memory_store:
+            disagreement = self._memory_store.check_shadow_disagreement(result)
+            result['shadow_disagreement'] = disagreement
+            result['shadow_ai_prob'] = (disagreement or {}).get('shadow_ai_prob')
+
+        self._last_results = [result]
+        self._last_text_map = {'_single': text}
+        self._update_dashboard_metrics(self._last_results)
+        self._display_result(result)
+
+        # Collect baselines if configured
+        collect_path = self.collect_var.get().strip()
+            collect_baselines([result], collect_path)
+            self._append(f"  Baseline appended to {collect_path}\n", 'DIM')
 
     def _analyze_file(self):
         path = self.file_var.get().strip()
         if not path:
-            self.root.after(0, lambda: messagebox.showinfo('Input required', 'Choose a CSV/XLSX file to analyze.'))
+            self.root.after(0, lambda: messagebox.showinfo('Input required', 'Choose a CSV/XLSX file.'))
             return
         ext = os.path.splitext(path)[1].lower()
         if ext in ('.xlsx', '.xlsm'):
-            tasks = load_xlsx(path, sheet=self.sheet_var.get().strip() or None, prompt_col=self.prompt_col_var.get().strip() or 'prompt')
+            tasks = load_xlsx(path, sheet=self.sheet_var.get().strip() or None,
+                              prompt_col=self.prompt_col_var.get().strip() or 'prompt')
         elif ext == '.csv':
             tasks = load_csv(path, prompt_col=self.prompt_col_var.get().strip() or 'prompt')
+        elif ext == '.pdf':
+            if not HAS_PYPDF:
+                self.root.after(0, lambda: messagebox.showerror(
+                    'Missing dependency', 'PDF support requires pypdf: pip install pypdf'))
+                return
+            tasks = load_pdf(path)
         else:
-            self.root.after(0, lambda: messagebox.showerror('Unsupported file', f'Unsupported extension: {ext}'))
+            self.root.after(0, lambda: messagebox.showerror('Unsupported file', f'Unsupported: {ext}'))
             return
+
         if self.attempter_var.get().strip():
             needle = self.attempter_var.get().strip().lower()
             tasks = [t for t in tasks if needle in t.get('attempter', '').lower()]
@@ -5204,39 +6725,843 @@ class DetectorGUI:
             self.root.after(0, lambda: messagebox.showinfo('No tasks', 'No qualifying prompts found.'))
             return
 
-        api_key = self.api_key_var.get().strip() or None
+        kwargs = self._build_analyze_kwargs()
+        results = []
+        text_map = {}
         counts = Counter()
         n_tasks = len(tasks)
+        n_workers = max(1, int(self.workers_var.get() or 1))
+        use_batch = (self.batch_var.get()
+                     and kwargs.get('api_key')
+                     and self.provider_var.get() == 'anthropic'
+                     and kwargs.get('run_l3', True))
+
         self._reset_progress()
-        for i, task in enumerate(tasks, 1):
-            r = analyze_prompt(
+
+        # Build text_map upfront
+        for i, task in enumerate(tasks):
+            tid = task.get('task_id', f'_row{i+1}')
+            text_map[tid] = task['prompt']
+
+        # ── Batch API pre-computation ──────────────────────────
+        batch_cont_results = {}
+            self._append("Submitting continuation batch to Anthropic...\n", 'HEADER')
+            norm_texts = []
+            norm_ids = []
+            for task in tasks:
+                nt, _ = normalize_text(task['prompt'])
+                norm_texts.append(nt)
+                norm_ids.append(task.get('task_id', ''))
+            batch_cont_results = run_continuation_batch(
+                norm_texts, norm_ids,
+                api_key=kwargs['api_key'],
+                model=kwargs.get('dna_model'),
+                n_samples=kwargs.get('dna_samples', 3),
+                progress_fn=lambda s: self._append(f"  {s}\n"),
+            )
+            self._append(f"Batch complete: {len(batch_cont_results)} results.\n\n", 'HEADER')
+
+        def _run(idx_task):
+            i, task = idx_task
+            extra = {}
+            if use_batch:
+                extra['precomputed_continuation'] = batch_cont_results.get(i)
+                extra['api_key'] = None  # skip per-submission API calls
+            return analyze_prompt(
                 task['prompt'],
                 task_id=task.get('task_id', ''),
                 occupation=task.get('occupation', ''),
                 attempter=task.get('attempter', ''),
                 stage=task.get('stage', ''),
-                run_l3=True,
-                api_key=api_key,
-                dna_provider=self.provider_var.get(),
+                **{**kwargs, **extra},
             )
-            counts[r['determination']] += 1
-            self._update_progress(i, n_tasks)
-            self._append(f"[{i}/{n_tasks}] {self._format_result(r)}\n")
 
+        if n_workers > 1:
+            from concurrent.futures import ThreadPoolExecutor
+            batch_size = n_workers
+            done = 0
+            for start in range(0, n_tasks, batch_size):
+                chunk = list(enumerate(tasks[start:start + batch_size], start))
+                with ThreadPoolExecutor(max_workers=n_workers) as pool:
+                    chunk_results = list(pool.map(_run, chunk))
+                for r in chunk_results:
+                    done += 1
+                    results.append(r)
+                    counts[r['determination']] += 1
+                    self._update_progress(done, n_tasks)
+                    self._append(f"[{done}/{n_tasks}] ")
+                    self._display_result(r)
+        else:
+            for i, task in enumerate(tasks):
+                r = _run((i, task))
+                results.append(r)
+                counts[r['determination']] += 1
+                self._update_progress(i + 1, n_tasks)
+                self._append(f"[{i+1}/{n_tasks}] ")
+                self._display_result(r)
+
+        # Shadow model checks
+        if self._memory_store:
+            shadow_count = 0
+            for r in results:
+                disagreement = self._memory_store.check_shadow_disagreement(r)
+                r['shadow_disagreement'] = disagreement
+                r['shadow_ai_prob'] = (disagreement or {}).get('shadow_ai_prob')
+                if disagreement:
+                    shadow_count += 1
+            if shadow_count:
+                self._append(f"\nShadow model: {shadow_count} disagreements\n", 'ALERT')
+
+        self._last_results = results
+        self._last_text_map = text_map
+        self._update_dashboard_metrics(self._last_results)
+
+        # Summary
         parts = []
         for det in ['RED', 'AMBER', 'MIXED', 'YELLOW', 'REVIEW', 'GREEN']:
             ct = counts.get(det, 0)
             if ct > 0 or det in ('RED', 'AMBER', 'YELLOW', 'GREEN'):
                 parts.append(f"{det}={ct}")
-        summary = f"\nSummary: {' | '.join(parts)}\n"
-        self._append(summary)
+        self._append(f"\nSummary: {' | '.join(parts)}\n", 'HEADER')
 
-    @staticmethod
-    def _format_result(result):
-        return (
-            f"{result.get('determination')} | conf={result.get('confidence', 0):.2f} | "
-            f"words={result.get('word_count', 0)} | reason={result.get('reason', '')}"
-        )
+        # Load instruction text for similarity baseline
+        instruction_text = None
+        instr_path = self.instructions_var.get().strip()
+        if instr_path and os.path.exists(instr_path):
+            with open(instr_path, 'r') as f:
+                instruction_text = f.read()
+
+        # Similarity analysis
+        if not self.no_similarity_var.get() and len(results) >= 2:
+            self._run_similarity(results, text_map)
+
+        # Cross-batch memory
+        if self._memory_store:
+            cross_flags = self._memory_store.cross_batch_similarity(results, text_map)
+            if cross_flags:
+                self._append(f"\nCross-batch memory: {len(cross_flags)} matches\n", 'HEADER')
+                for cf in cross_flags[:5]:
+                    self._append(f"  {cf['current_id'][:15]} <-> {cf['historical_id'][:15]} "
+                                 f"(MH={cf['minhash_similarity']:.2f})\n", 'DIM')
+            self._memory_store.record_batch(results, text_map)
+
+        # Yellow alerts
+        yellow = [r for r in results if r['determination'] == 'YELLOW']
+        if yellow:
+            self._append(f"\nYELLOW ({len(yellow)} minor signals):\n", 'YELLOW')
+            for r in sorted(yellow, key=lambda x: x.get('confidence', 0), reverse=True)[:10]:
+                self._append(f"  {r.get('task_id', '')[:12]:12s} {r.get('occupation', '')[:40]:40s} | "
+                             f"{r.get('reason', '')[:50]}\n", 'DIM')
+
+        # Attempter profiling & channel pattern summary
+        if len(results) >= 5:
+            try:
+                profiles = profile_attempters(results)
+                if profiles:
+                    self._append(f"\nAttempter profiles: {len(profiles)} attempters\n", 'HEADER')
+                    for p in profiles[:5]:
+                        self._append(f"  {p['attempter'][:20]:20s} submissions={p['n_submissions']} "
+                                     f"flag_rate={p['flag_rate']:.0f}%\n")
+            except Exception:
+                pass
+
+            try:
+                import io, sys
+                buf = io.StringIO()
+                old_stdout = sys.stdout
+                sys.stdout = buf
+                try:
+                    channel_pattern_summary(results)
+                finally:
+                    sys.stdout = old_stdout
+                summary_text = buf.getvalue()
+                if summary_text.strip():
+                    self._append(f"\n{summary_text}", 'DIM')
+            except Exception:
+                pass
+
+        # Financial impact
+        if len(results) >= 10:
+            try:
+                impact = financial_impact(results, cost_per_prompt=self._get_cost())
+                self._append(f"\nFinancial impact: waste={impact['waste_estimate']:.0f} "
+                             f"projected_annual={impact.get('projected_annual_waste', 0):.0f}\n", 'HEADER')
+            except Exception:
+                pass
+
+        # Collect baselines
+        collect_path = self.collect_var.get().strip()
+            collect_baselines(results, collect_path)
+            self._append(f"Baselines appended to {collect_path}\n", 'DIM')
+
+    def _run_similarity(self, results, text_map):
+        try:
+            instruction_text = None
+            instr_path = self.instructions_var.get().strip()
+            if instr_path and os.path.exists(instr_path):
+                with open(instr_path, 'r') as f:
+                    instruction_text = f.read()
+
+            sim_pairs = analyze_similarity(
+                results, text_map,
+                jaccard_threshold=self._get_sim_threshold(),
+                instruction_text=instruction_text,
+            )
+            if sim_pairs:
+                self._append(f"\nSimilarity: {len(sim_pairs)} pairs flagged\n", 'HEADER')
+                results[:] = apply_similarity_adjustments(results, sim_pairs, text_map)
+                upgrades = [r for r in results if 'similarity_upgrade' in r]
+                if upgrades:
+                    self._append(f"  {len(upgrades)} determinations upgraded by similarity\n", 'ALERT')
+
+            sim_store = self.sim_store_var.get().strip()
+            if sim_store:
+                cross_flags = cross_batch_similarity(results, text_map, sim_store)
+                if cross_flags:
+                    self._append(f"  Cross-batch similarity: {len(cross_flags)} matches\n", 'DIM')
+                save_similarity_store(results, text_map, sim_store)
+        except Exception:
+            pass
+
+    def _save_results_csv(self):
+        if not self._last_results:
+            messagebox.showinfo('No results', 'Run an analysis first.')
+            return
+        path = self.output_csv_var.get().strip()
+        if not path:
+            path = filedialog.asksaveasfilename(
+                defaultextension='.csv', filetypes=[('CSV', '*.csv')])
+        if not path:
+            return
+
+        import pandas as pd
+        flat = []
+        for r in self._last_results:
+            row = {k: v for k, v in r.items() if k != 'preamble_details'}
+            row['preamble_details'] = str(r.get('preamble_details', []))
+            flat.append(row)
+        pd.DataFrame(flat).to_csv(path, index=False)
+        self.status_var.set(f'Results saved to {path}')
+
+    def _save_html_reports(self):
+        if not self._last_results:
+            messagebox.showinfo('No results', 'Run an analysis first.')
+            return
+
+        report_path = self.html_report_var.get().strip()
+
+        # Single-text analysis: generate a report regardless of determination
+        if len(self._last_results) == 1:
+            if not report_path:
+                report_path = filedialog.asksaveasfilename(
+                    title='Save HTML Report',
+                    defaultextension='.html',
+                    filetypes=[('HTML files', '*.html')],
+                    initialfile='report.html',
+                )
+            if not report_path:
+                return
+            try:
+                r = self._last_results[0]
+                text = (
+                    self._last_text_map.get('_single')
+                    or self._last_text_map.get(r.get('task_id', ''), '')
+                )
+                generate_html_report(text, r, report_path)
+                self.status_var.set(f'HTML report written: {report_path}')
+            except Exception as e:
+                messagebox.showerror('Error', str(e))
+            return
+
+        # Batch analysis: report only flagged submissions
+        flagged = [r for r in self._last_results if r['determination'] in ('RED', 'AMBER', 'MIXED')]
+        if not flagged:
+            messagebox.showinfo('No flagged', 'No flagged submissions to report.')
+            return
+
+        if not report_path:
+            report_path = filedialog.asksaveasfilename(
+                title='Save HTML Report',
+                defaultextension='.html',
+                filetypes=[('HTML files', '*.html')],
+                initialfile='batch_report.html',
+            )
+        if not report_path:
+            return
+
+        try:
+            generate_batch_html_report(flagged, self._last_text_map, report_path)
+            self.status_var.set(f'HTML report written: {report_path} ({len(flagged)} submissions)')
+        except Exception as e:
+            messagebox.showerror('Error', str(e))
+
+    # ── Display ───────────────────────────────────────────────────────
+
+    def _display_result(self, result):
+        det = result.get('determination', 'GREEN')
+        conf = result.get('confidence', 0)
+        wc = result.get('word_count', 0)
+        reason = result.get('reason', '')
+
+        self._append(f"  {det}", det)
+        self._append(f" | conf={conf:.2f} | words={wc}\n")
+        self._append(f"  {reason}\n", 'DIM')
+
+        if not self.show_details_var.get():
+            self._append('\n')
+            return
+
+        # Calibrated confidence
+        cal_conf = result.get('calibrated_confidence')
+        if cal_conf is not None:
+            self._append(f"  Calibrated: {cal_conf:.2f}", 'HEADER')
+            stratum = result.get('calibration_stratum', '')
+            conformity = result.get('conformity_level', '')
+            if stratum or conformity:
+                self._append(f" ({stratum}/{conformity})", 'DIM')
+            self._append('\n')
+
+        # Channel details
+        cd = result.get('channel_details', {})
+        channels = cd.get('channels', {})
+        mode = cd.get('mode', '?')
+        self._append(f"  Mode: {mode}\n", 'HEADER')
+
+        if channels:
+            self._append("  Channels:\n", 'HEADER')
+            for ch_name, info in channels.items():
+                sev = info.get('severity', 'GREEN')
+                score = info.get('score', 0)
+                sufficient = info.get('data_sufficient', True)
+                disabled = info.get('disabled', False)
+                eligible = info.get('mode_eligible', True)
+
+                status_parts = []
+                if disabled:
+                    status_parts.append('DISABLED')
+                if not sufficient:
+                    status_parts.append('no-data')
+                if not eligible:
+                    status_parts.append('mode-ineligible')
+                status = f" [{', '.join(status_parts)}]" if status_parts else ''
+
+                self._append(f"    {ch_name:20s} ", None)
+                self._append(f"{sev:6s}", sev)
+                self._append(f" score={score:.2f}{status}\n")
+
+        # Verbose details
+        if self.verbose_var.get():
+            self._display_verbose(result)
+
+        # Attack types
+        attack_types = result.get('norm_attack_types', [])
+        if attack_types:
+            self._append(f"  Attacks neutralized: {', '.join(attack_types)}\n", 'ALERT')
+
+        # Binoculars
+        bino = result.get('binoculars_score', 0)
+        bino_det = result.get('binoculars_determination')
+        if bino and bino > 0:
+            self._append(f"  Binoculars: {bino:.4f}", None)
+            if bino_det:
+                self._append(f" ({bino_det})", bino_det)
+            self._append('\n')
+
+        # Shadow model
+        shadow = result.get('shadow_disagreement')
+        if shadow:
+            self._append(f"  Shadow: {shadow.get('interpretation', 'disagrees')}\n", 'ALERT')
+            self._append(f"    Rule={shadow.get('rule_determination', '?')}, "
+                         f"Model={shadow.get('shadow_ai_prob', 0):.1%} AI\n", 'DIM')
+
+        # Detection spans
+        spans = result.get('detection_spans', [])
+        if spans:
+            span_sources = Counter(s.get('source', '?') for s in spans)
+            span_str = ', '.join(f"{src}={ct}" for src, ct in span_sources.items())
+            self._append(f"  Detection spans: {len(spans)} ({span_str})\n", 'DIM')
+
+        self._append('\n')
+
+    def _display_verbose(self, r):
+        # ── Normalization & Language Gate ──────────────────────────────
+        self._append("  ── Normalization & Language Gate ──\n", 'HEADER')
+        self._append(
+            f"  NORM: obfuscation_delta={r.get('norm_obfuscation_delta', 0):.1%}"
+            f"  invisible={r.get('norm_invisible_chars', 0)}"
+            f"  homoglyphs={r.get('norm_homoglyphs', 0)}\n", 'DIM')
+        attacks = r.get('norm_attack_types', [])
+        if attacks:
+            self._append(f"  Attacks neutralized: {', '.join(attacks)}\n", 'ALERT')
+        self._append(
+            f"  GATE: {r.get('lang_support_level', 'SUPPORTED')}"
+            f"  fw_coverage={r.get('lang_fw_coverage', 0):.3f}"
+            f"  non_latin={r.get('lang_non_latin_ratio', 0):.3f}\n", 'DIM')
+
+        # ── Preamble ───────────────────────────────────────────────────
+        self._append("  ── Preamble ──\n", 'HEADER')
+        self._append(
+            f"  score={r.get('preamble_score', 0):.3f}"
+            f"  severity={r.get('preamble_severity', '-')}"
+            f"  matched_patterns={r.get('preamble_hits', 0)}\n", 'DIM')
+        preamble_details = r.get('preamble_details', [])
+        if preamble_details:
+            self._append(f"  patterns: {', '.join(str(p) for p in preamble_details[:_MAX_PREAMBLE_PATTERNS])}\n", 'DIM')
+
+        # ── Fingerprint ────────────────────────────────────────────────
+        self._append("  ── Fingerprint ──\n", 'HEADER')
+        self._append(
+            f"  score={r.get('fingerprint_score', 0):.3f}"
+            f"  hits={r.get('fingerprint_hits', 0)}\n", 'DIM')
+
+        # ── Prompt Signature ───────────────────────────────────────────
+        self._append("  ── Prompt Signature ──\n", 'HEADER')
+        self._append(
+            f"  composite={r.get('prompt_signature_composite', 0):.3f}"
+            f"  CFD={r.get('prompt_signature_cfd', 0):.4f}"
+            f"  MFSR={r.get('prompt_signature_mfsr', 0):.3f}"
+            f"  frames={r.get('prompt_signature_distinct_frames', 0)}\n", 'DIM')
+        self._append(
+            f"  framing={r.get('prompt_signature_framing', 0)}/3"
+            f"  cond_density={r.get('prompt_signature_conditional_density', 0):.4f}"
+            f"  meta_design={r.get('prompt_signature_meta_design', 0)}\n", 'DIM')
+        self._append(
+            f"  contractions={r.get('prompt_signature_contractions', 0)}"
+            f"  must_rate={r.get('prompt_signature_must_rate', 0):.4f}"
+            f"  numbered_criteria={r.get('prompt_signature_numbered_criteria', 0)}\n", 'DIM')
+
+        # ── Instruction Density (IDI) ──────────────────────────────────
+        self._append("  ── Instruction Density (IDI) ──\n", 'HEADER')
+        self._append(
+            f"  IDI={r.get('instruction_density_idi', 0):.2f}"
+            f"  imperatives={r.get('instruction_density_imperatives', 0)}"
+            f"  conditionals={r.get('instruction_density_conditionals', 0)}"
+            f"  binary_specs={r.get('instruction_density_binary_specs', 0)}"
+            f"  missing_refs={r.get('instruction_density_missing_refs', 0)}"
+            f"  flag_count={r.get('instruction_density_flag_count', 0)}\n", 'DIM')
+
+        # ── Voice Dissonance (VSD) ─────────────────────────────────────
+        self._append("  ── Voice Dissonance (VSD) ──\n", 'HEADER')
+        self._append(
+            f"  VSD={r.get('voice_dissonance_vsd', 0):.2f}"
+            f"  voice_score={r.get('voice_dissonance_voice_score', 0):.2f}"
+            f"  spec_score={r.get('voice_dissonance_spec_score', 0):.2f}"
+            f"  voice_gated={r.get('voice_dissonance_voice_gated', False)}\n", 'DIM')
+        self._append(
+            f"  casual_markers={r.get('voice_dissonance_casual_markers', 0)}"
+            f"  misspellings={r.get('voice_dissonance_misspellings', 0)}"
+            f"  camel_cols={r.get('voice_dissonance_camel_cols', 0)}"
+            f"  calcs={r.get('voice_dissonance_calcs', 0)}"
+            f"  hedges={r.get('voice_dissonance_hedges', 0)}"
+            f"  SSI={r.get('ssi_triggered', False)}\n", 'DIM')
+
+        # ── Pack Diagnostics ───────────────────────────────────────────
+        self._append("  ── Pack Diagnostics ──\n", 'HEADER')
+        self._append(
+            f"  constraint={r.get('pack_constraint_score', 0):.4f}"
+            f"  exec_spec={r.get('pack_exec_spec_score', 0):.4f}"
+            f"  schema={r.get('pack_schema_score', 0):.4f}"
+            f"  families={r.get('pack_active_families', 0)}"
+            f"  prompt_boost={r.get('pack_prompt_boost', 0):.4f}"
+            f"  idi_boost={r.get('pack_idi_boost', 0):.4f}\n", 'DIM')
+
+        # ── Stylometry ─────────────────────────────────────────────────
+        self._append("  ── Stylometry ──\n", 'HEADER')
+        self._append(
+            f"  fw_ratio={r.get('stylo_fw_ratio', 0):.4f}"
+            f"  sent_dispersion={r.get('stylo_sent_dispersion', 0):.4f}"
+            f"  TTR={r.get('stylo_ttr', 0):.4f}"
+            f"  avg_word_len={r.get('stylo_avg_word_len', 0):.3f}"
+            f"  short_word_ratio={r.get('stylo_short_word_ratio', 0):.4f}"
+            f"  mask_count={r.get('stylo_mask_count', 0)}\n", 'DIM')
+
+        # ── Windowing ──────────────────────────────────────────────────
+        self._append("  ── Windowing ──\n", 'HEADER')
+        self._append(
+            f"  max={r.get('window_max_score', 0):.4f}"
+            f"  mean={r.get('window_mean_score', 0):.4f}"
+            f"  var={r.get('window_variance', 0):.4f}"
+            f"  hot_span={r.get('window_hot_span', 0)}"
+            f"  n_windows={r.get('window_n_windows', 0)}"
+            f"  mixed={r.get('window_mixed_signal', False)}\n", 'DIM')
+        self._append(
+            f"  fw_traj_cv={r.get('window_fw_trajectory_cv', 0):.4f}"
+            f"  comp_traj_mean={r.get('window_comp_trajectory_mean', 0):.4f}"
+            f"  comp_traj_cv={r.get('window_comp_trajectory_cv', 0):.4f}"
+            f"  changepoint={r.get('window_changepoint') or 'none'}\n", 'DIM')
+
+        # ── Self-Similarity (NSSI) ─────────────────────────────────────
+        self._append("  ── Self-Similarity (NSSI) ──\n", 'HEADER')
+        self._append(
+            f"  NSSI={r.get('self_similarity_nssi_score', 0):.4f}"
+            f"  signals={r.get('self_similarity_nssi_signals', 0)}"
+            f"  det={r.get('self_similarity_determination') or 'n/a'}"
+            f"  conf={r.get('self_similarity_confidence', 0):.3f}\n", 'DIM')
+        self._append(
+            f"  formulaic={r.get('self_similarity_formulaic_density', 0):.4f}"
+            f"  power_adj={r.get('self_similarity_power_adj_density', 0):.4f}"
+            f"  demonstrative={r.get('self_similarity_demonstrative_density', 0):.4f}"
+            f"  transition={r.get('self_similarity_transition_density', 0):.4f}\n", 'DIM')
+        self._append(
+            f"  scare_quote={r.get('self_similarity_scare_quote_density', 0):.4f}"
+            f"  emdash={r.get('self_similarity_emdash_density', 0):.4f}"
+            f"  this_the_start={r.get('self_similarity_this_the_start_rate', 0):.4f}"
+            f"  section_depth={r.get('self_similarity_section_depth', 0)}\n", 'DIM')
+        self._append(
+            f"  sent_len_cv={r.get('self_similarity_sent_length_cv', 0):.4f}"
+            f"  comp_ratio={r.get('self_similarity_comp_ratio', 0):.4f}"
+            f"  hapax_ratio={r.get('self_similarity_hapax_ratio', 0):.4f}"
+            f"  hapax_count={r.get('self_similarity_hapax_count', 0)}"
+            f"  unique_words={r.get('self_similarity_unique_words', 0)}\n", 'DIM')
+        self._append(
+            f"  shuffled_comp={r.get('self_similarity_shuffled_comp_ratio', 0):.4f}"
+            f"  struct_delta={r.get('self_similarity_structural_compression_delta', 0):.4f}\n", 'DIM')
+
+        # ── Continuation / DNA-GPT ─────────────────────────────────────
+        self._append("  ── Continuation (DNA-GPT) ──\n", 'HEADER')
+        self._append(
+            f"  bscore={r.get('continuation_bscore', 0):.4f}"
+            f"  bscore_max={r.get('continuation_bscore_max', 0):.4f}"
+            f"  det={r.get('continuation_determination') or 'n/a'}"
+            f"  conf={r.get('continuation_confidence', 0):.3f}"
+            f"  n_samples={r.get('continuation_n_samples', 0)}"
+            f"  mode={r.get('continuation_mode') or 'n/a'}\n", 'DIM')
+        self._append(
+            f"  NCD={r.get('continuation_ncd', 0):.4f}"
+            f"  internal_overlap={r.get('continuation_internal_overlap', 0):.4f}"
+            f"  cond_surprisal={r.get('continuation_cond_surprisal', 0):.4f}"
+            f"  repeat4={r.get('continuation_repeat4', 0):.4f}"
+            f"  TTR={r.get('continuation_ttr', 0):.4f}\n", 'DIM')
+        self._append(
+            f"  composite={r.get('continuation_composite', 0):.4f}"
+            f"  comp_var={r.get('continuation_composite_variance', 0):.4f}"
+            f"  comp_stab={r.get('continuation_composite_stability', 0):.4f}"
+            f"  impr_rate={r.get('continuation_improvement_rate', 0):.4f}\n", 'DIM')
+        self._append(
+            f"  ncd_mat_mean={r.get('continuation_ncd_matrix_mean', 0):.4f}"
+            f"  ncd_mat_var={r.get('continuation_ncd_matrix_variance', 0):.4f}"
+            f"  ncd_mat_min={r.get('continuation_ncd_matrix_min', 0):.4f}\n", 'DIM')
+
+        # ── Perplexity ─────────────────────────────────────────────────
+        self._append("  ── Perplexity ──\n", 'HEADER')
+        self._append(
+            f"  ppl={r.get('perplexity_value', 0):.3f}"
+            f"  det={r.get('perplexity_determination') or 'n/a'}"
+            f"  conf={r.get('perplexity_confidence', 0):.3f}\n", 'DIM')
+        self._append(
+            f"  surp_var={r.get('surprisal_variance', 0):.4f}"
+            f"  surp_var_1st={r.get('surprisal_first_half_var', 0):.4f}"
+            f"  surp_var_2nd={r.get('surprisal_second_half_var', 0):.4f}"
+            f"  volatility_decay={r.get('volatility_decay_ratio', 1):.4f}\n", 'DIM')
+        self._append(
+            f"  binoculars={r.get('binoculars_score', 0):.4f}"
+            f"  bino_det={r.get('binoculars_determination') or 'n/a'}"
+            f"  comp_ratio={r.get('perplexity_comp_ratio', 0):.4f}"
+            f"  zlib_ppl={r.get('perplexity_zlib_normalized_ppl', 0):.4f}"
+            f"  comp_ppl={r.get('perplexity_comp_ppl_ratio', 0):.4f}\n", 'DIM')
+
+        # ── Surprisal Trajectory ───────────────────────────────────────
+        self._append("  ── Surprisal Trajectory ──\n", 'HEADER')
+        self._append(
+            f"  traj_cv={r.get('surprisal_trajectory_cv', 0):.4f}"
+            f"  var_of_var={r.get('surprisal_var_of_var', 0):.4f}"
+            f"  stationarity={r.get('surprisal_stationarity', 0):.4f}\n", 'DIM')
+
+        # ── TOCSIN ─────────────────────────────────────────────────────
+        self._append("  ── TOCSIN (Token Cohesiveness) ──\n", 'HEADER')
+        self._append(
+            f"  cohesiveness={r.get('tocsin_cohesiveness', 0):.4f}"
+            f"  std={r.get('tocsin_cohesiveness_std', 0):.4f}"
+            f"  det={r.get('tocsin_determination') or 'n/a'}"
+            f"  conf={r.get('tocsin_confidence', 0):.3f}\n", 'DIM')
+
+        # ── Semantic Resonance ─────────────────────────────────────────
+        self._append("  ── Semantic Resonance ──\n", 'HEADER')
+        self._append(
+            f"  ai_score={r.get('semantic_resonance_ai_score', 0):.4f}"
+            f"  human_score={r.get('semantic_resonance_human_score', 0):.4f}"
+            f"  ai_mean={r.get('semantic_resonance_ai_mean', 0):.4f}"
+            f"  human_mean={r.get('semantic_resonance_human_mean', 0):.4f}\n", 'DIM')
+        self._append(
+            f"  delta={r.get('semantic_resonance_delta', 0):.4f}"
+            f"  det={r.get('semantic_resonance_determination') or 'n/a'}"
+            f"  conf={r.get('semantic_resonance_confidence', 0):.3f}\n", 'DIM')
+
+    # ── Memory & Learning Actions ─────────────────────────────────────
+
+    def _memory_summary(self):
+        if not self._ensure_memory():
+            return
+        import io
+        import sys
+        buf = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = buf
+        try:
+            self._memory_store.print_summary()
+        finally:
+            sys.stdout = old_stdout
+        self._append(buf.getvalue())
+
+    def _record_confirmation(self):
+        if not self._ensure_memory():
+            return
+        task_id = self.confirm_task_var.get().strip()
+        label = self.confirm_label_var.get()
+        reviewer = self.confirm_reviewer_var.get().strip()
+        if not task_id or not reviewer:
+            messagebox.showinfo('Missing fields', 'Task ID and Reviewer are required.')
+            return
+        self._memory_store.record_confirmation(task_id, label, verified_by=reviewer)
+        self.status_var.set(f'Confirmed: {task_id} = {label} by {reviewer}')
+
+    def _show_attempter_history(self):
+        if not self._ensure_memory():
+            return
+        name = self.attempter_history_var.get().strip()
+        if not name:
+            self.root.after(0, lambda: messagebox.showinfo('Required', 'Enter an attempter name.'))
+            return
+        import io
+        import sys
+        buf = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = buf
+        try:
+            self._memory_store.print_attempter_history(name)
+        finally:
+            sys.stdout = old_stdout
+        self._append(buf.getvalue())
+
+    def _rebuild_shadow(self):
+        if not self._ensure_memory():
+            return
+        pkg = self._memory_store.rebuild_shadow_model()
+        if pkg:
+            self._append(f"Shadow model rebuilt: AUC={pkg['cv_auc']:.3f}\n", 'HEADER')
+        else:
+            self._append("Shadow model: insufficient labeled data\n", 'ALERT')
+
+    def _rebuild_centroids(self):
+        if not self._ensure_memory():
+            return
+        corpus = self.labeled_corpus_var.get().strip()
+        if not corpus:
+            self.root.after(0, lambda: messagebox.showinfo('Required', 'Set a labeled corpus JSONL path.'))
+            return
+        result = self._memory_store.rebuild_semantic_centroids(corpus)
+        if result:
+            self._append(f"Centroids rebuilt: separation={result['separation']:.4f}\n", 'HEADER')
+        else:
+            self._append("Centroids: insufficient labeled text\n", 'ALERT')
+
+    def _discover_lexicon(self):
+        if not self._ensure_memory():
+            return
+        corpus = self.labeled_corpus_var.get().strip()
+        if not corpus:
+            self.root.after(0, lambda: messagebox.showinfo('Required', 'Set a labeled corpus JSONL path.'))
+            return
+        candidates = self._memory_store.discover_lexicon_candidates(corpus)
+        n_new = sum(1 for c in candidates
+                    if not c.get('already_in_fingerprints') and not c.get('already_in_packs'))
+        self._append(f"Lexicon discovery: {len(candidates)} candidates ({n_new} new)\n", 'HEADER')
+
+    def _rebuild_all(self):
+        if not self._ensure_memory():
+            return
+        self._append("Rebuilding all learned artifacts...\n", 'HEADER')
+
+        cal = self._memory_store.rebuild_calibration()
+        if cal:
+            self._append(f"  Calibration: {cal['n_calibration']} samples\n")
+            self._cal_table = cal
+        else:
+            self._append("  Calibration: insufficient data\n", 'ALERT')
+
+        shadow = self._memory_store.rebuild_shadow_model()
+        if shadow:
+            self._append(f"  Shadow model: AUC={shadow['cv_auc']:.3f}\n")
+        else:
+            self._append("  Shadow model: insufficient data\n", 'ALERT')
+
+        corpus = self.labeled_corpus_var.get().strip()
+        if corpus:
+            centroids = self._memory_store.rebuild_semantic_centroids(corpus)
+            if centroids:
+                self._append(f"  Centroids: separation={centroids['separation']:.4f}\n")
+            else:
+                self._append("  Centroids: insufficient text\n", 'ALERT')
+            candidates = self._memory_store.discover_lexicon_candidates(corpus)
+            n_new = sum(1 for c in candidates
+                        if not c.get('already_in_fingerprints') and not c.get('already_in_packs'))
+            self._append(f"  Lexicon: {len(candidates)} candidates ({n_new} new)\n")
+        else:
+            self._append("  Centroids/Lexicon: skipped (no labeled corpus)\n", 'DIM')
+
+        self._append("Rebuild complete.\n", 'HEADER')
+
+    # ── Calibration & Baselines Actions ───────────────────────────────
+
+    def _build_calibration(self):
+        jsonl_path = self.calibrate_var.get().strip()
+        if not jsonl_path or not os.path.exists(jsonl_path):
+            self.root.after(0, lambda: messagebox.showinfo('Required', 'Select a valid baselines JSONL file.'))
+            return
+        cal = calibrate_from_baselines(jsonl_path)
+        if cal is None:
+            self._append("Calibration failed: need >= 20 labeled human samples\n", 'ALERT')
+            return
+        cal_path = self.cal_table_var.get().strip()
+        if not cal_path:
+            cal_path = jsonl_path.replace('.jsonl', '_calibration.json')
+            self.cal_table_var.set(cal_path)
+        save_calibration(cal, cal_path)
+        self._cal_table = cal
+        self._append(f"Calibration built: {cal['n_calibration']} records, "
+                     f"{len(cal.get('strata', {}))} strata\n", 'HEADER')
+        self._append(f"  Global quantiles: {cal['global']}\n", 'DIM')
+        self._append(f"  Saved to: {cal_path}\n", 'DIM')
+
+    def _rebuild_calibration(self):
+        if not self._ensure_memory():
+            return
+        cal = self._memory_store.rebuild_calibration()
+        if cal:
+            self._cal_table = cal
+            self._append(f"Calibration rebuilt from memory: {cal['n_calibration']} samples\n", 'HEADER')
+        else:
+            self._append("Calibration rebuild: insufficient data\n", 'ALERT')
+
+    def _analyze_baselines(self):
+        jsonl_path = self.baselines_jsonl_var.get().strip()
+        if not jsonl_path or not os.path.exists(jsonl_path):
+            self.root.after(0, lambda: messagebox.showinfo('Required', 'Select a valid baselines JSONL file.'))
+            return
+        csv_path = self.baselines_csv_var.get().strip() or None
+
+        import io
+        import sys
+        buf = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = buf
+        try:
+            analyze_baselines(jsonl_path, output_csv=csv_path)
+        finally:
+            sys.stdout = old_stdout
+        self._append(buf.getvalue())
+
+
+    # ── Tab 5: Reports ─────────────────────────────────────────────────
+
+    def _build_reports_tab(self, notebook):
+        tab = ttk.Frame(notebook, padding=8)
+        notebook.add(tab, text='  Reports  ')
+
+        actions = ttk.Frame(tab)
+        actions.pack(fill=tk.X, pady=(0, 8))
+        ttk.Button(actions, text='Refresh Reports',
+                   command=self._refresh_reports).pack(side=tk.LEFT, padx=4)
+        ttk.Button(actions, text='Export Baselines',
+                   command=self._export_baselines).pack(side=tk.LEFT, padx=4)
+
+        report_frame = ttk.Frame(tab)
+        report_frame.pack(fill=tk.BOTH, expand=True)
+        self.report_output = tk.Text(report_frame, wrap=tk.WORD,
+                                     font=('Consolas', 10))
+        scrollbar = ttk.Scrollbar(report_frame, orient=tk.VERTICAL,
+                                  command=self.report_output.yview)
+        self.report_output.configure(yscrollcommand=scrollbar.set)
+        self.report_output.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+    def _report_append(self, text):
+        self.root.after(0, lambda: (
+            self.report_output.insert(tk.END, text),
+            self.report_output.see(tk.END)))
+
+    def _refresh_reports(self):
+        self.report_output.delete('1.0', tk.END)
+        if not self._last_results:
+            self._report_append('No results available. Run a batch analysis first.\n')
+            return
+
+        results = self._last_results
+        counts = Counter(r['determination'] for r in results)
+        self._report_append(f"{'=' * 60}\n")
+        self._report_append(f"  BATCH SUMMARY (n={len(results)})\n")
+        self._report_append(f"{'=' * 60}\n")
+        for det in ['RED', 'AMBER', 'MIXED', 'YELLOW', 'REVIEW', 'GREEN']:
+            ct = counts.get(det, 0)
+            if ct > 0:
+                pct = ct / len(results) * 100
+                self._report_append(f"  {det:>8}: {ct:>4} ({pct:.1f}%)\n")
+
+        # Attempter profiling
+        if len(results) >= 5:
+            try:
+                profiles = profile_attempters(results)
+                if profiles:
+                    self._report_append(f"\n{'=' * 60}\n")
+                    self._report_append("  ATTEMPTER RISK PROFILES\n")
+                    self._report_append(f"{'=' * 60}\n")
+                    for p in profiles[:20]:
+                        self._report_append(
+                            f"  {p['attempter'][:20]:20s} "
+                            f"n={p['n_submissions']:>3} "
+                            f"flag={p['flag_rate']:.0f}% "
+                            f"conf={p.get('mean_confidence', 0):.2f}\n")
+            except Exception:
+                pass
+
+        # Channel pattern summary
+        flagged = [r for r in results
+                   if r['determination'] in ('RED', 'AMBER', 'MIXED')]
+        if flagged:
+            self._report_append(f"\n{'=' * 60}\n")
+            self._report_append("  CHANNEL PATTERNS (flagged submissions)\n")
+            self._report_append(f"{'=' * 60}\n")
+            channel_counts = Counter()
+            for r in flagged:
+                cd = r.get('channel_details', {}).get('channels', {})
+                for ch_name, info in cd.items():
+                    if info.get('severity') not in ('GREEN', None):
+                        channel_counts[ch_name] += 1
+            for ch, ct in channel_counts.most_common():
+                self._report_append(f"  {ch:20s}: {ct} flags\n")
+
+        # Financial impact
+        if len(results) >= 10:
+            try:
+                impact = financial_impact(results, cost_per_prompt=self._get_cost())
+                self._report_append(f"\n{'=' * 60}\n")
+                self._report_append("  FINANCIAL IMPACT ESTIMATE\n")
+                self._report_append(f"{'=' * 60}\n")
+                self._report_append(
+                    f"  Total submissions:     {impact['total_submissions']}\n")
+                self._report_append(
+                    f"  Flag rate:             {impact['flag_rate']:.1%}\n")
+                self._report_append(
+                    f"  Waste estimate:        ${impact['waste_estimate']:,.0f}\n")
+                self._report_append(
+                    f"  Projected annual:      ${impact.get('projected_annual_waste', 0):,.0f}\n")
+            except Exception:
+                pass
+
+    def _export_baselines(self):
+        if not self._last_results:
+            messagebox.showinfo('Export', 'No results to export. Run analysis first.')
+            return
+        path = filedialog.asksaveasfilename(
+            defaultextension='.jsonl',
+            filetypes=[('JSONL', '*.jsonl'), ('All', '*.*')])
+        if not path:
+            return
+        try:
+            collect_baselines(self._last_results, path)
+            messagebox.showinfo('Baselines', f'Results appended to {path}')
+        except Exception as e:
+            messagebox.showerror('Baselines Error', str(e))
 
 
 def launch_gui():
@@ -5281,6 +7606,12 @@ def print_result(r, verbose=False):
         cal_str += f"  [{r.get('calibration_stratum', '?')}]"
         print(cal_str)
 
+    shadow = r.get('shadow_disagreement')
+    if shadow:
+        print(f"     \u26a0\ufe0f SHADOW: {shadow['interpretation']}")
+        print(f"         Rule={shadow['rule_determination']}, "
+              f"Model={shadow['shadow_ai_prob']:.1%} AI")
+
     if verbose or r['determination'] in ('RED', 'AMBER'):
         delta = r.get('norm_obfuscation_delta', 0)
         lang = r.get('lang_support_level', 'SUPPORTED')
@@ -5319,6 +7650,12 @@ def print_result(r, verbose=False):
             print(f"     DNA-GPT:          BScore={bscore:.4f}  (max={r.get('continuation_bscore_max', 0):.4f}, "
                   f"samples={r.get('continuation_n_samples', 0)}, det={det_str})")
 
+        shadow = r.get('shadow_disagreement')
+        if shadow:
+            print(f"     \u26a0\ufe0f SHADOW: {shadow['interpretation']}")
+            print(f"         Rule={shadow['rule_determination']}, "
+                  f"Model={shadow['shadow_ai_prob']:.1%} AI")
+
         cd = r.get('channel_details', {})
         if cd.get('channels'):
             print(f"     -- Channels --")
@@ -5334,7 +7671,12 @@ def print_result(r, verbose=False):
 
 
 def _sort_for_labeling(results):
-    """Sort results to prioritize cases where human labels are most valuable."""
+    """Sort results to prioritize cases where human labels are most valuable.
+
+    Order: YELLOW first (most ambiguous), then AMBER, then MIXED,
+    then RED (confirm true positives), then GREEN (confirm true negatives).
+    Within each tier, lower confidence first (harder calls first while fresh).
+    """
     tier_order = {'YELLOW': 0, 'MIXED': 1, 'AMBER': 2, 'RED': 3, 'REVIEW': 4, 'GREEN': 5}
     return sorted(results, key=lambda r: (
         tier_order.get(r.get('determination', 'GREEN'), 6),
@@ -5358,6 +7700,7 @@ def _format_labeling_display(r, text_map=None, show_text_chars=300):
     lines.append(f"  Words:     {r.get('word_count', 0)}")
     lines.append(f"  Reason:    {r.get('reason', '')[:120]}")
 
+    # Key signals summary
     lines.append(f"\n  --- Key Signals ---")
     lines.append(f"  Preamble:    {r.get('preamble_score', 0):.2f} ({r.get('preamble_severity', 'NONE')})")
     lines.append(f"  Prompt Sig:  {r.get('prompt_signature_composite', 0):.2f} "
@@ -5380,6 +7723,7 @@ def _format_labeling_display(r, text_map=None, show_text_chars=300):
             if sev != 'GREEN':
                 lines.append(f"  {ch_name:20s} {sev:6s}  {info.get('explanation', '')[:60]}")
 
+    # Text preview
     if text_map and r.get('task_id') in text_map:
         text = text_map[r['task_id']]
         preview = text[:show_text_chars]
@@ -5395,7 +7739,25 @@ def _format_labeling_display(r, text_map=None, show_text_chars=300):
 def interactive_label(results, text_map=None, output_path=None, reviewer='',
                       store=None, skip_green=False, skip_red=False,
                       max_labels=None):
-    """Interactive labeling session for calibration data collection."""
+    """Interactive labeling session for calibration data collection.
+
+    Presents each result to the reviewer and collects ground truth labels.
+    Saves labels to JSONL for calibration and optionally to a MemoryStore.
+
+    Args:
+        results: List of pipeline result dicts.
+        text_map: Optional dict mapping task_id -> original text.
+        output_path: JSONL path to append labeled records. If None, uses
+                     'beet_labels_{date}.jsonl'.
+        reviewer: Reviewer identifier string.
+        store: Optional MemoryStore for record_confirmation integration.
+        skip_green: Skip GREEN determinations (assume correct).
+        skip_red: Skip RED determinations (assume correct).
+        max_labels: Stop after this many labels (None = label all).
+
+    Returns:
+        dict with labeling session statistics.
+    """
     if output_path is None:
         output_path = f"beet_labels_{datetime.now().strftime('%Y%m%d_%H%M')}.jsonl"
 
@@ -5418,10 +7780,10 @@ def interactive_label(results, text_map=None, output_path=None, reviewer='',
         'labeled_human': 0,
         'labeled_unsure': 0,
         'skipped': 0,
-        'true_positives': 0,
-        'false_positives': 0,
-        'true_negatives': 0,
-        'false_negatives': 0,
+        'true_positives': 0,   # pipeline flagged + human says AI
+        'false_positives': 0,  # pipeline flagged + human says human
+        'true_negatives': 0,   # pipeline clean + human says human
+        'false_negatives': 0,  # pipeline clean + human says AI
         'reviewer': reviewer,
     }
 
@@ -5450,6 +7812,7 @@ def interactive_label(results, text_map=None, output_path=None, reviewer='',
             stats['skipped'] += 1
             continue
 
+        # Parse input: first char is label, rest is notes
         label_char = raw[0].lower()
         notes = raw[1:].strip() if len(raw) > 1 else ''
 
@@ -5473,6 +7836,7 @@ def interactive_label(results, text_map=None, output_path=None, reviewer='',
             stats['skipped'] += 1
             continue
 
+        # Confusion matrix tracking
         pipeline_flagged = r.get('determination') in ('RED', 'AMBER', 'MIXED')
         if ground_truth == 'ai' and pipeline_flagged:
             stats['true_positives'] += 1
@@ -5483,6 +7847,7 @@ def interactive_label(results, text_map=None, output_path=None, reviewer='',
         elif ground_truth == 'ai' and not pipeline_flagged:
             stats['false_negatives'] += 1
 
+        # Build labeled record
         record = {
             'task_id': r.get('task_id', ''),
             'attempter': r.get('attempter', ''),
@@ -5493,13 +7858,15 @@ def interactive_label(results, text_map=None, output_path=None, reviewer='',
             'reviewer': reviewer,
             'notes': notes,
             'timestamp': datetime.now().isoformat(),
-            'pipeline_version': 'v0.61',
+            'pipeline_version': 'v0.66',
+            # Carry forward all scores for calibration
             'confidence': r.get('confidence', 0),
             'word_count': r.get('word_count', 0),
             'domain': r.get('domain', ''),
             'mode': r.get('mode', ''),
         }
 
+        # Length bin for stratified calibration
         wc = r.get('word_count', 0)
         if wc < 100:
             record['length_bin'] = 'short'
@@ -5512,9 +7879,11 @@ def interactive_label(results, text_map=None, output_path=None, reviewer='',
 
         labeled_records.append(record)
 
+        # Write to JSONL immediately (crash-safe)
         with open(output_path, 'a') as f:
             f.write(json.dumps(record) + '\n')
 
+        # Write to memory store if available
         if store and ground_truth in ('ai', 'human'):
             store.record_confirmation(
                 r.get('task_id', ''), ground_truth,
@@ -5523,6 +7892,7 @@ def interactive_label(results, text_map=None, output_path=None, reviewer='',
 
         print(f"  Recorded: {ground_truth}" + (f" ({notes})" if notes else ""))
 
+    # Session summary
     _print_labeling_summary(stats, output_path)
 
     return stats
@@ -5567,6 +7937,7 @@ def _print_labeling_summary(stats, output_path):
             fpr = fp / max(fp + tn, 1)
             print(f"  FPR:        {fpr:.1%}")
 
+    # Calibration readiness
     human_count = stats['labeled_human']
     print(f"\n  --- Calibration Status ---")
     if human_count >= 20:
@@ -5587,6 +7958,8 @@ def _print_labeling_summary(stats, output_path):
 
 def calibration_report(jsonl_path, cal_table=None, output_csv=None):
     """Generate a calibration diagnostics report from labeled data."""
+    import statistics
+
     records = []
     with open(jsonl_path, 'r') as f:
         for line in f:
@@ -5773,6 +8146,7 @@ def calibration_report(jsonl_path, cal_table=None, output_csv=None):
     if false_negatives and len(false_negatives) / max(n_ai, 1) > 0.20:
         print(f"  [!] FNR > 20% — review missed cases for new signal patterns")
 
+    # Output CSV if requested
     if output_csv:
         pd.DataFrame(records).to_csv(output_csv, index=False)
         print(f"\n  Labeled data exported to: {output_csv}")
@@ -5788,9 +8162,10 @@ def calibration_report(jsonl_path, cal_table=None, output_csv=None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='LLM Detection Pipeline v0.61')
+    parser = argparse.ArgumentParser(description='LLM Detection Pipeline v0.66')
     parser.add_argument('input', nargs='?', help='Input file (.xlsx, .csv, or .pdf)')
     parser.add_argument('--gui', action='store_true', help='Launch desktop GUI mode')
+    parser.add_argument('--web', action='store_true', help='Launch Streamlit web dashboard')
     parser.add_argument('--text', help='Analyze a single text string')
     parser.add_argument('--sheet', help='Sheet name for xlsx files')
     parser.add_argument('--prompt-col', default='prompt', help='Column name containing prompts')
@@ -5809,6 +8184,9 @@ def main():
                         help='Write baseline percentile tables to CSV (use with --analyze-baselines)')
     parser.add_argument('--no-layer3', action='store_true',
                         help='Skip Layer 3 entirely (NSSI + DNA-GPT)')
+    parser.add_argument('--disable-channel', metavar='CHANNELS',
+                        help='Comma-separated channel names to disable for ablation: '
+                             'prompt_structure, stylometry, continuation, windowing')
     parser.add_argument('--api-key', metavar='KEY',
                         help='API key for DNA-GPT continuation analysis. Falls back to '
                              'ANTHROPIC_API_KEY or OPENAI_API_KEY env var.')
@@ -5816,8 +8194,18 @@ def main():
                         help='LLM provider for DNA-GPT (default: anthropic)')
     parser.add_argument('--dna-model', metavar='MODEL',
                         help='Model name for DNA-GPT (default: auto per provider)')
+    parser.add_argument('--ppl-model', metavar='MODEL',
+                        help='HuggingFace model for perplexity scoring '
+                             '(default: Qwen/Qwen2.5-0.5B). '
+                             'Options: Qwen/Qwen2.5-0.5B, HuggingFaceTB/SmolLM2-360M, '
+                             'HuggingFaceTB/SmolLM2-135M, distilgpt2, gpt2')
     parser.add_argument('--dna-samples', type=int, default=3,
                         help='Number of regeneration samples for DNA-GPT (default: 3)')
+    parser.add_argument('--workers', type=int, default=1,
+                        help='Number of parallel workers for batch processing (default: 1)')
+    parser.add_argument('--batch', action='store_true',
+                        help='Use Anthropic Message Batches API for continuation analysis '
+                             '(50%% cheaper, processes all submissions in one server-side batch)')
     parser.add_argument('--mode', default='auto', choices=['task_prompt', 'generic_aigt', 'auto'],
                         help='Detection mode: task_prompt (prompt-structure primary), '
                              'generic_aigt (all channels), auto (heuristic). Default: auto')
@@ -5825,6 +8213,34 @@ def main():
                         help='Build calibration table from labeled baseline JSONL and save to --cal-table')
     parser.add_argument('--cal-table', metavar='JSON',
                         help='Path to calibration table JSON (load for scoring, or save target for --calibrate)')
+    parser.add_argument('--cost-per-prompt', type=float, default=400.0,
+                        help='Cost per prompt for financial impact estimate (default: $400)')
+    parser.add_argument('--html-report', metavar='FILE',
+                        help='Generate a consolidated HTML report for flagged submissions')
+    parser.add_argument('--similarity-store', metavar='JSONL',
+                        help='Path to persistent similarity fingerprint store (cross-batch)')
+    parser.add_argument('--instructions', metavar='FILE',
+                        help='Path to shared project instructions file (for similarity baseline)')
+    parser.add_argument('--memory', metavar='DIR', default=None,
+                        help='Path to BEET memory store directory (enables cross-batch memory)')
+    parser.add_argument('--confirm', nargs=3, metavar=('TASK_ID', 'LABEL', 'REVIEWER'),
+                        help='Record a ground truth confirmation: --confirm task_001 ai reviewer_A')
+    parser.add_argument('--attempter-history', metavar='NAME',
+                        help='Show historical profile for an attempter')
+    parser.add_argument('--memory-summary', action='store_true',
+                        help='Print memory store summary')
+    parser.add_argument('--rebuild-calibration', action='store_true',
+                        help='Rebuild calibration table from confirmed labels in memory')
+    parser.add_argument('--rebuild-shadow', action='store_true',
+                        help='Rebuild shadow model from confirmed labels in memory')
+    parser.add_argument('--discover-lexicon', action='store_true',
+                        help='Run log-odds lexicon discovery on confirmed labels')
+    parser.add_argument('--rebuild-centroids', action='store_true',
+                        help='Rebuild semantic centroids from confirmed labels')
+    parser.add_argument('--rebuild-all', action='store_true',
+                        help='Rebuild calibration, shadow model, and centroids')
+    parser.add_argument('--labeled-corpus', metavar='JSONL',
+                        help='Path to JSONL with raw text for lexicon discovery and centroids')
     parser.add_argument('--label', action='store_true',
                         help='Interactive labeling mode: review results and assign '
                              'ground truth labels for calibration')
@@ -5842,10 +8258,159 @@ def main():
                         help='Generate calibration diagnostics report from labeled JSONL')
     parser.add_argument('--calibration-report-csv', metavar='PATH',
                         help='Export labeled data to CSV (use with --calibration-report)')
+    # Column mapping
+    parser.add_argument('--id-col', default='task_id', metavar='COL',
+                        help='Column name or letter (A–Z) for task ID (default: task_id)')
+    parser.add_argument('--occ-col', default='occupation', metavar='COL',
+                        help='Column name or letter (A–Z) for occupation/area (default: occupation)')
+    parser.add_argument('--attempter-col', default='attempter_name', metavar='COL',
+                        help='Column name or letter (A–Z) for attempter/author (default: attempter_name)')
+    parser.add_argument('--stage-col', default='pipeline_stage_name', metavar='COL',
+                        help='Column name or letter (A–Z) for pipeline stage (default: pipeline_stage_name)')
+    # Output directory
+    parser.add_argument('--run-dir', metavar='DIR',
+                        help='Root directory for this analysis run. A timestamped subfolder '
+                             '(run_YYYYMMDD_HHMMSS) is created automatically and all outputs '
+                             '(results CSV, HTML report, memory store, similarity store, '
+                             'labels) are saved there. Individual path flags override the '
+                             'auto-generated paths.')
     args = parser.parse_args()
 
     if args.gui:
         launch_gui()
+        return
+
+    if args.web:
+        main_dashboard()
+        return
+
+    # ── Run-directory: create timestamped folder and set default output paths ─
+    if args.run_dir:
+        run_dir = Path(args.run_dir) / datetime.now().strftime('run_%Y%m%d_%H%M%S')
+        run_dir.mkdir(parents=True, exist_ok=True)
+        print(f"  Run directory: {run_dir}")
+        if not args.output:
+            args.output = str(run_dir / 'results.csv')
+        if not args.html_report:
+            args.html_report = str(run_dir / 'report.html')
+        if not args.memory:
+            args.memory = str(run_dir / 'memory')
+        if not args.similarity_store:
+            args.similarity_store = str(run_dir / 'similarity.jsonl')
+        if not getattr(args, 'label_output', None):
+            args.label_output = str(run_dir / 'labels.jsonl')
+
+    # Memory store setup
+    store = None
+    if args.memory:
+        store = MemoryStore(args.memory)
+
+    # Memory-only commands (early exit)
+    if args.memory_summary:
+        if store:
+            store.print_summary()
+        else:
+            print("ERROR: --memory-summary requires --memory DIR")
+        return
+
+    if args.confirm:
+        if store:
+            task_id, label, reviewer = args.confirm
+            if label not in ('ai', 'human'):
+                print(f"ERROR: label must be 'ai' or 'human', got '{label}'")
+                return
+            store.record_confirmation(task_id, label, verified_by=reviewer)
+        else:
+            print("ERROR: --confirm requires --memory DIR")
+        return
+
+    if args.attempter_history:
+        if store:
+            store.print_attempter_history(args.attempter_history)
+        else:
+            print("ERROR: --attempter-history requires --memory DIR")
+        return
+
+    if args.rebuild_calibration:
+        if store:
+            cal = store.rebuild_calibration()
+            if cal:
+                print(f"  Calibration rebuilt: {cal['n_calibration']} labeled samples")
+        else:
+            print("ERROR: --rebuild-calibration requires --memory DIR")
+        return
+
+    if args.rebuild_shadow:
+        if store:
+            shadow = store.rebuild_shadow_model()
+            if shadow:
+                print(f"  Shadow model built: AUC={shadow['cv_auc']:.3f}")
+        else:
+            print("ERROR: --rebuild-shadow requires --memory DIR")
+        return
+
+    if args.discover_lexicon:
+        if not store:
+            print("ERROR: --discover-lexicon requires --memory DIR")
+            return
+        if not args.labeled_corpus:
+            print("ERROR: --discover-lexicon requires --labeled-corpus")
+            return
+        store.discover_lexicon_candidates(args.labeled_corpus)
+        return
+
+    if args.rebuild_centroids:
+        if not store:
+            print("ERROR: --rebuild-centroids requires --memory DIR")
+            return
+        if not args.labeled_corpus:
+            print("ERROR: --rebuild-centroids requires --labeled-corpus")
+            return
+        result = store.rebuild_semantic_centroids(args.labeled_corpus)
+        if result:
+            print(f"  Centroid separation: {result['separation']:.4f}")
+        return
+
+    if args.rebuild_all:
+        if not store:
+            print("ERROR: --rebuild-all requires --memory DIR")
+            return
+
+        print(f"\n{'='*70}")
+        print(f"  REBUILDING ALL LEARNED ARTIFACTS")
+        print(f"{'='*70}")
+
+        cal = store.rebuild_calibration()
+        if cal:
+            print(f"  + Calibration: {cal['n_calibration']} samples")
+        else:
+            print(f"  - Calibration: insufficient data")
+
+        shadow = store.rebuild_shadow_model()
+        if shadow:
+            print(f"  + Shadow model: AUC={shadow['cv_auc']:.3f}")
+        else:
+            print(f"  - Shadow model: insufficient labeled data")
+
+        if args.labeled_corpus:
+            centroids = store.rebuild_semantic_centroids(args.labeled_corpus)
+            if centroids:
+                print(f"  + Centroids: separation={centroids['separation']:.4f}")
+            else:
+                print(f"  - Centroids: insufficient labeled text")
+        else:
+            print(f"  - Centroids: skipped (no --labeled-corpus)")
+
+        if args.labeled_corpus:
+            candidates = store.discover_lexicon_candidates(args.labeled_corpus)
+            n_new = sum(1 for c in candidates
+                        if not c.get('already_in_fingerprints')
+                        and not c.get('already_in_packs'))
+            print(f"  + Lexicon: {len(candidates)} candidates ({n_new} new)")
+        else:
+            print(f"  - Lexicon: skipped (no --labeled-corpus)")
+
+        print(f"\n{'='*70}")
         return
 
     if not args.api_key:
@@ -5892,12 +8457,25 @@ def main():
 
     run_l3 = not args.no_layer3
 
+    disabled_channels = set()
+    if args.disable_channel:
+        disabled_channels = {c.strip() for c in args.disable_channel.split(',')}
+        valid = {'prompt_structure', 'stylometry', 'continuation', 'windowing'}
+        invalid = disabled_channels - valid
+        if invalid:
+            print(f"WARNING: Unknown channel names: {invalid}. Valid: {valid}")
+            disabled_channels &= valid
+        if disabled_channels:
+            print(f"  Channels disabled (ablation): {', '.join(sorted(disabled_channels))}")
+
     if args.text:
         result = analyze_prompt(
             args.text, run_l3=run_l3,
             api_key=args.api_key, dna_provider=args.provider,
             dna_model=args.dna_model, dna_samples=args.dna_samples,
             mode=args.mode, cal_table=cal_table,
+            disabled_channels=disabled_channels,
+            ppl_model=getattr(args, 'ppl_model', None),
         )
         print_result(result, verbose=True)
         return
@@ -5911,9 +8489,23 @@ def main():
 
     ext = os.path.splitext(args.input)[1].lower()
     if ext in ('.xlsx', '.xlsm'):
-        tasks = load_xlsx(args.input, sheet=args.sheet, prompt_col=args.prompt_col)
+        tasks = load_xlsx(
+            args.input, sheet=args.sheet,
+            prompt_col=args.prompt_col,
+            id_col=args.id_col,
+            occ_col=args.occ_col,
+            attempter_col=args.attempter_col,
+            stage_col=args.stage_col,
+        )
     elif ext == '.csv':
-        tasks = load_csv(args.input, prompt_col=args.prompt_col)
+        tasks = load_csv(
+            args.input,
+            prompt_col=args.prompt_col,
+            id_col=args.id_col,
+            occ_col=args.occ_col,
+            attempter_col=args.attempter_col,
+            stage_col=args.stage_col,
+        )
     elif ext == '.pdf':
         tasks = load_pdf(args.input)
     else:
@@ -5929,35 +8521,82 @@ def main():
         print(f"Filtered to {len(tasks)} tasks matching attempter '{args.attempter}'")
 
     layer3_label = " + L3" if run_l3 else ""
-    dna_label = " + DNA-GPT" if args.api_key else ""
-    print(f"Processing {len(tasks)} tasks through pipeline v0.61{layer3_label}{dna_label}...")
+    use_batch = getattr(args, 'batch', False) and args.api_key and args.provider == 'anthropic'
+    dna_label = " + DNA-GPT (batch)" if use_batch else (" + DNA-GPT" if args.api_key else "")
+    print(f"Processing {len(tasks)} tasks through pipeline v0.66{layer3_label}{dna_label}...")
 
     results = []
     text_map = {}
+
+    # Build text_map upfront (needed regardless of parallelism)
     for i, task in enumerate(tasks):
-        r = analyze_prompt(
+        tid = task.get('task_id', f'_row{i}')
+        text_map[tid] = task['prompt']
+
+    # ── Batch API pre-computation (Anthropic only) ─────────────────
+    batch_cont_results = {}
+    if use_batch and run_l3:
+        # Normalize texts the same way the pipeline does
+        norm_texts = []
+        norm_ids = []
+        for task in tasks:
+            nt, _ = normalize_text(task['prompt'])
+            norm_texts.append(nt)
+            norm_ids.append(task.get('task_id', ''))
+        batch_cont_results = run_continuation_batch(
+            norm_texts, norm_ids,
+            api_key=args.api_key,
+            model=args.dna_model,
+            n_samples=args.dna_samples,
+            progress_fn=lambda s: print(f"  {s}"),
+        )
+        print(f"  Batch complete: {len(batch_cont_results)} continuation results received.")
+
+    n_workers = max(1, getattr(args, 'workers', 1))
+
+    def _analyze_task(idx_task):
+        i, task = idx_task
+        precomputed = batch_cont_results.get(i)
+        return i, analyze_prompt(
             task['prompt'],
             task_id=task.get('task_id', ''),
             occupation=task.get('occupation', ''),
             attempter=task.get('attempter', ''),
             stage=task.get('stage', ''),
             run_l3=run_l3,
-            api_key=args.api_key,
+            api_key=None if use_batch else args.api_key,
             dna_provider=args.provider,
             dna_model=args.dna_model,
             dna_samples=args.dna_samples,
             mode=args.mode,
             cal_table=cal_table,
+            memory_store=store,
+            disabled_channels=disabled_channels,
+            precomputed_continuation=precomputed,
+            ppl_model=getattr(args, 'ppl_model', None),
         )
-        results.append(r)
-        tid = task.get('task_id', f'_row{i}')
-        text_map[tid] = task['prompt']
-        if (i + 1) % 50 == 0:
-            print(f"  Processed {i+1}/{len(tasks)}...")
+
+    if n_workers > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        indexed_results = [None] * len(tasks)
+        done = 0
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            for i, r in pool.map(_analyze_task, enumerate(tasks)):
+                indexed_results[i] = r
+                done += 1
+                if done % 10 == 0:
+                    print(f"  Processed {done}/{len(tasks)}...")
+        results = indexed_results
+    else:
+        for i, task in enumerate(tasks):
+            _, r = _analyze_task((i, task))
+            results.append(r)
+            if (i + 1) % 50 == 0:
+                print(f"  Processed {i+1}/{len(tasks)}...")
 
     det_counts = Counter(r['determination'] for r in results)
     print(f"\n{'='*90}")
-    print(f"  PIPELINE v0.61 RESULTS (n={len(results)})")
+    print(f"  PIPELINE v0.66 RESULTS (n={len(results)})")
     print(f"{'='*90}")
     all_dets = ['RED', 'AMBER', 'MIXED', 'YELLOW', 'REVIEW', 'GREEN']
     icons = {
@@ -5984,20 +8623,75 @@ def main():
         for r in sorted(yellow, key=lambda x: x['confidence'], reverse=True)[:10]:
             print(f"    \U0001f7e1 {r['task_id'][:12]:12} {r['occupation'][:40]:40} | {r['reason'][:50]}")
 
+    # Load instruction text for similarity baseline (FEAT 15)
+    instruction_text = None
+    if args.instructions and os.path.exists(args.instructions):
+        with open(args.instructions, 'r') as f:
+            instruction_text = f.read()
+        print(f"  Loaded instruction template ({len(instruction_text)} chars) for similarity baseline")
+
     if not args.no_similarity and len(results) >= 2:
         sim_pairs = analyze_similarity(
             results, text_map,
             jaccard_threshold=args.similarity_threshold,
+            instruction_text=instruction_text,
         )
         print_similarity_report(sim_pairs)
+
+        # FEAT 13: Similarity feedback into determination
+        if sim_pairs:
+            results = apply_similarity_adjustments(results, sim_pairs, text_map)
+            upgrades = [r for r in results if 'similarity_upgrade' in r]
+            if upgrades:
+                det_counts = Counter(r['determination'] for r in results)
+                print(f"\n  SIMILARITY ADJUSTMENTS: {len(upgrades)} determinations upgraded")
+                for r in upgrades:
+                    su = r['similarity_upgrade']
+                    print(f"    {r['task_id'][:15]:15s} {su['original_determination']} -> "
+                          f"{su['upgraded_to']}  ({su['reason'][:60]})")
     else:
         sim_pairs = []
+
+    # FEAT 14: Cross-batch similarity store
+    if args.similarity_store:
+        cross_flags = cross_batch_similarity(
+            results, text_map, args.similarity_store
+        )
+        if cross_flags:
+            print(f"\n  CROSS-BATCH SIMILARITY: {len(cross_flags)} matches to previous batches")
+            for cf in cross_flags[:10]:
+                print(f"    {cf['current_id'][:15]} <-> {cf['historical_id'][:15]} "
+                      f"(MH={cf['minhash_similarity']:.2f}, batch={cf['historical_batch'][:10]})")
+        save_similarity_store(results, text_map, args.similarity_store)
+
+    # Shadow model disagreement check (if memory store has a trained model)
+    if store:
+        shadow_count = 0
+        for r in results:
+            disagreement = store.check_shadow_disagreement(r)
+            r['shadow_disagreement'] = disagreement
+            r['shadow_ai_prob'] = (disagreement or {}).get('shadow_ai_prob')
+            if disagreement:
+                shadow_count += 1
+        if shadow_count:
+            print(f"\n  SHADOW MODEL: {shadow_count} disagreements with rule engine")
+
+    # Memory store: cross-batch similarity + record batch
+    if store:
+        cross_flags = store.cross_batch_similarity(results, text_map)
+        if cross_flags:
+            print(f"\n  CROSS-BATCH MEMORY: {len(cross_flags)} matches to previous submissions")
+            for cf in cross_flags[:5]:
+                print(f"    {cf['current_id'][:15]} <-> {cf['historical_id'][:15]} "
+                      f"(MH={cf['minhash_similarity']:.2f}, batch={cf['historical_batch'][:15]})")
+        store.record_batch(results, text_map)
 
     if getattr(args, 'label', False):
         label_stats = interactive_label(
             results, text_map,
             output_path=getattr(args, 'label_output', None),
             reviewer=getattr(args, 'label_reviewer', '') or '',
+            store=store,
             skip_green=getattr(args, 'label_skip_green', False),
             skip_red=getattr(args, 'label_skip_red', False),
             max_labels=getattr(args, 'label_max', None),
@@ -6015,7 +8709,7 @@ def main():
                     cal_out = label_path.replace('.jsonl', '_calibration.json')
                     save_calibration(cal, cal_out)
 
-    default_name = os.path.basename(args.input).rsplit('.', 1)[0] + '_pipeline_v061.csv'
+    default_name = os.path.basename(args.input).rsplit('.', 1)[0] + '_pipeline_v066.csv'
     input_dir = os.path.dirname(os.path.abspath(args.input))
     output_path = args.output or os.path.join(input_dir, default_name)
 
@@ -6037,6 +8731,26 @@ def main():
     pd.DataFrame(flat).to_csv(output_path, index=False)
     print(f"\n  Results saved to: {output_path}")
 
+    # Attempter profiling and channel pattern summary
+    if len(results) >= 5:
+        profiles = profile_attempters(results)
+        print_attempter_report(profiles)
+        channel_pattern_summary(results)
+
+    # Financial impact estimate
+    if len(results) >= 10:
+        impact = financial_impact(results, cost_per_prompt=args.cost_per_prompt)
+        print_financial_report(impact, cost_per_prompt=args.cost_per_prompt)
+
+    # Consolidated HTML report for flagged submissions
+    if args.html_report and flagged:
+        report_path = args.html_report
+        if not report_path.endswith('.html'):
+            report_path += '.html'
+        os.makedirs(os.path.dirname(report_path) or '.', exist_ok=True)
+        generate_batch_html_report(flagged, text_map, report_path)
+        print(f"\n  HTML report written to {report_path} ({len(flagged)} submissions)")
+
     if args.collect:
         collect_baselines(results, args.collect)
 
@@ -6044,6 +8758,26 @@ def main():
 def main_gui():
     """Entry point that always launches the GUI (for gui-scripts / executable)."""
     launch_gui()
+
+
+def main_dashboard():
+    """Entry point that launches the Streamlit web dashboard."""
+    import subprocess
+    import importlib.util
+    import shutil
+
+    if shutil.which('streamlit') is None:
+        print('ERROR: streamlit is not installed or not in PATH.')
+        print('Install it with: pip install streamlit')
+        return
+
+    spec = importlib.util.find_spec('llm_detector.dashboard')
+    if spec is None or spec.origin is None:
+        print('ERROR: llm_detector.dashboard module not found.')
+        print('Ensure the llm_detector package is properly installed.')
+        return
+    dashboard_path = spec.origin
+    subprocess.run(['streamlit', 'run', dashboard_path], check=False)
 
 
 if __name__ == '__main__':
