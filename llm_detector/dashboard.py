@@ -151,12 +151,21 @@ def _render_sidebar():
 
         st.divider()
 
-        # Quick status
+        # Quick status — results
         n = len(st.session_state.get("results", []))
         if n > 0:
             st.success(f"{n} results in session")
         else:
             st.info("No results yet")
+
+        # Memory store status
+        mem = st.session_state.get("memory_store")
+        if mem is not None:
+            cfg = getattr(mem, "_config", {})
+            n_subs = cfg.get("total_submissions", 0)
+            st.success(f"\U0001f9e0 Memory: {n_subs} submissions")
+        else:
+            st.warning("\U0001f9e0 Memory store not loaded")
 
         st.caption("v0.67.0")
 
@@ -546,6 +555,10 @@ def _page_configuration():
 
     # Continuation Analysis
     with st.expander("\U0001f9ec Continuation Analysis (DNA-GPT)", expanded=True):
+        st.caption(
+            "Optional: provide an API key to enable DNA-GPT continuation analysis "
+            "(Layer 3). Leave blank to skip Layer 3 and run faster."
+        )
         c1, c2 = st.columns(2)
         with c1:
             provider = st.selectbox(
@@ -555,13 +568,20 @@ def _page_configuration():
             )
         with c2:
             api_key = st.text_input(
-                "API Key", type="password", key="api_key"
+                "API Key", type="password", key="api_key",
+                placeholder="sk-... or leave blank to skip Layer 3",
             )
+        # Show whether a key is configured (without revealing it)
+        if st.session_state.get("api_key", "").strip():
+            st.success("\u2705 API key set — Layer 3 continuation analysis enabled")
+        else:
+            st.info("\u2139\ufe0f No API key — Layer 3 will be skipped (faster, less accurate)")
 
         c1, c2, c3 = st.columns(3)
         with c1:
             dna_model = st.text_input(
-                "Model (optional)", key="dna_model"
+                "Model (optional)", key="dna_model",
+                placeholder="Leave blank for default",
             )
         with c2:
             dna_samples = st.number_input(
@@ -578,6 +598,10 @@ def _page_configuration():
 
     # Similarity
     with st.expander("\U0001f50d Similarity Analysis", expanded=True):
+        st.caption(
+            "Detect near-duplicate submissions within a batch. "
+            "Lower threshold = more aggressive matching."
+        )
         c1, c2 = st.columns(2)
         with c1:
             no_similarity = st.checkbox(
@@ -594,10 +618,14 @@ def _page_configuration():
             )
 
         sim_store = st.text_input(
-            "Sim store (JSONL path)", key="sim_store"
+            "Sim store (JSONL path) — optional, for cross-batch memory",
+            key="sim_store",
+            placeholder="/path/to/sim_store.jsonl",
         )
         instructions = st.text_input(
-            "Instructions file path", key="instructions_file"
+            "Instructions file path — optional, filters out boilerplate text",
+            key="instructions_file",
+            placeholder="/path/to/instructions.txt",
         )
 
     # Output Options
@@ -605,7 +633,7 @@ def _page_configuration():
         c1, c2 = st.columns(2)
         with c1:
             cost = st.number_input(
-                "Cost per prompt ($)",
+                "Cost per prompt ($) — used for financial impact estimate",
                 min_value=0.0,
                 value=400.0,
                 step=50.0,
@@ -613,10 +641,12 @@ def _page_configuration():
             )
         with c2:
             collect_path = st.text_input(
-                "Collect baselines to JSONL", key="collect_path"
+                "Collect baselines to JSONL",
+                key="collect_path",
+                placeholder="/path/to/baselines.jsonl",
             )
 
-    st.success("Configuration is saved in the session automatically.")
+    st.success("\u2705 Configuration is saved in the session automatically.")
 
 
 # ── Page: Memory & Learning ──────────────────────────────────────────────────
@@ -625,29 +655,55 @@ def _page_memory():
     st.markdown("### \U0001f9e0 Memory & Learning")
     st.caption("BEET memory store, ground truth, and learning tools")
 
+    # Quick-start callout when no memory store is loaded
+    if st.session_state.get("memory_store") is None:
+        st.info(
+            "\U0001f4a1 **Getting started**: Click **Use Default (.beet)** below to "
+            "automatically create and load a memory store in the current working "
+            "directory. You can also specify a custom path and click **Load Memory Store**."
+        )
+
     # Memory Store
     with st.expander("\U0001f4be BEET Memory Store", expanded=True):
-        mem_dir = st.text_input(
-            "Store directory",
-            placeholder="/path/to/.beet",
-            key="memory_dir",
+        st.caption(
+            "The memory store persists analysis history, attempter profiles, "
+            "and learned models across sessions."
         )
+
+        c_input, c_default = st.columns([3, 1])
+        with c_input:
+            mem_dir = st.text_input(
+                "Store directory",
+                placeholder="/path/to/.beet",
+                key="memory_dir",
+            )
+        with c_default:
+            st.markdown("&nbsp;", unsafe_allow_html=True)  # vertical spacer
+            use_default = st.button("Use Default (.beet)", use_container_width=True)
+
+        if use_default:
+            try:
+                from llm_detector.memory import MemoryStore
+                st.session_state["memory_store"] = MemoryStore(".beet")
+                st.success("Memory store ready: .beet")
+                st.rerun()
+            except Exception as e:
+                st.error(str(e))
 
         c1, c2 = st.columns(2)
         with c1:
             if st.button("Load Memory Store"):
-                if mem_dir.strip():
+                _dir = mem_dir.strip()
+                if not _dir:
+                    st.warning("Enter a directory path or click **Use Default (.beet)**.")
+                else:
                     try:
                         from llm_detector.memory import MemoryStore
-
-                        st.session_state["memory_store"] = MemoryStore(
-                            mem_dir.strip()
-                        )
-                        st.success(f"Loaded: {mem_dir}")
+                        st.session_state["memory_store"] = MemoryStore(_dir)
+                        st.success(f"Loaded: {_dir}")
+                        st.rerun()
                     except Exception as e:
                         st.error(str(e))
-                else:
-                    st.warning("Set a directory first.")
 
         with c2:
             if st.button("Print Summary"):
@@ -663,6 +719,21 @@ def _page_memory():
                     st.code(buf.getvalue())
                 else:
                     st.warning("Load a memory store first.")
+
+        # Show metadata if memory store is loaded
+        mem = st.session_state.get("memory_store")
+        if mem is not None:
+            cfg = getattr(mem, "_config", {})
+            mc1, mc2, mc3, mc4 = st.columns(4)
+            with mc1:
+                st.metric("Submissions", cfg.get("total_submissions", 0))
+            with mc2:
+                st.metric("Batches", cfg.get("total_batches", 0))
+            with mc3:
+                st.metric("Attempters", cfg.get("total_attempters", 0))
+            with mc4:
+                st.metric("Confirmed", cfg.get("total_confirmed", 0))
+            st.caption(f"Store path: `{mem.store_dir}`  |  Created: {cfg.get('created', 'unknown')[:10]}")
 
     # Ground Truth Confirmation
     with st.expander("\u2705 Record Ground Truth Confirmation", expanded=False):

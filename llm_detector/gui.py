@@ -40,7 +40,7 @@ class DetectorGUI:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("LLM Detector Pipeline v0.66")
+        self.root.title("LLM Authorship Signal Analyzer v0.67")
         self.root.geometry("1180x920")
 
         self._memory_store = None
@@ -98,6 +98,8 @@ class DetectorGUI:
             self.ablation_vars[ch] = tk.BooleanVar(value=False)
         # Sync mode metric card whenever detection mode is changed.
         self.mode_var.trace_add('write', self._sync_mode_metric)
+        # Memory store status label variable.
+        self.memory_status_var = tk.StringVar(value='Not loaded')
 
     def _build_layout(self):
         header = ttk.Frame(self.root, style='DashboardHeader.TFrame', padding=(12, 10))
@@ -176,26 +178,27 @@ class DetectorGUI:
                              'HuggingFaceTB/SmolLM2-135M', 'distilgpt2', 'gpt2'],
                      width=30, state='readonly').pack(side=tk.LEFT, padx=(4, 0))
 
-        # Channel ablation
-        abl = ttk.LabelFrame(tab, text='Channel Ablation')
+        # Channel ablation — check a channel to *disable* it during analysis
+        abl = ttk.LabelFrame(tab, text='Disable Channels (check to skip)')
         abl.pack(fill=tk.X, pady=(0, 6))
         for ch in _CHANNELS:
             ttk.Checkbutton(abl, text=ch, variable=self.ablation_vars[ch]).pack(side=tk.LEFT, padx=6, pady=3)
 
         # Text input
-        ttk.Label(tab, text='Single text input:').pack(anchor='w')
+        ttk.Label(tab, text='Single text analysis (paste or type below):').pack(anchor='w')
         self.text_input = tk.Text(tab, height=7, wrap=tk.WORD)
         self.text_input.pack(fill=tk.BOTH, pady=(2, 6))
+        self._add_paste_menu(self.text_input)
 
         # Action buttons
         actions = ttk.Frame(tab)
         actions.pack(fill=tk.X, pady=(0, 6))
-        ttk.Button(actions, text='Analyze Text', style='DashboardPrimary.TButton',
+        ttk.Button(actions, text='▶ Analyze Text', style='DashboardPrimary.TButton',
                    command=lambda: self._run_async(self._analyze_text)).pack(side=tk.LEFT)
-        ttk.Button(actions, text='Analyze File', style='DashboardPrimary.TButton',
+        ttk.Button(actions, text='📂 Analyze File', style='DashboardPrimary.TButton',
                    command=lambda: self._run_async(self._analyze_file)).pack(side=tk.LEFT, padx=6)
         ttk.Button(actions, text='Clear', command=self._clear_output).pack(side=tk.LEFT, padx=(0, 12))
-        ttk.Button(actions, text='Save CSV', command=self._save_results_csv).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(actions, text='💾 Save CSV', command=self._save_results_csv).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(actions, text='Save HTML Reports', command=self._save_html_reports).pack(side=tk.LEFT)
 
         # Progress bar
@@ -301,15 +304,33 @@ class DetectorGUI:
         # Memory store directory
         mem = ttk.LabelFrame(tab, text='BEET Memory Store')
         mem.pack(fill=tk.X, pady=(0, 10))
-        ttk.Label(mem, text='Store directory').grid(row=0, column=0, sticky='w', padx=6, pady=4)
-        ttk.Entry(mem, textvariable=self.memory_var).grid(row=0, column=1, sticky='ew', padx=(0, 6), pady=4)
+
+        ttk.Label(mem, text=(
+            'The memory store persists analysis history across sessions.\n'
+            'Use the default ".beet" folder or choose a custom location.'
+        ), style='DashboardSubtitle.TLabel').grid(
+            row=0, column=0, columnspan=5, sticky='w', padx=6, pady=(4, 2))
+
+        ttk.Label(mem, text='Store directory').grid(row=1, column=0, sticky='w', padx=6, pady=4)
+        ttk.Entry(mem, textvariable=self.memory_var).grid(row=1, column=1, sticky='ew', padx=(0, 6), pady=4)
         ttk.Button(mem, text='...', width=3, command=lambda: self._browse_dir(self.memory_var)).grid(
-            row=0, column=2, sticky='w', padx=2, pady=4)
-        ttk.Button(mem, text='Load', command=self._load_memory).grid(row=0, column=3, sticky='w', padx=6, pady=4)
+            row=1, column=2, sticky='w', padx=2, pady=4)
+        ttk.Button(mem, text='Use Default (.beet)', command=self._use_default_memory).grid(
+            row=1, column=3, sticky='w', padx=(4, 2), pady=4)
+        ttk.Button(mem, text='Load', command=self._load_memory).grid(row=1, column=4, sticky='w', padx=6, pady=4)
         mem.columnconfigure(1, weight=1)
 
+        # Status label
+        status_frame = ttk.Frame(mem)
+        status_frame.grid(row=2, column=0, columnspan=5, sticky='w', padx=6, pady=(0, 4))
+        ttk.Label(status_frame, text='Status:').pack(side=tk.LEFT)
+        self._memory_status_label = ttk.Label(
+            status_frame, textvariable=self.memory_status_var,
+            foreground=_DASHBOARD_THEME['muted'])
+        self._memory_status_label.pack(side=tk.LEFT, padx=(4, 0))
+
         btn_row = ttk.Frame(mem)
-        btn_row.grid(row=1, column=0, columnspan=4, sticky='w', padx=6, pady=4)
+        btn_row.grid(row=3, column=0, columnspan=5, sticky='w', padx=6, pady=4)
         ttk.Button(btn_row, text='Print Summary', command=lambda: self._run_async(self._memory_summary)).pack(side=tk.LEFT, padx=(0, 6))
 
         # Confirmations
@@ -629,6 +650,11 @@ class DetectorGUI:
         self._load_memory()
         return self._memory_store is not None
 
+    def _use_default_memory(self):
+        """Set memory store to the default .beet directory and load it."""
+        self.memory_var.set('.beet')
+        self._load_memory()
+
     def _load_memory(self):
         path = self.memory_var.get().strip()
         if not path:
@@ -636,6 +662,13 @@ class DetectorGUI:
             return
         from llm_detector.memory import MemoryStore
         self._memory_store = MemoryStore(path)
+        cfg = self._memory_store._config
+        n_subs = cfg.get('total_submissions', 0)
+        n_batches = cfg.get('total_batches', 0)
+        self.memory_status_var.set(
+            f'✓ Loaded: {path}  ({n_subs} submissions, {n_batches} batches)')
+        if hasattr(self, '_memory_status_label'):
+            self._memory_status_label.configure(foreground='#388e3c')
         self.status_var.set(f'Memory store loaded: {path}')
 
     def _load_cal_table(self):
