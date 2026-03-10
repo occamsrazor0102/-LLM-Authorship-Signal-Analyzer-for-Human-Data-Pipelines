@@ -209,7 +209,12 @@ class DetectorGUI:
         header = ttk.Frame(self.root, style='DashboardHeader.TFrame', padding=(12, 10))
         header.pack(fill=tk.X, padx=6, pady=(6, 0))
         ttk.Label(header, text='LLM Authorship Signal Analyzer',
-                  style='DashboardTitle.TLabel').pack(anchor='w')
+                  style='DashboardTitle.TLabel').pack(anchor='w', side=tk.LEFT)
+        ttk.Button(
+            header,
+            text='🌐 Open Web Dashboard',
+            command=self._launch_dashboard,
+        ).pack(side=tk.RIGHT, padx=(0, 4))
         ttk.Label(header, text='Analyst dashboard for prompt forensics, calibration, and reporting',
                   style='DashboardSubtitle.TLabel').pack(anchor='w')
 
@@ -1844,6 +1849,43 @@ class DetectorGUI:
             messagebox.showinfo('Baselines', f'Results appended to {path}')
         except Exception as e:
             messagebox.showerror('Baselines Error', str(e))
+
+    def _launch_dashboard(self):
+        """Launch the Streamlit web dashboard in a background process."""
+        import shutil
+        import subprocess
+        import importlib.util
+        if shutil.which('streamlit') is None:
+            messagebox.showerror(
+                'Streamlit Not Found',
+                'streamlit is not installed or not in PATH.\n'
+                'Install it with:\n    pip install streamlit',
+            )
+            return
+        spec = importlib.util.find_spec('llm_detector.dashboard')
+        if spec is None or spec.origin is None:
+            messagebox.showerror(
+                'Dashboard Not Found',
+                'llm_detector.dashboard module could not be located.\n'
+                'Ensure the package is properly installed.',
+            )
+            return
+        dashboard_path = spec.origin
+        kwargs = dict(
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        import sys as _sys
+        if _sys.platform == 'win32':
+            kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            kwargs['start_new_session'] = True
+        try:
+            subprocess.Popen(['streamlit', 'run', dashboard_path], **kwargs)
+        except OSError as exc:
+            messagebox.showerror('Launch Error', f'Could not start Streamlit:\n{exc}')
+            return
+        self.status_var.set('Web dashboard launched — opening in browser…')
 
 
 if HAS_TK:
