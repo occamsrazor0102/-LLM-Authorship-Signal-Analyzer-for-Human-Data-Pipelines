@@ -37,6 +37,44 @@ def _dna_bscore(original_tokens, regenerated_tokens, ns=(2, 3, 4), weights=(0.25
     return sum(scores)
 
 
+def _dna_bscore_determination(bscore, bscore_max):
+    """Map DNA-GPT BScore to (determination, confidence, reason) tuple."""
+    if bscore >= 0.20 and bscore_max >= 0.22:
+        det, conf = 'RED', min(0.90, 0.60 + bscore)
+        reason = f"DNA-GPT: high continuation overlap (BScore={bscore:.3f}, max={bscore_max:.3f})"
+    elif bscore >= 0.12:
+        det, conf = 'AMBER', min(0.70, 0.40 + bscore)
+        reason = f"DNA-GPT: elevated continuation overlap (BScore={bscore:.3f})"
+    elif bscore >= 0.08:
+        det, conf = 'YELLOW', min(0.40, 0.20 + bscore)
+        reason = f"DNA-GPT: moderate continuation overlap (BScore={bscore:.3f})"
+    else:
+        det, conf = 'GREEN', max(0.0, 0.10 - bscore)
+        reason = f"DNA-GPT: low continuation overlap (BScore={bscore:.3f}) -- likely human"
+    return det, conf, reason
+
+
+def _merge_multi_bscore_stability(full_result, bscores):
+    """Attach multi-bscore stability fields to *full_result* in-place."""
+    if len(bscores) >= 2:
+        bscore_mean = statistics.mean(bscores)
+        bscore_var = statistics.variance(bscores)
+        stability = max(0.0, 1.0 - (bscore_var / 0.02))
+    else:
+        bscore_mean = bscores[0] if bscores else 0.0
+        bscore_var = 0.0
+        stability = 0.0
+
+    full_result['multi_bscores'] = [round(b, 4) for b in bscores]
+    full_result['bscore_variance'] = round(bscore_var, 6)
+    full_result['bscore_stability'] = round(stability, 4)
+
+    if stability >= 0.75 and bscore_mean >= 0.15:
+        full_result['confidence'] = round(
+            min(full_result.get('confidence', 0.0) + 0.10, 1.0), 4
+        )
+
+
 def _dna_truncate_text(text, ratio=0.5):
     """Truncate text at sentence boundary. Returns (prefix, continuation)."""
     sentences = re.split(r'(?<=[.!?])\s+(?=[A-Z"\'])', text)
@@ -161,18 +199,7 @@ def run_continuation_api(text, api_key=None, provider='anthropic', model=None,
     bscore = statistics.mean(sample_scores)
     bscore_max = max(sample_scores)
 
-    if bscore >= 0.20 and bscore_max >= 0.22:
-        det, conf = 'RED', min(0.90, 0.60 + bscore)
-        reason = f"DNA-GPT: high continuation overlap (BScore={bscore:.3f}, max={bscore_max:.3f})"
-    elif bscore >= 0.12:
-        det, conf = 'AMBER', min(0.70, 0.40 + bscore)
-        reason = f"DNA-GPT: elevated continuation overlap (BScore={bscore:.3f})"
-    elif bscore >= 0.08:
-        det, conf = 'YELLOW', min(0.40, 0.20 + bscore)
-        reason = f"DNA-GPT: moderate continuation overlap (BScore={bscore:.3f})"
-    else:
-        det, conf = 'GREEN', max(0.0, 0.10 - bscore)
-        reason = f"DNA-GPT: low continuation overlap (BScore={bscore:.3f}) -- likely human"
+    det, conf, reason = _dna_bscore_determination(bscore, bscore_max)
 
     return {
         'bscore': round(bscore, 4), 'bscore_max': round(bscore_max, 4),
@@ -208,24 +235,7 @@ def run_continuation_api_multi(text, api_key=None, provider='anthropic',
     bscores = [ratio_results[r].get('bscore', 0.0) for r in truncation_ratios]
     full_result = copy.deepcopy(ratio_results.get(0.5) or ratio_results[truncation_ratios[-1]])
 
-    if len(bscores) >= 2:
-        bscore_mean = statistics.mean(bscores)
-        bscore_var = statistics.variance(bscores)
-        stability = max(0.0, 1.0 - (bscore_var / 0.02))
-    else:
-        bscore_mean = bscores[0] if bscores else 0.0
-        bscore_var = 0.0
-        stability = 0.0
-
-    full_result['multi_bscores'] = [round(b, 4) for b in bscores]
-    full_result['bscore_variance'] = round(bscore_var, 6)
-    full_result['bscore_stability'] = round(stability, 4)
-
-    # Stability boosts confidence when it agrees with the primary signal
-    if stability >= 0.75 and bscore_mean >= 0.15:
-        full_result['confidence'] = round(
-            min(full_result.get('confidence', 0.0) + 0.10, 1.0), 4
-        )
+    _merge_multi_bscore_stability(full_result, bscores)
 
     return full_result
 
@@ -328,18 +338,7 @@ def _score_batch_results(raw_results, metadata, texts, task_ids,
             bscore = statistics.mean(sample_scores)
             bscore_max = max(sample_scores)
 
-            if bscore >= 0.20 and bscore_max >= 0.22:
-                det, conf = 'RED', min(0.90, 0.60 + bscore)
-                reason = f"DNA-GPT: high continuation overlap (BScore={bscore:.3f}, max={bscore_max:.3f})"
-            elif bscore >= 0.12:
-                det, conf = 'AMBER', min(0.70, 0.40 + bscore)
-                reason = f"DNA-GPT: elevated continuation overlap (BScore={bscore:.3f})"
-            elif bscore >= 0.08:
-                det, conf = 'YELLOW', min(0.40, 0.20 + bscore)
-                reason = f"DNA-GPT: moderate continuation overlap (BScore={bscore:.3f})"
-            else:
-                det, conf = 'GREEN', max(0.0, 0.10 - bscore)
-                reason = f"DNA-GPT: low continuation overlap (BScore={bscore:.3f}) -- likely human"
+            det, conf, reason = _dna_bscore_determination(bscore, bscore_max)
 
             ratio_results[ratio] = {
                 'bscore': round(bscore, 4), 'bscore_max': round(bscore_max, 4),
@@ -359,23 +358,7 @@ def _score_batch_results(raw_results, metadata, texts, task_ids,
             ratio_results.get(0.5) or next(iter(ratio_results.values()))
         )
 
-        if len(bscores) >= 2:
-            bscore_mean = statistics.mean(bscores)
-            bscore_var = statistics.variance(bscores)
-            stability = max(0.0, 1.0 - (bscore_var / 0.02))
-        else:
-            bscore_mean = bscores[0] if bscores else 0.0
-            bscore_var = 0.0
-            stability = 0.0
-
-        full_result['multi_bscores'] = [round(b, 4) for b in bscores]
-        full_result['bscore_variance'] = round(bscore_var, 6)
-        full_result['bscore_stability'] = round(stability, 4)
-
-        if stability >= 0.75 and bscore_mean >= 0.15:
-            full_result['confidence'] = round(
-                min(full_result.get('confidence', 0.0) + 0.10, 1.0), 4
-            )
+        _merge_multi_bscore_stability(full_result, bscores)
 
         task_results[task_idx] = full_result
 

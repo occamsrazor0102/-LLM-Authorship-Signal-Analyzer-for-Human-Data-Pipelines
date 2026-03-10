@@ -7,7 +7,7 @@ import re
 import statistics
 from collections import Counter
 
-from llm_detector.text_utils import ENGLISH_FUNCTION_WORDS, get_sentences
+from llm_detector.text_utils import ENGLISH_FUNCTION_WORDS, get_sentences, type_token_ratio
 
 # Topic masking patterns
 _TOPIC_URL_RE = re.compile(r'https?://\S+|www\.\S+', re.I)
@@ -88,7 +88,7 @@ def extract_stylometric_features(text, masked_text=None):
     # Type-token ratio
     orig_words = re.findall(r'\w+', text.lower())
     n_orig = max(len(orig_words), 1)
-    type_token_ratio = len(set(orig_words)) / n_orig
+    type_token_ratio_val = type_token_ratio(orig_words)
 
     # Average word length
     word_lengths = [len(w) for w in orig_words]
@@ -103,7 +103,7 @@ def extract_stylometric_features(text, masked_text=None):
         'function_word_ratio': round(function_word_ratio, 4),
         'punct_bigrams': dict(punct_bigrams.most_common(20)),
         'sent_length_dispersion': round(sent_length_dispersion, 4),
-        'type_token_ratio': round(type_token_ratio, 4),
+        'type_token_ratio': round(type_token_ratio_val, 4),
         'avg_word_length': round(avg_word_length, 2),
         'short_word_ratio': round(short_word_ratio, 4),
     }

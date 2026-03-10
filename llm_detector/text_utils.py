@@ -16,6 +16,13 @@ ENGLISH_FUNCTION_WORDS = frozenset([
 ])
 
 
+def type_token_ratio(tokens):
+    """Type-Token Ratio: vocabulary richness (unique tokens / total tokens)."""
+    if not tokens:
+        return 0.0
+    return len(set(tokens)) / len(tokens)
+
+
 def get_sentences(text):
     """Segment text into sentences using spacy sentencizer or regex fallback."""
     if HAS_SPACY:
