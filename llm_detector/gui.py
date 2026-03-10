@@ -84,10 +84,17 @@ class DetectorGUI:
         self.confirm_label_var = tk.StringVar(value='ai')
         self.confirm_reviewer_var = tk.StringVar()
         self.attempter_history_var = tk.StringVar()
+        # KPI metric variables for Analysis tab dashboard cards.
+        self.metric_total_var = tk.StringVar(value='0')
+        self.metric_top_det_var = tk.StringVar(value='N/A')
+        self.metric_avg_conf_var = tk.StringVar(value='0.00')
+        self.metric_mode_var = tk.StringVar(value='auto')
 
         self.ablation_vars = {}
         for ch in _CHANNELS:
             self.ablation_vars[ch] = tk.BooleanVar(value=False)
+        # Sync mode metric card whenever detection mode is changed.
+        self.mode_var.trace_add('write', self._sync_mode_metric)
 
     def _build_layout(self):
         header = ttk.Frame(self.root, style='DashboardHeader.TFrame', padding=(12, 10))
@@ -121,6 +128,13 @@ class DetectorGUI:
     def _build_analysis_tab(self, notebook):
         tab = ttk.Frame(notebook, padding=8)
         notebook.add(tab, text='  Analysis  ')
+
+        metrics = ttk.Frame(tab)
+        metrics.pack(fill=tk.X, pady=(0, 8))
+        self._build_metric_card(metrics, 'Total Results', self.metric_total_var).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+        self._build_metric_card(metrics, 'Top Determination', self.metric_top_det_var).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
+        self._build_metric_card(metrics, 'Avg Confidence', self.metric_avg_conf_var).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
+        self._build_metric_card(metrics, 'Mode', self.metric_mode_var).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 0))
 
         # File input
         file_row = ttk.Frame(tab)
@@ -164,8 +178,10 @@ class DetectorGUI:
         # Action buttons
         actions = ttk.Frame(tab)
         actions.pack(fill=tk.X, pady=(0, 6))
-        ttk.Button(actions, text='Analyze Text', command=lambda: self._run_async(self._analyze_text)).pack(side=tk.LEFT)
-        ttk.Button(actions, text='Analyze File', command=lambda: self._run_async(self._analyze_file)).pack(side=tk.LEFT, padx=6)
+        ttk.Button(actions, text='Analyze Text', style='DashboardPrimary.TButton',
+                   command=lambda: self._run_async(self._analyze_text)).pack(side=tk.LEFT)
+        ttk.Button(actions, text='Analyze File', style='DashboardPrimary.TButton',
+                   command=lambda: self._run_async(self._analyze_file)).pack(side=tk.LEFT, padx=6)
         ttk.Button(actions, text='Clear', command=self._clear_output).pack(side=tk.LEFT, padx=(0, 12))
         ttk.Button(actions, text='Save CSV', command=self._save_results_csv).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(actions, text='Save HTML Reports', command=self._save_html_reports).pack(side=tk.LEFT)
@@ -395,6 +411,13 @@ class DetectorGUI:
         style.configure('TButton', padding=(10, 6))
         style.configure('TEntry', fieldbackground='white')
         style.configure('TCombobox', fieldbackground='white')
+        style.configure('DashboardCard.TFrame', background=_DASHBOARD_THEME['card'])
+        style.configure('DashboardCardLabel.TLabel', background=_DASHBOARD_THEME['card'],
+                        foreground=_DASHBOARD_THEME['muted'])
+        style.configure('DashboardCardValue.TLabel', background=_DASHBOARD_THEME['card'],
+                        foreground=_DASHBOARD_THEME['text'])
+        if self._section_font is not None:
+            style.configure('DashboardCardValue.TLabel', font=self._section_font)
 
         style.configure('DashboardHeader.TFrame', background=_DASHBOARD_THEME['card'])
         style.configure('DashboardTitle.TLabel', background=_DASHBOARD_THEME['card'],
@@ -408,6 +431,10 @@ class DetectorGUI:
         style.configure('DashboardStatus.TFrame', background=_DASHBOARD_THEME['card'])
         style.configure('DashboardStatus.TLabel', background=_DASHBOARD_THEME['card'],
                         foreground=_DASHBOARD_THEME['muted'])
+        style.configure('DashboardPrimary.TButton', padding=(12, 6))
+        style.map('DashboardPrimary.TButton',
+                  background=[('!disabled', _DASHBOARD_THEME['accent']), ('active', '#1d4ed8')],
+                  foreground=[('!disabled', '#ffffff')])
 
         style.configure('Dashboard.TNotebook', background=_DASHBOARD_THEME['bg'], borderwidth=0)
         style.configure('Dashboard.TNotebook.Tab', padding=(12, 8),
@@ -519,9 +546,37 @@ class DetectorGUI:
         self.root.after(0, lambda: self.progress_var.set(0))
         self.root.after(0, lambda: self.progress_label.config(text=''))
 
+    def _build_metric_card(self, parent, label, value_var):
+        card = ttk.Frame(parent, style='DashboardCard.TFrame', padding=(10, 8))
+        ttk.Label(card, text=label, style='DashboardCardLabel.TLabel').pack(anchor='w')
+        ttk.Label(card, textvariable=value_var, style='DashboardCardValue.TLabel').pack(anchor='w', pady=(2, 0))
+        return card
+
+    def _sync_mode_metric(self, *args):
+        self.metric_mode_var.set(self.mode_var.get())
+
+    def _update_dashboard_metrics(self, results):
+        n_results = len(results)
+        determinations = [r.get('determination') for r in results if r.get('determination')]
+        counts = Counter(determinations)
+        top_det = 'N/A'
+        if counts:
+            top_det = counts.most_common(1)[0][0]
+        avg_conf = 0.0
+        if n_results > 0:
+            avg_conf = sum(float(r.get('confidence') or 0) for r in results) / n_results
+
+        def apply():
+            self.metric_total_var.set(str(n_results))
+            self.metric_top_det_var.set(top_det)
+            self.metric_avg_conf_var.set(f'{avg_conf:.2f}')
+            self.metric_mode_var.set(self.mode_var.get())
+        self.root.after(0, apply)
+
     def _clear_output(self):
         self.output.delete('1.0', tk.END)
         self._reset_progress()
+        self._update_dashboard_metrics([])
         self.status_var.set('Ready')
 
     def _run_async(self, fn):
@@ -609,6 +664,7 @@ class DetectorGUI:
 
         self._last_results = [result]
         self._last_text_map = {'_single': text}
+        self._update_dashboard_metrics(self._last_results)
         self._display_result(result)
 
         # Collect baselines if configured
@@ -686,6 +742,7 @@ class DetectorGUI:
 
         self._last_results = results
         self._last_text_map = text_map
+        self._update_dashboard_metrics(self._last_results)
 
         # Summary
         parts = []
