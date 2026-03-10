@@ -7,6 +7,7 @@ power adjectives, discourse scaffolding, and information-theoretic signals.
 import re
 import math
 import zlib
+import random
 import statistics
 from collections import Counter
 
@@ -238,10 +239,9 @@ def run_self_similarity(text):
     if s12 > 0: signals.append(('hapax_deficit', s12))
 
     # s13: Structural compression delta (original vs shuffled) -- FEAT 5
-    import random as _random
     shuffled_words = list(clean_words)
-    _random.seed(42)
-    _random.shuffle(shuffled_words)
+    random.seed(42)
+    random.shuffle(shuffled_words)
     shuffled_text = ' '.join(shuffled_words)
     shuffled_bytes = shuffled_text.encode('utf-8')
     shuffled_comp_len = len(zlib.compress(shuffled_bytes))
