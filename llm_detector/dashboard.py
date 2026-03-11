@@ -41,6 +41,12 @@ _DET_EMOJI = {
     "GREEN": "\U0001f7e2",
 }
 
+_DEFAULT_SIMILARITY_THRESHOLD = 0.40
+_SIMILARITY_EXTRAS_MSG = (
+    "Install similarity extras (pip install llm-detector[similarity]) "
+    "to enable similarity analysis and store handling."
+)
+
 _CHANNELS = ["prompt_structure", "stylometry", "continuation", "windowing"]
 
 # Maximum number of preamble patterns shown in verbose output to avoid overflow.
@@ -127,6 +133,12 @@ def _init_state():
         "memory_store": None,
         "cal_table": None,
         "run_count": 0,
+        "sim_threshold": _DEFAULT_SIMILARITY_THRESHOLD,
+        "no_similarity": False,
+        "sim_store": "",
+        "instructions_file": "",
+        "collect_path": "",
+        "output_dir": "",
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -344,18 +356,30 @@ def _page_analysis():
         }
 
     def _postprocess_results(results, text_map):
-        """Apply CLI-parity post-processing (similarity, memory, baselines)."""
+        """Apply CLI-parity post-processing (similarity, memory, baselines).
+
+        Args:
+            results: List of pipeline result dicts. Mutated in-place (e.g., similarity upgrades).
+            text_map: Dict mapping task_id to original text content.
+
+        Returns:
+            List of human-readable status messages describing post-processing actions.
+        """
         messages = []
 
         # Similarity analysis and cross-batch similarity store
-        try:
-            instruction_text = None
-            instr_path = (st.session_state.get("instructions_file") or "").strip()
-            if instr_path and os.path.exists(instr_path):
+        instruction_text = None
+        instr_path = (st.session_state.get("instructions_file") or "").strip()
+        if instr_path and os.path.exists(instr_path):
+            try:
                 with open(instr_path, "r") as f:
                     instruction_text = f.read()
+            except OSError as e:
+                messages.append(f"Instructions file error: {e}")
 
-            if not st.session_state.get("no_similarity") and len(results) >= 2:
+        # Respect the disable flag; otherwise require two or more results for pairwise metrics.
+        if not st.session_state.get("no_similarity") and len(results) >= 2:
+            try:
                 from llm_detector.similarity import (
                     analyze_similarity,
                     apply_similarity_adjustments,
@@ -364,7 +388,9 @@ def _page_analysis():
                 sim_pairs = analyze_similarity(
                     results,
                     text_map,
-                    jaccard_threshold=st.session_state.get("sim_threshold", 0.40),
+                    jaccard_threshold=st.session_state.get(
+                        "sim_threshold", _DEFAULT_SIMILARITY_THRESHOLD
+                    ),
                     instruction_text=instruction_text,
                 )
                 if sim_pairs:
@@ -372,9 +398,14 @@ def _page_analysis():
                         results, sim_pairs, text_map
                     )
                     messages.append(f"Similarity: {len(sim_pairs)} pairs flagged")
+            except ImportError:
+                messages.append(_SIMILARITY_EXTRAS_MSG)
+            except (OSError, ValueError) as e:
+                messages.append(f"Similarity analysis failed: {e}")
 
-            sim_store = (st.session_state.get("sim_store") or "").strip()
-            if sim_store:
+        sim_store = (st.session_state.get("sim_store") or "").strip()
+        if sim_store:
+            try:
                 from llm_detector.similarity import (
                     cross_batch_similarity,
                     save_similarity_store,
@@ -386,8 +417,10 @@ def _page_analysis():
                         f"Cross-batch similarity: {len(cross_flags)} matches to history"
                     )
                 save_similarity_store(results, text_map, sim_store)
-        except Exception as e:
-            messages.append(f"Similarity unavailable: {e}")
+            except ImportError:
+                messages.append(_SIMILARITY_EXTRAS_MSG)
+            except (OSError, ValueError) as e:
+                messages.append(f"Similarity store update failed: {e}")
 
         # Baseline accumulation (collect path)
         try:
@@ -397,7 +430,7 @@ def _page_analysis():
 
                 collect_baselines(results, collect_path)
                 messages.append(f"Baselines appended to {collect_path}")
-        except Exception as e:
+        except (OSError, ValueError) as e:
             messages.append(f"Baseline collection failed: {e}")
 
         # Memory store updates
@@ -410,7 +443,7 @@ def _page_analysis():
                         f"Memory cross-batch: {len(cross_flags)} matches detected"
                     )
                 mem.record_batch(results, text_map)
-        except Exception as e:
+        except (OSError, ValueError, AttributeError) as e:
             messages.append(f"Memory store update failed: {e}")
 
         return messages
@@ -580,7 +613,7 @@ def _page_analysis():
             st.warning(f"Auto-save failed: {last_run_folder_error}")
 
         # CLI-parity post-processing messages
-        for msg in st.session_state.get("analysis_messages", []) or []:
+        for msg in st.session_state.get("analysis_messages", []):
             st.info(msg)
 
         # Summary bar
@@ -1057,7 +1090,7 @@ def _page_configuration():
                 "Threshold",
                 min_value=0.0,
                 max_value=1.0,
-                value=0.40,
+                value=_DEFAULT_SIMILARITY_THRESHOLD,
                 step=0.05,
                 key="sim_threshold",
             )
@@ -1072,11 +1105,6 @@ def _page_configuration():
             key="instructions_file",
             placeholder="/path/to/instructions.txt",
         )
-        # Persist configuration in session state for downstream processing
-        st.session_state["no_similarity"] = no_similarity
-        st.session_state["sim_threshold"] = sim_threshold
-        st.session_state["sim_store"] = sim_store
-        st.session_state["instructions_file"] = instructions
 
     # Output Options
     with st.expander("\U0001f4e4 Output Options", expanded=True):
@@ -1107,9 +1135,6 @@ def _page_configuration():
                 key="collect_path",
                 placeholder="/path/to/baselines.jsonl",
             )
-        # Persist output config for downstream actions
-        st.session_state["collect_path"] = collect_path
-        st.session_state["output_dir"] = output_dir
 
     st.success("\u2705 Configuration is saved in the session automatically.")
 

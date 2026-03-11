@@ -3,6 +3,8 @@
 import os
 import json
 import threading
+import subprocess
+import sys
 from collections import Counter
 
 from llm_detector.compat import HAS_TK
@@ -1901,12 +1903,10 @@ class DetectorGUI:
 
     def _launch_desktop_gui(self):
         """Spawn another instance of the desktop GUI."""
-        import subprocess
-        import sys as _sys
-
-        python = _sys.executable or 'python'
-        kwargs = dict(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if _sys.platform == 'win32':
+        python = sys.executable
+        # Quiet stdout to avoid duplicate console chatter; keep stderr for debugging startup failures.
+        kwargs = {'stdout': subprocess.DEVNULL, 'stderr': sys.stderr}
+        if sys.platform == 'win32':
             kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
         else:
             kwargs['start_new_session'] = True
