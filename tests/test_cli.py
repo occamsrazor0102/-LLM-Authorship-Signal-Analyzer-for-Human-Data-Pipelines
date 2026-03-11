@@ -212,9 +212,10 @@ def test_dashboard_uses_module_when_cli_missing(monkeypatch):
     print("\n-- DASHBOARD FALLBACK --")
     import sys
     import types
+    import importlib.util
     from llm_detector import cli
 
-    monkeypatch.setattr('shutil.which', lambda _: None)
+    monkeypatch.setattr('llm_detector.cli.shutil.which', lambda _: None)
     dummy_streamlit = types.ModuleType('streamlit')
     monkeypatch.setitem(sys.modules, 'streamlit', dummy_streamlit)
 
@@ -224,18 +225,22 @@ def test_dashboard_uses_module_when_cli_missing(monkeypatch):
         captured['cmd'] = cmd
         captured['check'] = check
 
-    monkeypatch.setattr('subprocess.run', fake_run)
+    monkeypatch.setattr('llm_detector.cli.subprocess.run', fake_run)
     cli.main_dashboard()
+    dash_spec = importlib.util.find_spec('llm_detector.dashboard')
+    dash_path = dash_spec.origin if dash_spec else None
     cmd = captured.get('cmd', [])
     check("Fallback uses python -m streamlit",
-          len(cmd) >= 3 and cmd[0] == sys.executable and cmd[1:3] == ['-m', 'streamlit'])
+          cmd == [sys.executable, '-m', 'streamlit', 'run', dash_path],
+          f"got {cmd}")
 
 
 def test_dashboard_prefers_cli_when_available(monkeypatch):
     """main_dashboard should use the streamlit executable if it is on PATH."""
     print("\n-- DASHBOARD CLI PREFERRED --")
+    import importlib.util
     from llm_detector import cli
-    monkeypatch.setattr('shutil.which', lambda _: '/usr/local/bin/streamlit')
+    monkeypatch.setattr('llm_detector.cli.shutil.which', lambda _: '/usr/local/bin/streamlit')
 
     captured = {}
 
@@ -243,11 +248,33 @@ def test_dashboard_prefers_cli_when_available(monkeypatch):
         captured['cmd'] = cmd
         captured['check'] = check
 
-    monkeypatch.setattr('subprocess.run', fake_run)
+    monkeypatch.setattr('llm_detector.cli.subprocess.run', fake_run)
     cli.main_dashboard()
+    dash_spec = importlib.util.find_spec('llm_detector.dashboard')
+    dash_path = dash_spec.origin if dash_spec else None
     cmd = captured.get('cmd', [])
     check("Prefers streamlit CLI",
-          len(cmd) >= 1 and cmd[0] == '/usr/local/bin/streamlit')
+          cmd == ['/usr/local/bin/streamlit', 'run', dash_path],
+          f"got {cmd}")
+
+
+def test_dashboard_reports_missing_streamlit(monkeypatch, capsys):
+    """main_dashboard should emit a helpful error when streamlit is absent."""
+    print("\n-- DASHBOARD MISSING STREAMLIT --")
+    import sys
+    from llm_detector import cli
+
+    monkeypatch.setattr('llm_detector.cli.shutil.which', lambda _: None)
+    monkeypatch.delitem(sys.modules, 'streamlit', raising=False)
+
+    def fake_run(*args, **kwargs):
+        raise AssertionError("subprocess.run should not be called when streamlit is missing")
+
+    monkeypatch.setattr('llm_detector.cli.subprocess.run', fake_run)
+    cli.main_dashboard()
+    out = capsys.readouterr().out
+    check("Reports missing streamlit",
+          "ERROR: streamlit is not installed." in out)
 
 
 def test_disable_channel_names_match_fusion():

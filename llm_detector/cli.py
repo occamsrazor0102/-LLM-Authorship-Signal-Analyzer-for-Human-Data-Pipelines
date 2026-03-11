@@ -3,6 +3,9 @@
 import json
 import os
 import argparse
+import subprocess
+import importlib.util
+import shutil
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -1225,10 +1228,6 @@ def main_gui():
 
 def main_dashboard():
     """Entry point that launches the Streamlit web dashboard."""
-    import subprocess
-    import importlib.util
-    import shutil
-
     spec = importlib.util.find_spec('llm_detector.dashboard')
     if spec is None or spec.origin is None:
         print('ERROR: llm_detector.dashboard module not found.')
