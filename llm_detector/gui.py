@@ -1885,7 +1885,7 @@ class DetectorGUI:
                 streamlit_spec = importlib.util.find_spec('streamlit')
                 streamlit_main_spec = importlib.util.find_spec('streamlit.__main__')
                 if streamlit_spec is None or streamlit_main_spec is None:
-                    raise ImportError('streamlit.__main__ not found')
+                    raise ImportError('streamlit module or entry point not found')
             except ImportError:
                 messagebox.showerror(
                     'Streamlit Not Found',
