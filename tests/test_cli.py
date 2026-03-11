@@ -217,8 +217,8 @@ def test_dashboard_uses_module_when_cli_missing(monkeypatch):
     monkeypatch.setattr('llm_detector.cli.shutil.which', lambda _: None)
     dummy_streamlit = types.ModuleType('streamlit')
     monkeypatch.setitem(sys.modules, 'streamlit', dummy_streamlit)
-    streamlit_spec = importlib.machinery.ModuleSpec('streamlit', loader=None, origin=None)
-    streamlit_main_spec = importlib.machinery.ModuleSpec('streamlit.__main__', loader=None, origin=None)
+    streamlit_spec = importlib.machinery.ModuleSpec('streamlit', loader=None, origin='/fake/streamlit/__init__.py')
+    streamlit_main_spec = importlib.machinery.ModuleSpec('streamlit.__main__', loader=None, origin='/fake/streamlit/__main__.py')
     real_find_spec = importlib.util.find_spec
 
     def fake_find_spec(name, *args, **kwargs):
@@ -276,6 +276,14 @@ def test_dashboard_reports_missing_streamlit(monkeypatch, capsys):
     original_streamlit = sys.modules.get('streamlit')
     monkeypatch.setattr('llm_detector.cli.shutil.which', lambda _: None)
     monkeypatch.delitem(sys.modules, 'streamlit', raising=False)
+    real_find_spec = importlib.util.find_spec
+
+    def fake_find_spec(name, *args, **kwargs):
+        if name.startswith('streamlit'):
+            return None
+        return real_find_spec(name, *args, **kwargs)
+
+    monkeypatch.setattr('importlib.util.find_spec', fake_find_spec)
 
     def fake_run(*args, **kwargs):
         raise AssertionError("subprocess.run should not be called when streamlit is missing")
