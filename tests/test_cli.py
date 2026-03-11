@@ -273,7 +273,7 @@ def test_dashboard_prefers_cli_when_available(monkeypatch):
 def test_dashboard_reports_missing_streamlit(monkeypatch, capsys):
     """main_dashboard should emit a helpful error when streamlit is absent."""
     from llm_detector import cli
-
+    original_streamlit = sys.modules.get('streamlit')
     monkeypatch.setattr('llm_detector.cli.shutil.which', lambda _: None)
     monkeypatch.delitem(sys.modules, 'streamlit', raising=False)
 
@@ -281,10 +281,16 @@ def test_dashboard_reports_missing_streamlit(monkeypatch, capsys):
         raise AssertionError("subprocess.run should not be called when streamlit is missing")
 
     monkeypatch.setattr('llm_detector.cli.subprocess.run', fake_run)
-    cli.main_dashboard()
-    out = capsys.readouterr().out
-    check("Reports missing streamlit",
-          "ERROR: streamlit is not installed." in out)
+    try:
+        cli.main_dashboard()
+        out = capsys.readouterr().out
+        check("Reports missing streamlit",
+              "ERROR: streamlit is not installed." in out)
+    finally:
+        if original_streamlit is not None:
+            sys.modules['streamlit'] = original_streamlit
+        else:
+            sys.modules.pop('streamlit', None)
 
 
 def test_disable_channel_names_match_fusion():
