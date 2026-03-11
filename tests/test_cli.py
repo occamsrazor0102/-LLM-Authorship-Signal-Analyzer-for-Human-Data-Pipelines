@@ -209,15 +209,24 @@ def test_io_load_csv_numeric_positional():
 
 def test_dashboard_uses_module_when_cli_missing(monkeypatch):
     """main_dashboard should fall back to `python -m streamlit` when CLI is absent."""
-    print("\n-- DASHBOARD FALLBACK --")
     import sys
     import types
     import importlib.util
+    import importlib.machinery
     from llm_detector import cli
 
     monkeypatch.setattr('llm_detector.cli.shutil.which', lambda _: None)
     dummy_streamlit = types.ModuleType('streamlit')
     monkeypatch.setitem(sys.modules, 'streamlit', dummy_streamlit)
+    streamlit_main_spec = importlib.machinery.ModuleSpec('streamlit.__main__', loader=None, origin='streamlit/__main__.py')
+    real_find_spec = importlib.util.find_spec
+
+    def fake_find_spec(name, *args, **kwargs):
+        if name == 'streamlit.__main__':
+            return streamlit_main_spec
+        return real_find_spec(name, *args, **kwargs)
+
+    monkeypatch.setattr('importlib.util.find_spec', fake_find_spec)
 
     captured = {}
 
@@ -237,7 +246,6 @@ def test_dashboard_uses_module_when_cli_missing(monkeypatch):
 
 def test_dashboard_prefers_cli_when_available(monkeypatch):
     """main_dashboard should use the streamlit executable if it is on PATH."""
-    print("\n-- DASHBOARD CLI PREFERRED --")
     import importlib.util
     from llm_detector import cli
     monkeypatch.setattr('llm_detector.cli.shutil.which', lambda _: '/usr/local/bin/streamlit')
@@ -260,7 +268,6 @@ def test_dashboard_prefers_cli_when_available(monkeypatch):
 
 def test_dashboard_reports_missing_streamlit(monkeypatch, capsys):
     """main_dashboard should emit a helpful error when streamlit is absent."""
-    print("\n-- DASHBOARD MISSING STREAMLIT --")
     import sys
     from llm_detector import cli
 

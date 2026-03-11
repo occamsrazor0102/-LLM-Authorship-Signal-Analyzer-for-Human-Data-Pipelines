@@ -1240,6 +1240,9 @@ def main_dashboard():
     else:
         try:
             import streamlit  # noqa: F401
+            streamlit_main_spec = importlib.util.find_spec('streamlit.__main__')
+            if streamlit_main_spec is None:
+                raise ImportError('streamlit.__main__ not found')
         except ImportError:
             print('ERROR: streamlit is not installed.')
             print('Install it with: pip install "llm-detector[web]"')

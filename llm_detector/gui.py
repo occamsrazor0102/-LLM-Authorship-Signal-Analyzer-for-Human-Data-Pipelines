@@ -1867,9 +1867,9 @@ class DetectorGUI:
     def _launch_dashboard(self):
         """Launch the Streamlit web dashboard in a background process."""
         import importlib.util
+        import sys as _sys
         import shutil
         import subprocess
-        import sys as _sys
         spec = importlib.util.find_spec('llm_detector.dashboard')
         if spec is None or spec.origin is None:
             messagebox.showerror(
@@ -1885,6 +1885,9 @@ class DetectorGUI:
         else:
             try:
                 import streamlit  # noqa: F401
+                streamlit_main_spec = importlib.util.find_spec('streamlit.__main__')
+                if streamlit_main_spec is None:
+                    raise ImportError('streamlit.__main__ not found')
             except ImportError:
                 messagebox.showerror(
                     'Streamlit Not Found',
