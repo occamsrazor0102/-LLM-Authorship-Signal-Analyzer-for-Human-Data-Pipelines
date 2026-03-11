@@ -237,14 +237,16 @@ def test_dashboard_uses_module_when_cli_missing(monkeypatch):
         captured['check'] = check
 
     monkeypatch.setattr('llm_detector.cli.subprocess.run', fake_run)
-    cli.main_dashboard()
-    dash_spec = importlib.util.find_spec('llm_detector.dashboard')
-    dash_path = dash_spec.origin if dash_spec else None
-    cmd = captured.get('cmd', [])
-    check("Fallback uses python -m streamlit",
-          cmd == [sys.executable, '-m', 'streamlit', 'run', dash_path],
-          f"got {cmd}")
-    monkeypatch.delitem(sys.modules, 'streamlit', raising=False)
+    try:
+        cli.main_dashboard()
+        dash_spec = importlib.util.find_spec('llm_detector.dashboard')
+        dash_path = dash_spec.origin if dash_spec else None
+        cmd = captured.get('cmd', [])
+        check("Fallback uses python -m streamlit",
+              cmd == [sys.executable, '-m', 'streamlit', 'run', dash_path],
+              f"got {cmd}")
+    finally:
+        monkeypatch.delitem(sys.modules, 'streamlit', raising=False)
 
 
 def test_dashboard_prefers_cli_when_available(monkeypatch):
