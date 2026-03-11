@@ -3,6 +3,8 @@
 import os
 import json
 import threading
+import subprocess
+import sys
 from collections import Counter
 
 from llm_detector.compat import HAS_TK
@@ -215,6 +217,11 @@ class DetectorGUI:
             text='🌐 Open Web Dashboard',
             command=self._launch_dashboard,
         ).pack(side=tk.RIGHT, padx=(0, 4))
+        ttk.Button(
+            header,
+            text='🖥 New Desktop Window',
+            command=self._launch_desktop_gui,
+        ).pack(side=tk.RIGHT, padx=(0, 6))
         ttk.Label(header, text='Analyst dashboard for prompt forensics, calibration, and reporting',
                   style='DashboardSubtitle.TLabel').pack(anchor='w')
 
@@ -1893,6 +1900,22 @@ class DetectorGUI:
             messagebox.showerror('Launch Error', f'Could not start Streamlit:\n{exc}')
             return
         self.status_var.set('Web dashboard launched — opening in browser…')
+
+    def _launch_desktop_gui(self):
+        """Spawn another instance of the desktop GUI."""
+        python = sys.executable
+        # Quiet stdout to avoid duplicate console chatter; keep stderr for debugging startup failures.
+        kwargs = {'stdout': subprocess.DEVNULL, 'stderr': sys.stderr}
+        if sys.platform == 'win32':
+            kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            kwargs['start_new_session'] = True
+
+        try:
+            subprocess.Popen([python, '-m', 'llm_detector', '--gui'], **kwargs)
+            self.status_var.set('Opened a new desktop GUI window.')
+        except OSError as exc:
+            messagebox.showerror('Launch Error', f'Could not open desktop GUI:\n{exc}')
 
 
 if HAS_TK:
