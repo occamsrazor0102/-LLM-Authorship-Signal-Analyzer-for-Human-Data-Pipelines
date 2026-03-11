@@ -345,6 +345,98 @@ def test_gui_start_labeling_no_results():
 
 
 # ---------------------------------------------------------------------------
+# GUI: DNA-GPT reporting
+# ---------------------------------------------------------------------------
+
+def test_gui_collect_dna_hits_filters_positive():
+    """_collect_dna_hits returns only continuation positives."""
+    print("\n-- GUI: _collect_dna_hits --")
+    from llm_detector.compat import HAS_TK
+    if not HAS_TK:
+        print("  [SKIP] tkinter not available")
+        return
+
+    import tkinter as tk
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        from llm_detector.gui import DetectorGUI
+        gui = DetectorGUI(root)
+
+        cont_hit = _make_result(
+            'dna1', 'GREEN',
+            continuation_bscore=0.812,
+            continuation_mode='Local',
+            channel_details={
+                'channels': {
+                    'continuation': {'severity': 'AMBER', 'score': 0.7},
+                }
+            },
+        )
+        cont_clean = _make_result(
+            'dna0', 'GREEN',
+            channel_details={'channels': {'continuation': {'severity': 'GREEN'}}},
+        )
+
+        hits = gui._collect_dna_hits([cont_hit, cont_clean])
+        check("one DNA hit returned", len(hits) == 1, f"hits={hits}")
+        hit = hits[0]
+        check("task_id captured", hit['task_id'] == 'dna1')
+        check("severity AMBER captured", hit['severity'] == 'AMBER')
+        check("bscore rounded preserves value", abs(hit['bscore'] - 0.812) < 1e-6)
+        check("mode captured", hit['mode'] == 'Local')
+    finally:
+        root.destroy()
+
+
+def test_gui_refresh_reports_lists_dna_hits():
+    """_refresh_reports prints DNA-GPT-positive section."""
+    print("\n-- GUI: _refresh_reports DNA section --")
+    from llm_detector.compat import HAS_TK
+    if not HAS_TK:
+        print("  [SKIP] tkinter not available")
+        return
+
+    import tkinter as tk
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        from llm_detector.gui import DetectorGUI
+        gui = DetectorGUI(root)
+
+        gui._last_results = [
+            _make_result(
+                'dna-task', 'RED',
+                continuation_bscore=0.901,
+                continuation_mode='API',
+                channel_details={
+                    'channels': {'continuation': {'severity': 'RED', 'score': 0.9}},
+                },
+            ),
+            _make_result('clean', 'GREEN'),
+        ]
+
+        appended = []
+        gui._report_append = lambda text: appended.append(text)
+
+        class _DummyReport:
+            def delete(self, *args, **kwargs):
+                return None
+        gui.report_output = _DummyReport()
+
+        gui._refresh_reports()
+
+        combined = ''.join(appended)
+        check("DNA-GPT section header present",
+              "DNA-GPT POSITIVE CONTINUATIONS" in combined, combined)
+        check("DNA task id appears", "dna-task" in combined, combined)
+        check("no empty message when hits exist",
+              "No DNA-GPT-positive" not in combined, combined)
+    finally:
+        root.destroy()
+
+
+# ---------------------------------------------------------------------------
 # GUI: _LabelingDialog logic (no display)
 # ---------------------------------------------------------------------------
 
