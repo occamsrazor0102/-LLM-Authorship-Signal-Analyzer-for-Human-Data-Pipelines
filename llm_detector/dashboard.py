@@ -343,6 +343,78 @@ def _page_analysis():
             "ppl_model": ppl_model or None,
         }
 
+    def _postprocess_results(results, text_map):
+        """Apply CLI-parity post-processing (similarity, memory, baselines)."""
+        messages = []
+
+        # Similarity analysis and cross-batch similarity store
+        try:
+            instruction_text = None
+            instr_path = (st.session_state.get("instructions_file") or "").strip()
+            if instr_path and os.path.exists(instr_path):
+                with open(instr_path, "r") as f:
+                    instruction_text = f.read()
+
+            if not st.session_state.get("no_similarity") and len(results) >= 2:
+                from llm_detector.similarity import (
+                    analyze_similarity,
+                    apply_similarity_adjustments,
+                )
+
+                sim_pairs = analyze_similarity(
+                    results,
+                    text_map,
+                    jaccard_threshold=st.session_state.get("sim_threshold", 0.40),
+                    instruction_text=instruction_text,
+                )
+                if sim_pairs:
+                    results[:] = apply_similarity_adjustments(
+                        results, sim_pairs, text_map
+                    )
+                    messages.append(f"Similarity: {len(sim_pairs)} pairs flagged")
+
+            sim_store = (st.session_state.get("sim_store") or "").strip()
+            if sim_store:
+                from llm_detector.similarity import (
+                    cross_batch_similarity,
+                    save_similarity_store,
+                )
+
+                cross_flags = cross_batch_similarity(results, text_map, sim_store)
+                if cross_flags:
+                    messages.append(
+                        f"Cross-batch similarity: {len(cross_flags)} matches to history"
+                    )
+                save_similarity_store(results, text_map, sim_store)
+        except Exception as e:
+            messages.append(f"Similarity unavailable: {e}")
+
+        # Baseline accumulation (collect path)
+        try:
+            collect_path = (st.session_state.get("collect_path") or "").strip()
+            if collect_path:
+                from llm_detector.baselines import collect_baselines
+
+                collect_baselines(results, collect_path)
+                messages.append(f"Baselines appended to {collect_path}")
+        except Exception as e:
+            messages.append(f"Baseline collection failed: {e}")
+
+        # Memory store updates
+        try:
+            mem = st.session_state.get("memory_store")
+            if mem:
+                cross_flags = mem.cross_batch_similarity(results, text_map)
+                if cross_flags:
+                    messages.append(
+                        f"Memory cross-batch: {len(cross_flags)} matches detected"
+                    )
+                mem.record_batch(results, text_map)
+        except Exception as e:
+            messages.append(f"Memory store update failed: {e}")
+
+        return messages
+
     if analyze_text_btn and text_input.strip():
         with st.spinner("Analyzing text..."):
             kwargs = _build_kwargs()
@@ -354,8 +426,14 @@ def _page_analysis():
                 result["shadow_disagreement"] = dis
                 result["shadow_ai_prob"] = (dis or {}).get("shadow_ai_prob")
 
-            st.session_state["results"] = [result]
-            st.session_state["text_map"] = {"_single": text_input}
+            results = [result]
+            text_map = {"_single": text_input}
+            st.session_state["analysis_messages"] = _postprocess_results(
+                results, text_map
+            )
+
+            st.session_state["results"] = results
+            st.session_state["text_map"] = text_map
             st.session_state["run_count"] += 1
         st.rerun()
 
@@ -481,6 +559,11 @@ def _page_analysis():
                             _auto_err
                         )
 
+                # Post-process after any auto-created artifacts are available
+                st.session_state["analysis_messages"] = _postprocess_results(
+                    all_results, text_map
+                )
+
                 st.rerun()
 
     # ── Display Results ────────────
@@ -495,6 +578,10 @@ def _page_analysis():
             st.success(f"\U0001f4be Results auto-saved to: `{last_run_folder}`")
         if last_run_folder_error:
             st.warning(f"Auto-save failed: {last_run_folder_error}")
+
+        # CLI-parity post-processing messages
+        for msg in st.session_state.get("analysis_messages", []) or []:
+            st.info(msg)
 
         # Summary bar
         counts = Counter(r["determination"] for r in results)
@@ -985,6 +1072,11 @@ def _page_configuration():
             key="instructions_file",
             placeholder="/path/to/instructions.txt",
         )
+        # Persist configuration in session state for downstream processing
+        st.session_state["no_similarity"] = no_similarity
+        st.session_state["sim_threshold"] = sim_threshold
+        st.session_state["sim_store"] = sim_store
+        st.session_state["instructions_file"] = instructions
 
     # Output Options
     with st.expander("\U0001f4e4 Output Options", expanded=True):
@@ -1015,6 +1107,9 @@ def _page_configuration():
                 key="collect_path",
                 placeholder="/path/to/baselines.jsonl",
             )
+        # Persist output config for downstream actions
+        st.session_state["collect_path"] = collect_path
+        st.session_state["output_dir"] = output_dir
 
     st.success("\u2705 Configuration is saved in the session automatically.")
 
