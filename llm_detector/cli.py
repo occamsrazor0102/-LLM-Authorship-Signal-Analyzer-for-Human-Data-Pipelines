@@ -103,7 +103,12 @@ def print_result(r, verbose=False):
             for ch_name, ch_info in cd['channels'].items():
                 if ch_info['severity'] != 'GREEN':
                     eligible = 'Y' if ch_info.get('mode_eligible') else 'o'
-                    print(f"     {eligible} {ch_name:18s} {ch_info['severity']:6s} score={ch_info['score']:.2f}  {ch_info['explanation'][:60]}")
+                    role = ch_info.get('role', '')
+                    role_tag = f'[{role}] ' if role else ''
+                    print(f"     {eligible} {ch_name:18s} {ch_info['severity']:6s} score={ch_info['score']:.2f}  {role_tag}{ch_info['explanation'][:60]}")
+            triggering_rule = cd.get('triggering_rule', '')
+            if triggering_rule:
+                print(f"     rule: {triggering_rule}")
 
 
 # ==============================================================================
@@ -155,14 +160,20 @@ def _format_labeling_display(r, text_map=None, show_text_chars=300):
     lines.append(f"  DNA-GPT:     {r.get('continuation_bscore', 0):.4f} "
                  f"({r.get('continuation_mode', 'n/a')})")
 
-    cd = r.get('channel_details', {}).get('channels', {})
-    if cd:
+    cd = r.get('channel_details', {})
+    channels_cd = cd.get('channels', {})
+    if channels_cd:
         lines.append(f"\n  --- Channels ---")
         for ch_name in ['prompt_structure', 'stylometry', 'continuation', 'windowing']:
-            info = cd.get(ch_name, {})
+            info = channels_cd.get(ch_name, {})
             sev = info.get('severity', 'GREEN')
             if sev != 'GREEN':
-                lines.append(f"  {ch_name:20s} {sev:6s}  {info.get('explanation', '')[:60]}")
+                role = info.get('role', '')
+                role_tag = f' [{role}]' if role else ''
+                lines.append(f"  {ch_name:20s} {sev:6s}{role_tag}  {info.get('explanation', '')[:60]}")
+        triggering_rule = cd.get('triggering_rule', '')
+        if triggering_rule:
+            lines.append(f"  rule: {triggering_rule}")
 
     # Text preview
     if text_map and r.get('task_id') in text_map:

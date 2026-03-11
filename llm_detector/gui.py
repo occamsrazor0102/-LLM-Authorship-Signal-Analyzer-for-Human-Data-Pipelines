@@ -1251,10 +1251,13 @@ class DetectorGUI:
                 sufficient = info.get('data_sufficient', True)
                 disabled = info.get('disabled', False)
                 eligible = info.get('mode_eligible', True)
+                role = info.get('role', '')
 
                 status_parts = []
                 if disabled:
                     status_parts.append('DISABLED')
+                elif role:
+                    status_parts.append(role)
                 if not sufficient:
                     status_parts.append('no-data')
                 if not eligible:
@@ -1264,6 +1267,10 @@ class DetectorGUI:
                 self._append(f"    {ch_name:20s} ", None)
                 self._append(f"{sev:6s}", sev)
                 self._append(f" score={score:.2f}{status}\n")
+
+        triggering_rule = cd.get('triggering_rule', '')
+        if triggering_rule:
+            self._append(f"  Rule: {triggering_rule}\n", 'DIM')
 
         # Verbose details
         if self.verbose_var.get():
@@ -2003,15 +2010,21 @@ if HAS_TK:
                 f"({r.get('continuation_mode', 'n/a')})",
             ]
 
-            cd = (r.get('channel_details') or {}).get('channels', {})
-            if cd:
+            cd = (r.get('channel_details') or {})
+            channels_cd = cd.get('channels', {})
+            if channels_cd:
                 lines.append('')
                 lines.append('--- Channels ---')
                 for ch_name in ['prompt_structure', 'stylometry', 'continuation', 'windowing']:
-                    info = cd.get(ch_name, {})
+                    info = channels_cd.get(ch_name, {})
                     sev = info.get('severity', 'GREEN')
                     if sev != 'GREEN':
-                        lines.append(f'  {ch_name:20s} {sev:6s}  {info.get("explanation", "")[:60]}')
+                        role = info.get('role', '')
+                        role_tag = f' [{role}]' if role else ''
+                        lines.append(f'  {ch_name:20s} {sev:6s}{role_tag}  {info.get("explanation", "")[:60]}')
+                triggering_rule = cd.get('triggering_rule', '')
+                if triggering_rule:
+                    lines.append(f'  Rule: {triggering_rule}')
 
             tid = r.get('task_id', '')
             if tid in self._text_map:

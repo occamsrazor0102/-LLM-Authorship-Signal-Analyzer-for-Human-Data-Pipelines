@@ -561,6 +561,7 @@ def _page_analysis():
                                 "Channel": ch_name,
                                 "Severity": info.get("severity", "GREEN"),
                                 "Score": f"{info.get('score', 0):.2f}",
+                                "Role": info.get("role", "—"),
                                 "Data Sufficient": (
                                     "\u2705" if info.get("data_sufficient", True)
                                     else "\u274c"
@@ -576,6 +577,17 @@ def _page_analysis():
                             use_container_width=True,
                             hide_index=True,
                         )
+                        triggering_rule = cd.get("triggering_rule", "")
+                        if triggering_rule:
+                            st.caption(f"Triggering rule: `{triggering_rule}`")
+                        fc = cd.get("fusion_counts", {})
+                        if fc:
+                            fc_parts = [
+                                f"primary RED={fc.get('n_primary_red', 0)}",
+                                f"primary AMBER+={fc.get('n_primary_amber', 0)}",
+                                f"all YELLOW+={fc.get('n_yellow_plus', 0)}",
+                            ]
+                            st.caption("Fusion counts: " + "  ·  ".join(fc_parts))
 
                 # Verbose details — full sub-signal breakdown
                 if verbose:
