@@ -244,6 +244,7 @@ def test_dashboard_uses_module_when_cli_missing(monkeypatch):
     check("Fallback uses python -m streamlit",
           cmd == [sys.executable, '-m', 'streamlit', 'run', dash_path],
           f"got {cmd}")
+    check("Mock streamlit module used", sys.modules.get('streamlit') is dummy_streamlit)
 
 
 def test_dashboard_prefers_cli_when_available(monkeypatch):

@@ -1877,7 +1877,6 @@ class DetectorGUI:
             )
             return
         dashboard_path = spec.origin
-        _sys = sys
         streamlit_exe = shutil.which('streamlit')
         if streamlit_exe:
             cmd = [streamlit_exe, 'run', dashboard_path]
@@ -1894,12 +1893,12 @@ class DetectorGUI:
                     'Install it with:\n    pip install "llm-detector[web]"',
                 )
                 return
-            cmd = [_sys.executable, '-m', 'streamlit', 'run', dashboard_path]
+            cmd = [sys.executable, '-m', 'streamlit', 'run', dashboard_path]
         kwargs = dict(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        if _sys.platform == 'win32':
+        if sys.platform == 'win32':
             kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
         else:
             kwargs['start_new_session'] = True
