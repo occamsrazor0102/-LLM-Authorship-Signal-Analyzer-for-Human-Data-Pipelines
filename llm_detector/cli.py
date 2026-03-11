@@ -1239,9 +1239,9 @@ def main_dashboard():
         cmd = [streamlit_exe, 'run', dashboard_path]
     else:
         try:
-            import streamlit  # noqa: F401
+            streamlit_spec = importlib.util.find_spec('streamlit')
             streamlit_main_spec = importlib.util.find_spec('streamlit.__main__')
-            if streamlit_main_spec is None:
+            if streamlit_spec is None or streamlit_main_spec is None:
                 raise ImportError('streamlit.__main__ not found')
         except ImportError:
             print('ERROR: streamlit is not installed.')
