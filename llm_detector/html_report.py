@@ -30,11 +30,171 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; max-width: 900px;
           font-size: 13px; }
 .legend span { display: inline-block; margin-right: 16px; padding: 2px 6px; }
 .channels { margin-top: 24px; }
-.ch-row { display: flex; align-items: center; padding: 8px 0;
-          border-bottom: 1px solid #eee; font-size: 14px; }
-.ch-name { width: 160px; font-weight: 600; }
-.ch-sev { width: 80px; font-weight: 600; }
+.ch-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.ch-table th { text-align: left; padding: 8px 10px; background: #e8e8e8;
+               font-weight: 600; font-size: 13px; }
+.ch-table td { padding: 8px 10px; border-bottom: 1px solid #eee; vertical-align: middle; }
+.ch-name { font-weight: 600; white-space: nowrap; }
+.ch-score-bar { width: 90px; }
+.score-bar-bg { background: #e0e0e0; border-radius: 4px; height: 10px; width: 80px; }
+.score-bar-fill { height: 10px; border-radius: 4px; }
+.score-bar-RED { background: #d32f2f; }
+.score-bar-AMBER { background: #f57c00; }
+.score-bar-YELLOW { background: #fbc02d; }
+.score-bar-GREEN { background: #388e3c; }
+.score-val { font-size: 12px; color: #555; margin-top: 2px; }
+.role-badge { display: inline-block; font-size: 11px; font-weight: 600;
+              padding: 2px 7px; border-radius: 10px; white-space: nowrap; }
+.role-primary { background: #e3f2fd; color: #1565c0; }
+.role-supporting { background: #f3e5f5; color: #6a1b9a; }
+.role-nodata { background: #f5f5f5; color: #757575; }
+.role-disabled { background: #fbe9e7; color: #b71c1c; }
+.ch-expl { font-size: 13px; color: #444; }
+.fusion-box { margin-top: 24px; padding: 16px; background: #fffde7;
+              border: 1px solid #ffe082; border-radius: 8px; font-size: 13px; }
+.fusion-box h3 { margin: 0 0 10px 0; font-size: 15px; }
+.fusion-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; }
+.fusion-item { background: white; border: 1px solid #ffe082; border-radius: 6px;
+               padding: 6px 12px; font-size: 13px; }
+.fusion-label { color: #666; font-size: 12px; }
+.fusion-val { font-weight: 600; font-size: 14px; }
+.rule-badge { display: inline-block; background: #fff9c4; border: 1px solid #f9a825;
+              border-radius: 4px; padding: 3px 10px; font-size: 12px;
+              font-weight: 600; color: #e65100; }
 """
+
+
+_CHANNEL_LABELS = {
+    'prompt_structure': 'Prompt Structure',
+    'stylometry': 'Stylometry',
+    'continuation': 'Continuation (DNA-GPT)',
+    'windowing': 'Windowing',
+}
+
+_TRIGGERING_RULE_LABELS = {
+    'L0_critical_preamble': 'L0 Critical Preamble — instant RED',
+    'primary_red_with_corroboration': 'Primary RED channel + ≥2 YELLOW+ channels → RED',
+    'primary_red_short_text_relaxed': 'Primary RED + 1 YELLOW (short-text relaxation) → RED',
+    'two_primary_amber_channels': '2 Primary AMBER channels → RED',
+    'primary_red_single_channel_demoted': 'Single primary RED (no corroboration) → AMBER',
+    'generic_aigt_red_with_corroboration': 'Generic-AIGT RED channel + ≥2 YELLOW+ → RED',
+    'generic_aigt_red_single_channel': 'Generic-AIGT single RED channel → RED (capped at 75%)',
+    'primary_amber_single_channel': 'Single primary AMBER channel → AMBER',
+    'primary_amber_mixed_windowing': 'Primary AMBER + windowing mixed-signal → MIXED',
+    'multi_channel_convergence': 'Multi-channel convergence (≥2 YELLOW+) → AMBER',
+    'multi_channel_convergence_mixed': 'Multi-channel convergence + windowing mixed-signal → MIXED',
+    'supporting_channel_amber': 'Supporting channel at AMBER → AMBER',
+    'yellow_signal': 'Single YELLOW+ channel → YELLOW',
+    'yellow_signal_mixed_windowing': 'YELLOW + windowing mixed-signal → MIXED',
+    'obfuscation_delta': 'Obfuscation normalization delta → YELLOW',
+    'weak_signals_below_threshold': 'Weak signals below threshold → REVIEW',
+    'no_signal': 'No significant signals → GREEN',
+}
+
+
+def _build_channel_rows(cd):
+    """Build HTML table rows for channel scores, including score bars and role badges."""
+    rows = []
+    channel_order = ['prompt_structure', 'stylometry', 'continuation', 'windowing']
+    # Include any channels present in cd but not in the standard order
+    additional_channels = [k for k in cd if k not in channel_order]
+    for ch_name in channel_order + additional_channels:
+        info = cd.get(ch_name, {})
+        if not info:
+            continue
+        sev = info.get('severity', 'GREEN')
+        score = info.get('score', 0.0)
+        expl = info.get('explanation', '')
+        role = info.get('role', '')
+        data_sufficient = info.get('data_sufficient', True)
+        disabled = info.get('disabled', False)
+        label = html.escape(_CHANNEL_LABELS.get(ch_name, ch_name))
+
+        # Score bar
+        bar_width = int(score * 80)
+        score_bar = (
+            f'<div class="score-bar-bg">'
+            f'<div class="score-bar-fill score-bar-{sev}" style="width:{bar_width}px"></div>'
+            f'</div>'
+            f'<div class="score-val">{score:.2f}</div>'
+        )
+
+        # Role badge
+        if disabled:
+            role_html = '<span class="role-badge role-disabled">Disabled</span>'
+        elif not data_sufficient:
+            role_html = '<span class="role-badge role-nodata">No Data</span>'
+        elif role == 'supporting':
+            role_html = '<span class="role-badge role-supporting">Supporting</span>'
+        else:
+            role_html = '<span class="role-badge role-primary">Primary</span>'
+
+        rows.append(
+            f'<tr>'
+            f'<td class="ch-name">{label}</td>'
+            f'<td class="ch-score-bar">{score_bar}</td>'
+            f'<td class="det-{sev}" style="font-weight:600">{html.escape(sev)}</td>'
+            f'<td>{role_html}</td>'
+            f'<td class="ch-expl">{html.escape(expl)}</td>'
+            f'</tr>'
+        )
+    return '\n'.join(rows)
+
+
+def _build_fusion_section(channel_details, heading_level=3):
+    """Build the Determination Basis HTML section from channel_details.
+
+    Args:
+        channel_details: The channel_details dict from fusion output.
+        heading_level: HTML heading level to use (default 3 for h3; use 4 for batch sub-sections).
+    """
+    if not channel_details:
+        return ''
+
+    hl = heading_level
+    mode = channel_details.get('mode', '?')
+    fc = channel_details.get('fusion_counts', {})
+    rule = channel_details.get('triggering_rule', '')
+    rule_label = html.escape(_TRIGGERING_RULE_LABELS.get(rule, rule or 'Unknown'))
+
+    items = [
+        ('Mode', html.escape(mode)),
+        ('Primary RED channels', str(fc.get('n_primary_red', '—'))),
+        ('Primary AMBER+ channels', str(fc.get('n_primary_amber', '—'))),
+        ('All YELLOW+ channels', str(fc.get('n_yellow_plus', '—'))),
+        ('All RED channels', str(fc.get('n_red', '—'))),
+    ]
+    items_html = ''.join(
+        f'<div class="fusion-item">'
+        f'<div class="fusion-label">{k}</div>'
+        f'<div class="fusion-val">{v}</div>'
+        f'</div>'
+        for k, v in items
+    )
+
+    disabled = channel_details.get('disabled_channels', [])
+    disabled_note = (
+        f'<div style="margin-top:10px;font-size:12px;color:#888">'
+        f'Ablated channels: {html.escape(", ".join(disabled))}</div>'
+        if disabled else ''
+    )
+
+    short_text_note = (
+        '<div style="margin-top:6px;font-size:12px;color:#e65100">'
+        '⚠ Short-text adjustment applied (word count &lt; 100)</div>'
+        if channel_details.get('short_text_adjustment') else ''
+    )
+
+    return (
+        f'<div class="fusion-box">'
+        f'<h{hl}>Determination Basis</h{hl}>'
+        f'<div style="margin-bottom:10px">'
+        f'Triggering rule: <span class="rule-badge">{rule_label}</span>'
+        f'</div>'
+        f'<div class="fusion-row">{items_html}</div>'
+        f'{short_text_note}{disabled_note}'
+        f'</div>'
+    )
 
 
 def generate_html_report(text, result, output_path=None):
@@ -64,17 +224,10 @@ def generate_html_report(text, result, output_path=None):
 
     # Channel summary
     cd = result.get('channel_details', {}).get('channels', {})
-    channel_rows = []
-    for ch_name in ['prompt_structure', 'stylometry', 'continuation', 'windowing']:
-        info = cd.get(ch_name, {})
-        sev = info.get('severity', 'GREEN')
-        expl = info.get('explanation', '')[:80]
-        channel_rows.append(f"""
-            <div class="ch-row">
-                <div class="ch-name">{html.escape(ch_name)}</div>
-                <div class="ch-sev det-{sev}">{sev}</div>
-                <div style="flex:1">{html.escape(expl)}</div>
-            </div>""")
+    channel_rows = _build_channel_rows(cd)
+
+    # Determination basis section
+    fusion_section = _build_fusion_section(result.get('channel_details', {}))
 
     report = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>BEET Detection Report</title>
@@ -101,8 +254,18 @@ def generate_html_report(text, result, output_path=None):
 </div>
 <div class="channels">
     <h3>Channel Scores</h3>
-    {''.join(channel_rows)}
+    <table class="ch-table">
+        <tr>
+            <th>Channel</th>
+            <th>Score</th>
+            <th>Severity</th>
+            <th>Role</th>
+            <th>Detail</th>
+        </tr>
+        {channel_rows}
+    </table>
 </div>
+{fusion_section}
 </body></html>"""
 
     if output_path:
@@ -142,11 +305,37 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; max-width: 960px;
 .signal-uppercase { border-color: #e53935; background: #ffcdd2; }
 .signal-fingerprint { border-color: #ab47bc; background: #f3e5f5; }
 .signal-hot_window { border-color: #ef5350; background: #ffcdd2; }
-.channels { padding: 0 24px 16px; }
-.ch-row { display: flex; align-items: center; padding: 6px 0;
-          border-bottom: 1px solid #eee; font-size: 13px; }
-.ch-name { width: 140px; font-weight: 600; }
-.ch-sev { width: 70px; font-weight: 600; }
+.channels { padding: 0 24px 12px; }
+.ch-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ch-table th { text-align: left; padding: 6px 8px; background: #e8e8e8; font-weight: 600; font-size: 12px; }
+.ch-table td { padding: 6px 8px; border-bottom: 1px solid #eee; vertical-align: middle; }
+.ch-name { font-weight: 600; white-space: nowrap; }
+.ch-score-bar { width: 80px; }
+.score-bar-bg { background: #e0e0e0; border-radius: 4px; height: 8px; width: 70px; }
+.score-bar-fill { height: 8px; border-radius: 4px; }
+.score-bar-RED { background: #d32f2f; }
+.score-bar-AMBER { background: #f57c00; }
+.score-bar-YELLOW { background: #fbc02d; }
+.score-bar-GREEN { background: #388e3c; }
+.score-val { font-size: 11px; color: #555; margin-top: 2px; }
+.role-badge { display: inline-block; font-size: 11px; font-weight: 600;
+              padding: 1px 6px; border-radius: 10px; white-space: nowrap; }
+.role-primary { background: #e3f2fd; color: #1565c0; }
+.role-supporting { background: #f3e5f5; color: #6a1b9a; }
+.role-nodata { background: #f5f5f5; color: #757575; }
+.role-disabled { background: #fbe9e7; color: #b71c1c; }
+.ch-expl { font-size: 12px; color: #444; }
+.fusion-box { margin: 0 24px 16px; padding: 12px; background: #fffde7;
+              border: 1px solid #ffe082; border-radius: 8px; font-size: 12px; }
+.fusion-box h4 { margin: 0 0 8px 0; font-size: 13px; }
+.fusion-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.fusion-item { background: white; border: 1px solid #ffe082; border-radius: 6px;
+               padding: 4px 10px; font-size: 12px; }
+.fusion-label { color: #666; font-size: 11px; }
+.fusion-val { font-weight: 600; font-size: 13px; }
+.rule-badge { display: inline-block; background: #fff9c4; border: 1px solid #f9a825;
+              border-radius: 4px; padding: 2px 8px; font-size: 11px;
+              font-weight: 600; color: #e65100; }
 .legend { margin: 24px 0; padding: 16px; background: #f5f5f5; border-radius: 8px;
           font-size: 13px; }
 .legend span { display: inline-block; margin-right: 16px; padding: 2px 6px; }
@@ -207,17 +396,14 @@ def generate_batch_html_report(results, text_map, output_path=None):
         highlighted = _apply_highlights(text, char_spans)
 
         cd = r.get('channel_details', {}).get('channels', {})
-        channel_rows = []
-        for ch_name in ['prompt_structure', 'stylometry', 'continuation', 'windowing']:
-            info = cd.get(ch_name, {})
-            sev = info.get('severity', 'GREEN')
-            expl = info.get('explanation', '')[:80]
-            channel_rows.append(
-                f'<div class="ch-row">'
-                f'<div class="ch-name">{html.escape(ch_name)}</div>'
-                f'<div class="ch-sev det-{sev}">{sev}</div>'
-                f'<div style="flex:1">{html.escape(expl)}</div></div>'
-            )
+        channel_rows = _build_channel_rows(cd)
+        ch_table = (
+            f'<table class="ch-table">'
+            f'<tr><th>Channel</th><th>Score</th><th>Severity</th><th>Role</th><th>Detail</th></tr>'
+            f'{channel_rows}'
+            f'</table>'
+        )
+        fusion_section = _build_fusion_section(r.get('channel_details', {}), heading_level=4)
 
         att_label = f' | Fellow: {html.escape(att)}' if att else ''
         sections.append(f"""
@@ -231,7 +417,8 @@ def generate_batch_html_report(results, text_map, output_path=None):
         <div class="meta" style="margin-top:4px">{html.escape(reason[:200])}</div>
     </div>
     <div class="text-container">{highlighted}</div>
-    <div class="channels">{''.join(channel_rows)}</div>
+    <div class="channels">{ch_table}</div>
+    {fusion_section}
 </div>""")
 
     report = f"""<!DOCTYPE html>

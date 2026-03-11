@@ -229,6 +229,98 @@ def test_attack_type_derivation():
     check("Missing fields -> 'none'", derive_attack_type({}) == 'none')
 
 
+def test_fusion_transparency_fields():
+    print("\n-- FUSION TRANSPARENCY: fusion_counts, triggering_rule, channel roles --")
+
+    l25_low = {'composite': 0.05, 'framing_completeness': 0, 'cfd': 0.01,
+               'mfsr': 0, 'must_rate': 0, 'distinct_frames': 0,
+               'conditional_density': 0, 'meta_design_hits': 0,
+               'contractions': 0, 'numbered_criteria': 0,
+               'pack_constraint_score': 0, 'pack_exec_spec_score': 0,
+               'pack_boost': 0, 'pack_active_families': 0, 'pack_spans': []}
+    l26_none = {'voice_gated': False, 'vsd': 0, 'voice_score': 0,
+                'spec_score': 0, 'contractions': 5, 'hedges': 3,
+                'casual_markers': 3, 'misspellings': 0, 'camel_cols': 0,
+                'calcs': 0, 'pack_schema_score': 0, 'pack_spans': []}
+    l27_none = {'idi': 2.0, 'imperatives': 0, 'conditionals': 0,
+                'binary_specs': 0, 'missing_refs': 0, 'flag_count': 0,
+                'pack_idi_boost': 0, 'pack_spans': []}
+
+    _, _, _, cd = determine(
+        0, 'NONE', l25_low, l26_none, l27_none, 300,
+        mode='generic_aigt',
+    )
+
+    # fusion_counts should always be present
+    fc = cd.get('fusion_counts', {})
+    check("fusion_counts present", bool(fc), f"got {fc}")
+    check("n_primary_red in fusion_counts", 'n_primary_red' in fc)
+    check("n_primary_amber in fusion_counts", 'n_primary_amber' in fc)
+    check("n_yellow_plus in fusion_counts", 'n_yellow_plus' in fc)
+    check("n_red in fusion_counts", 'n_red' in fc)
+
+    # triggering_rule should always be present
+    rule = cd.get('triggering_rule', '')
+    check("triggering_rule present", bool(rule), f"got {repr(rule)}")
+    check("triggering_rule is string", isinstance(rule, str))
+
+    # Channel role should be present for each channel
+    for ch_name in ['prompt_structure', 'stylometry', 'continuation', 'windowing']:
+        info = cd['channels'].get(ch_name, {})
+        role = info.get('role', '')
+        check(f"{ch_name} has role field", role in ('primary', 'supporting'),
+              f"got {repr(role)}")
+
+    # In generic_aigt mode all channels are primary
+    check("generic_aigt: prompt_structure is primary",
+          cd['channels']['prompt_structure'].get('role') == 'primary')
+    check("generic_aigt: stylometry is primary",
+          cd['channels']['stylometry'].get('role') == 'primary')
+    check("generic_aigt: continuation is primary",
+          cd['channels']['continuation'].get('role') == 'primary')
+
+    # In task_prompt mode only task_prompt-eligible channels are primary
+    _, _, _, cd_tp = determine(
+        0, 'NONE', l25_low, l26_none, l27_none, 300,
+        mode='task_prompt',
+    )
+    check("task_prompt: prompt_structure is primary",
+          cd_tp['channels']['prompt_structure'].get('role') == 'primary')
+    check("task_prompt: continuation is primary",
+          cd_tp['channels']['continuation'].get('role') == 'primary')
+    check("task_prompt: stylometry is supporting",
+          cd_tp['channels']['stylometry'].get('role') == 'supporting')
+    check("task_prompt: windowing is supporting",
+          cd_tp['channels']['windowing'].get('role') == 'supporting')
+
+
+def test_triggering_rule_no_signal():
+    print("\n-- TRIGGERING RULE: no signal path --")
+    l25_low = {'composite': 0.01, 'framing_completeness': 0, 'cfd': 0.0,
+               'mfsr': 0, 'must_rate': 0, 'distinct_frames': 0,
+               'conditional_density': 0, 'meta_design_hits': 0,
+               'contractions': 0, 'numbered_criteria': 0,
+               'pack_constraint_score': 0, 'pack_exec_spec_score': 0,
+               'pack_boost': 0, 'pack_active_families': 0, 'pack_spans': []}
+    l26_none = {'voice_gated': False, 'vsd': 0, 'voice_score': 0,
+                'spec_score': 0, 'contractions': 10, 'hedges': 5,
+                'casual_markers': 5, 'misspellings': 0, 'camel_cols': 0,
+                'calcs': 0, 'pack_schema_score': 0, 'pack_spans': []}
+    l27_none = {'idi': 0.5, 'imperatives': 0, 'conditionals': 0,
+                'binary_specs': 0, 'missing_refs': 0, 'flag_count': 0,
+                'pack_idi_boost': 0, 'pack_spans': []}
+    det, _, _, cd = determine(
+        0, 'NONE', l25_low, l26_none, l27_none, 300,
+        mode='generic_aigt',
+    )
+    check("no-signal determination is GREEN or REVIEW", det in ('GREEN', 'REVIEW'),
+          f"got {det}")
+    rule = cd.get('triggering_rule', '')
+    check("triggering_rule set for no-signal path", bool(rule), f"got {repr(rule)}")
+
+
+
+
 if __name__ == '__main__':
     print("=" * 70)
     print("Fusion / Channel Scoring Tests")
@@ -240,6 +332,8 @@ if __name__ == '__main__':
     test_channel_ablation()
     test_short_text_adjustment()
     test_attack_type_derivation()
+    test_fusion_transparency_fields()
+    test_triggering_rule_no_signal()
 
     print(f"\n{'=' * 70}")
     print(f"RESULTS: {PASSED} passed, {FAILED} failed")
