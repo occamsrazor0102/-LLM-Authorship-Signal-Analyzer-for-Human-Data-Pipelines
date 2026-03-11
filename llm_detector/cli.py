@@ -3,6 +3,9 @@
 import json
 import os
 import argparse
+import subprocess
+import importlib.util
+import shutil
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -1225,22 +1228,27 @@ def main_gui():
 
 def main_dashboard():
     """Entry point that launches the Streamlit web dashboard."""
-    import subprocess
-    import importlib.util
-    import shutil
-
-    if shutil.which('streamlit') is None:
-        print('ERROR: streamlit is not installed or not in PATH.')
-        print('Install it with: pip install streamlit')
-        return
-
     spec = importlib.util.find_spec('llm_detector.dashboard')
     if spec is None or spec.origin is None:
         print('ERROR: llm_detector.dashboard module not found.')
         print('Ensure the llm_detector package is properly installed.')
         return
     dashboard_path = spec.origin
-    subprocess.run(['streamlit', 'run', dashboard_path], check=False)
+    streamlit_exe = shutil.which('streamlit')
+    if streamlit_exe:
+        cmd = [streamlit_exe, 'run', dashboard_path]
+    else:
+        try:
+            streamlit_spec = importlib.util.find_spec('streamlit')
+            streamlit_main_spec = importlib.util.find_spec('streamlit.__main__')
+            if streamlit_spec is None or streamlit_main_spec is None:
+                raise ImportError('streamlit module or entry point not found')
+        except ImportError:
+            print('ERROR: streamlit is not installed.')
+            print('Install it with: pip install "llm-detector[web]"')
+            return
+        cmd = [sys.executable, '-m', 'streamlit', 'run', dashboard_path]
+    subprocess.run(cmd, check=False)
 
 
 def main_web():

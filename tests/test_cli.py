@@ -5,6 +5,9 @@ import os
 import csv
 import shutil
 import tempfile
+import types
+import importlib.util
+import importlib.machinery
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 PASSED = 0
@@ -205,6 +208,101 @@ def test_io_load_csv_numeric_positional():
             check("occupation from col 4", tasks[0]['occupation'] == 'finance')
     finally:
         shutil.rmtree(tmpdir)
+
+
+def test_dashboard_uses_module_when_cli_missing(monkeypatch):
+    """main_dashboard should fall back to `python -m streamlit` when CLI is absent."""
+    from llm_detector import cli
+
+    monkeypatch.setattr('llm_detector.cli.shutil.which', lambda _: None)
+    original_streamlit_modules = {k: v for k, v in sys.modules.items() if k.startswith('streamlit')}
+    dummy_streamlit = types.ModuleType('streamlit')
+    monkeypatch.setitem(sys.modules, 'streamlit', dummy_streamlit)
+    streamlit_spec = importlib.machinery.ModuleSpec('streamlit', loader=None, origin='/fake/streamlit/__init__.py')
+    streamlit_main_spec = importlib.machinery.ModuleSpec('streamlit.__main__', loader=None, origin='/fake/streamlit/__main__.py')
+    real_find_spec = importlib.util.find_spec
+
+    def fake_find_spec(name, *args, **kwargs):
+        if name == 'streamlit':
+            return streamlit_spec
+        if name == 'streamlit.__main__':
+            return streamlit_main_spec
+        return real_find_spec(name, *args, **kwargs)
+
+    monkeypatch.setattr('importlib.util.find_spec', fake_find_spec)
+
+    captured = {}
+
+    def fake_run(cmd, check=False):
+        captured['cmd'] = cmd
+        captured['check'] = check
+
+    monkeypatch.setattr('llm_detector.cli.subprocess.run', fake_run)
+    try:
+        cli.main_dashboard()
+        dash_spec = importlib.util.find_spec('llm_detector.dashboard')
+        dash_path = dash_spec.origin if dash_spec else None
+        cmd = captured.get('cmd', [])
+        check("Fallback uses python -m streamlit",
+              cmd == [sys.executable, '-m', 'streamlit', 'run', dash_path],
+              f"got {cmd}")
+    finally:
+        for key in list(sys.modules):
+            if key.startswith('streamlit'):
+                sys.modules.pop(key, None)
+        sys.modules.update(original_streamlit_modules)
+
+
+def test_dashboard_prefers_cli_when_available(monkeypatch):
+    """main_dashboard should use the streamlit executable if it is on PATH."""
+    from llm_detector import cli
+    monkeypatch.setattr('llm_detector.cli.shutil.which', lambda _: '/usr/local/bin/streamlit')
+
+    captured = {}
+
+    def fake_run(cmd, check=False):
+        captured['cmd'] = cmd
+        captured['check'] = check
+
+    monkeypatch.setattr('llm_detector.cli.subprocess.run', fake_run)
+    cli.main_dashboard()
+    dash_spec = importlib.util.find_spec('llm_detector.dashboard')
+    dash_path = dash_spec.origin if dash_spec else None
+    cmd = captured.get('cmd', [])
+    check("Prefers streamlit CLI",
+          cmd == ['/usr/local/bin/streamlit', 'run', dash_path],
+          f"got {cmd}")
+
+
+def test_dashboard_reports_missing_streamlit(monkeypatch, capsys):
+    """main_dashboard should emit a helpful error when streamlit is absent."""
+    from llm_detector import cli
+    original_streamlit_modules = {k: v for k, v in sys.modules.items() if k.startswith('streamlit')}
+    monkeypatch.setattr('llm_detector.cli.shutil.which', lambda _: None)
+    monkeypatch.delitem(sys.modules, 'streamlit', raising=False)
+    real_find_spec = importlib.util.find_spec
+
+    def fake_find_spec(name, *args, **kwargs):
+        if name.startswith('streamlit'):
+            return None
+        return real_find_spec(name, *args, **kwargs)
+
+    monkeypatch.setattr('importlib.util.find_spec', fake_find_spec)
+
+    def fake_run(*args, **kwargs):
+        raise AssertionError("subprocess.run should not be called when streamlit is missing")
+
+    monkeypatch.setattr('llm_detector.cli.subprocess.run', fake_run)
+    try:
+        cli.main_dashboard()
+        out = capsys.readouterr().out
+        check("Reports missing streamlit",
+              "ERROR: streamlit is not installed." in out)
+    finally:
+        for key in list(sys.modules):
+            if key.startswith('streamlit'):
+                sys.modules.pop(key, None)
+        sys.modules.update(original_streamlit_modules)
 
 
 def test_disable_channel_names_match_fusion():

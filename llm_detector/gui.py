@@ -4,6 +4,8 @@ import os
 import json
 import threading
 import subprocess
+import importlib.util
+import shutil
 import sys
 from collections import Counter
 
@@ -1866,16 +1868,6 @@ class DetectorGUI:
 
     def _launch_dashboard(self):
         """Launch the Streamlit web dashboard in a background process."""
-        import shutil
-        import subprocess
-        import importlib.util
-        if shutil.which('streamlit') is None:
-            messagebox.showerror(
-                'Streamlit Not Found',
-                'streamlit is not installed or not in PATH.\n'
-                'Install it with:\n    pip install streamlit',
-            )
-            return
         spec = importlib.util.find_spec('llm_detector.dashboard')
         if spec is None or spec.origin is None:
             messagebox.showerror(
@@ -1885,17 +1877,33 @@ class DetectorGUI:
             )
             return
         dashboard_path = spec.origin
+        streamlit_exe = shutil.which('streamlit')
+        if streamlit_exe:
+            cmd = [streamlit_exe, 'run', dashboard_path]
+        else:
+            try:
+                streamlit_spec = importlib.util.find_spec('streamlit')
+                streamlit_main_spec = importlib.util.find_spec('streamlit.__main__')
+                if streamlit_spec is None or streamlit_main_spec is None:
+                    raise ImportError('streamlit module or entry point not found')
+            except ImportError:
+                messagebox.showerror(
+                    'Streamlit Not Found',
+                    'streamlit is not installed in this environment.\n'
+                    'Install it with:\n    pip install "llm-detector[web]"',
+                )
+                return
+            cmd = [sys.executable, '-m', 'streamlit', 'run', dashboard_path]
         kwargs = dict(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        import sys as _sys
-        if _sys.platform == 'win32':
+        if sys.platform == 'win32':
             kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
         else:
             kwargs['start_new_session'] = True
         try:
-            subprocess.Popen(['streamlit', 'run', dashboard_path], **kwargs)
+            subprocess.Popen(cmd, **kwargs)
         except OSError as exc:
             messagebox.showerror('Launch Error', f'Could not start Streamlit:\n{exc}')
             return
