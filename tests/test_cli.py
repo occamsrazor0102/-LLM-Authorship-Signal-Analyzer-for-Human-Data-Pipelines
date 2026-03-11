@@ -5,6 +5,9 @@ import os
 import csv
 import shutil
 import tempfile
+import types
+import importlib.util
+import importlib.machinery
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 PASSED = 0
@@ -209,10 +212,6 @@ def test_io_load_csv_numeric_positional():
 
 def test_dashboard_uses_module_when_cli_missing(monkeypatch):
     """main_dashboard should fall back to `python -m streamlit` when CLI is absent."""
-    import sys
-    import types
-    import importlib.util
-    import importlib.machinery
     from llm_detector import cli
 
     monkeypatch.setattr('llm_detector.cli.shutil.which', lambda _: None)
@@ -246,7 +245,6 @@ def test_dashboard_uses_module_when_cli_missing(monkeypatch):
 
 def test_dashboard_prefers_cli_when_available(monkeypatch):
     """main_dashboard should use the streamlit executable if it is on PATH."""
-    import importlib.util
     from llm_detector import cli
     monkeypatch.setattr('llm_detector.cli.shutil.which', lambda _: '/usr/local/bin/streamlit')
 
@@ -268,7 +266,6 @@ def test_dashboard_prefers_cli_when_available(monkeypatch):
 
 def test_dashboard_reports_missing_streamlit(monkeypatch, capsys):
     """main_dashboard should emit a helpful error when streamlit is absent."""
-    import sys
     from llm_detector import cli
 
     monkeypatch.setattr('llm_detector.cli.shutil.which', lambda _: None)

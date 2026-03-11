@@ -4,6 +4,8 @@ import os
 import json
 import threading
 import subprocess
+import importlib.util
+import shutil
 import sys
 from collections import Counter
 
@@ -1866,10 +1868,6 @@ class DetectorGUI:
 
     def _launch_dashboard(self):
         """Launch the Streamlit web dashboard in a background process."""
-        import importlib.util
-        import sys as _sys
-        import shutil
-        import subprocess
         spec = importlib.util.find_spec('llm_detector.dashboard')
         if spec is None or spec.origin is None:
             messagebox.showerror(
@@ -1895,12 +1893,12 @@ class DetectorGUI:
                     'Install it with:\n    pip install "llm-detector[web]"',
                 )
                 return
-            cmd = [_sys.executable, '-m', 'streamlit', 'run', dashboard_path]
+            cmd = [sys.executable, '-m', 'streamlit', 'run', dashboard_path]
         kwargs = dict(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        if _sys.platform == 'win32':
+        if sys.platform == 'win32':
             kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
         else:
             kwargs['start_new_session'] = True
