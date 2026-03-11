@@ -215,6 +215,7 @@ def test_dashboard_uses_module_when_cli_missing(monkeypatch):
     from llm_detector import cli
 
     monkeypatch.setattr('llm_detector.cli.shutil.which', lambda _: None)
+    original_streamlit_modules = {k: v for k, v in sys.modules.items() if k.startswith('streamlit')}
     dummy_streamlit = types.ModuleType('streamlit')
     monkeypatch.setitem(sys.modules, 'streamlit', dummy_streamlit)
     streamlit_spec = importlib.machinery.ModuleSpec('streamlit', loader=None, origin='/fake/streamlit/__init__.py')
@@ -246,7 +247,10 @@ def test_dashboard_uses_module_when_cli_missing(monkeypatch):
               cmd == [sys.executable, '-m', 'streamlit', 'run', dash_path],
               f"got {cmd}")
     finally:
-        monkeypatch.delitem(sys.modules, 'streamlit', raising=False)
+        for key in list(sys.modules):
+            if key.startswith('streamlit'):
+                sys.modules.pop(key, None)
+        sys.modules.update(original_streamlit_modules)
 
 
 def test_dashboard_prefers_cli_when_available(monkeypatch):
@@ -273,7 +277,7 @@ def test_dashboard_prefers_cli_when_available(monkeypatch):
 def test_dashboard_reports_missing_streamlit(monkeypatch, capsys):
     """main_dashboard should emit a helpful error when streamlit is absent."""
     from llm_detector import cli
-    original_streamlit = sys.modules.get('streamlit')
+    original_streamlit_modules = {k: v for k, v in sys.modules.items() if k.startswith('streamlit')}
     monkeypatch.setattr('llm_detector.cli.shutil.which', lambda _: None)
     monkeypatch.delitem(sys.modules, 'streamlit', raising=False)
     real_find_spec = importlib.util.find_spec
@@ -295,10 +299,10 @@ def test_dashboard_reports_missing_streamlit(monkeypatch, capsys):
         check("Reports missing streamlit",
               "ERROR: streamlit is not installed." in out)
     finally:
-        if original_streamlit is not None:
-            sys.modules['streamlit'] = original_streamlit
-        else:
-            sys.modules.pop('streamlit', None)
+        for key in list(sys.modules):
+            if key.startswith('streamlit'):
+                sys.modules.pop(key, None)
+        sys.modules.update(original_streamlit_modules)
 
 
 def test_disable_channel_names_match_fusion():
