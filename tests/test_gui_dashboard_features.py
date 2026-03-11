@@ -364,7 +364,7 @@ def test_gui_collect_dna_hits_filters_positive():
         gui = DetectorGUI(root)
 
         cont_hit = _make_result(
-            'dna1', 'GREEN',
+            'dna1', 'AMBER',
             continuation_bscore=0.812,
             continuation_mode='Local',
             channel_details={

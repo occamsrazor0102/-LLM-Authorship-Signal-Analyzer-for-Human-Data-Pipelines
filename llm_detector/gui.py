@@ -1792,7 +1792,7 @@ class DetectorGUI:
 
             bscore = r.get('continuation_bscore')
             if bscore is None:
-                bscore = cont.get('score', 0.0)
+                bscore = cont.get('score')
             mode = (
                 r.get('continuation_mode')
                 or cont.get('mode')
@@ -1803,7 +1803,7 @@ class DetectorGUI:
                 'task_id': r.get('task_id', '') or '(unknown task)',
                 'overall': r.get('determination', '?'),
                 'severity': severity,
-                'bscore': float(bscore) if bscore is not None else 0.0,
+                'bscore': bscore,
                 'mode': mode,
             })
         return hits
@@ -1866,10 +1866,12 @@ class DetectorGUI:
             self._report_append("  DNA-GPT POSITIVE CONTINUATIONS (offline/local-friendly)\n")
             self._report_append(f"{'=' * 60}\n")
             for hit in dna_hits:
+                bscore = hit.get('bscore')
+                bscore_str = f"{bscore:.3f}" if bscore is not None else 'n/a'
                 self._report_append(
                     f"  {hit['task_id'][:24]:24s} "
                     f"cont={hit['severity']:<6} "
-                    f"bscore={hit['bscore']:.3f} "
+                    f"bscore={bscore_str} "
                     f"mode={hit['mode']} "
                     f"overall={hit['overall']}\n"
                 )
