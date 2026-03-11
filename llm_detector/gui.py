@@ -1781,7 +1781,7 @@ class DetectorGUI:
             self.report_output.see(tk.END)))
 
     def _collect_dna_hits(self, results):
-        """Return list of DNA-GPT-positive results (continuation severity >= YELLOW)."""
+        """Return DNA-GPT-positive results where continuation severity is RED/AMBER/YELLOW."""
         hits = []
         for r in results:
             channels = (r.get('channel_details') or {}).get('channels', {})
@@ -1863,7 +1863,7 @@ class DetectorGUI:
         dna_hits = self._collect_dna_hits(results)
         if dna_hits:
             self._report_append(f"\n{'=' * 60}\n")
-            self._report_append("  DNA-GPT POSITIVE CONTINUATIONS (offline-safe)\n")
+            self._report_append("  DNA-GPT POSITIVE CONTINUATIONS (offline/local-friendly)\n")
             self._report_append(f"{'=' * 60}\n")
             for hit in dna_hits:
                 self._report_append(
