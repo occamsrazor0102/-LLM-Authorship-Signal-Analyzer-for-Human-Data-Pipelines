@@ -217,8 +217,8 @@ def test_dashboard_uses_module_when_cli_missing(monkeypatch):
     monkeypatch.setattr('llm_detector.cli.shutil.which', lambda _: None)
     dummy_streamlit = types.ModuleType('streamlit')
     monkeypatch.setitem(sys.modules, 'streamlit', dummy_streamlit)
-    streamlit_spec = importlib.machinery.ModuleSpec('streamlit', loader=None, origin='streamlit/__init__.py')
-    streamlit_main_spec = importlib.machinery.ModuleSpec('streamlit.__main__', loader=None, origin='streamlit/__main__.py')
+    streamlit_spec = importlib.machinery.ModuleSpec('streamlit', loader=None, origin=None)
+    streamlit_main_spec = importlib.machinery.ModuleSpec('streamlit.__main__', loader=None, origin=None)
     real_find_spec = importlib.util.find_spec
 
     def fake_find_spec(name, *args, **kwargs):
