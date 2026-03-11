@@ -207,6 +207,49 @@ def test_io_load_csv_numeric_positional():
         shutil.rmtree(tmpdir)
 
 
+def test_dashboard_uses_module_when_cli_missing(monkeypatch):
+    """main_dashboard should fall back to `python -m streamlit` when CLI is absent."""
+    print("\n-- DASHBOARD FALLBACK --")
+    import sys
+    import types
+    from llm_detector import cli
+
+    monkeypatch.setattr('shutil.which', lambda _: None)
+    dummy_streamlit = types.ModuleType('streamlit')
+    monkeypatch.setitem(sys.modules, 'streamlit', dummy_streamlit)
+
+    captured = {}
+
+    def fake_run(cmd, check=False):
+        captured['cmd'] = cmd
+        captured['check'] = check
+
+    monkeypatch.setattr('subprocess.run', fake_run)
+    cli.main_dashboard()
+    cmd = captured.get('cmd', [])
+    check("Fallback uses python -m streamlit",
+          len(cmd) >= 3 and cmd[0] == sys.executable and cmd[1:3] == ['-m', 'streamlit'])
+
+
+def test_dashboard_prefers_cli_when_available(monkeypatch):
+    """main_dashboard should use the streamlit executable if it is on PATH."""
+    print("\n-- DASHBOARD CLI PREFERRED --")
+    from llm_detector import cli
+    monkeypatch.setattr('shutil.which', lambda _: '/usr/local/bin/streamlit')
+
+    captured = {}
+
+    def fake_run(cmd, check=False):
+        captured['cmd'] = cmd
+        captured['check'] = check
+
+    monkeypatch.setattr('subprocess.run', fake_run)
+    cli.main_dashboard()
+    cmd = captured.get('cmd', [])
+    check("Prefers streamlit CLI",
+          len(cmd) >= 1 and cmd[0] == '/usr/local/bin/streamlit')
+
+
 def test_disable_channel_names_match_fusion():
     """Ensure --disable-channel valid names match actual channel names in fusion engine."""
     print("\n-- DISABLE-CHANNEL NAME CONSISTENCY --")
