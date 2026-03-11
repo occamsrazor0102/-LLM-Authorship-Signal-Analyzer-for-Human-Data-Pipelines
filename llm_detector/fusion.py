@@ -89,6 +89,13 @@ def determine(preamble_score, preamble_severity, prompt_sig, voice_dis,
     # L0 CRITICAL: instant RED
     if ch_prompt.sub_signals.get('preamble') == 0.99 and preamble_severity == 'CRITICAL':
         det, reason, conf = _apply_cap('RED', ch_prompt.explanation, 0.99)
+        channel_details['triggering_rule'] = 'L0_critical_preamble'
+        channel_details['fusion_counts'] = {
+            'n_primary_red': 1, 'n_primary_amber': 0, 'n_primary_yellow_plus': 1,
+            'n_yellow_plus': 1, 'n_red': 1, 'n_amber_plus': 0,
+        }
+        for ch in channels:
+            channel_details['channels'][ch.channel]['role'] = 'primary'
         return det, reason, conf, channel_details
 
     # Mode-aware channel filtering
@@ -128,9 +135,25 @@ def determine(preamble_score, preamble_severity, prompt_sig, voice_dis,
     channel_details['active_channels'] = n_active_channels
     channel_details['short_text_adjustment'] = bool(short_text_penalty)
 
+    # Expose per-channel role (primary vs supporting) and fusion counts for reporting transparency
+    primary_channel_names = {ch.channel for ch in primary_channels}
+    for ch in channels:
+        channel_details['channels'][ch.channel]['role'] = (
+            'primary' if ch.channel in primary_channel_names else 'supporting'
+        )
+    channel_details['fusion_counts'] = {
+        'n_primary_red': n_primary_red,
+        'n_primary_amber': n_primary_amber,
+        'n_primary_yellow_plus': n_primary_yellow_plus,
+        'n_yellow_plus': n_yellow_plus,
+        'n_red': n_red,
+        'n_amber_plus': n_amber_plus,
+    }
+
     # RED: strong primary + supporting, or two AMBER+ channels
     if n_primary_red >= 1 and n_yellow_plus >= 2:
         det, reason, conf = _apply_cap('RED', combined_reason, top_score)
+        channel_details['triggering_rule'] = 'primary_red_with_corroboration'
         return det, reason, conf, channel_details
 
     # Short-text relaxation: 1 RED + 1 yellow is enough when few channels can run
@@ -138,28 +161,35 @@ def determine(preamble_score, preamble_severity, prompt_sig, voice_dis,
         det, reason, conf = _apply_cap(
             'RED', f"{combined_reason} [short-text relaxed]",
             min(top_score - short_text_penalty, 0.75))
+        channel_details['triggering_rule'] = 'primary_red_short_text_relaxed'
         return det, reason, conf, channel_details
 
     if n_primary_amber >= 2:
         det, reason, conf = _apply_cap('RED', combined_reason, min(top_score, 0.85))
+        channel_details['triggering_rule'] = 'two_primary_amber_channels'
         return det, reason, conf, channel_details
 
     if mode == 'task_prompt' and n_primary_red >= 1 and n_yellow_plus == 1:
         det, reason, conf = _apply_cap('AMBER', f"{combined_reason} [single-channel, demoted from RED]", min(top_score, 0.75))
+        channel_details['triggering_rule'] = 'primary_red_single_channel_demoted'
         return det, reason, conf, channel_details
 
     if mode == 'generic_aigt' and n_red >= 1:
         if n_yellow_plus >= 2:
             det, reason, conf = _apply_cap('RED', combined_reason, top_score)
+            channel_details['triggering_rule'] = 'generic_aigt_red_with_corroboration'
         else:
             det, reason, conf = _apply_cap('RED', f"{combined_reason} [single-channel]", min(top_score, 0.75))
+            channel_details['triggering_rule'] = 'generic_aigt_red_single_channel'
         return det, reason, conf, channel_details
 
     # AMBER: one channel at AMBER, or two at YELLOW+
     if n_primary_amber >= 1:
         det, reason, conf = _apply_cap('AMBER', combined_reason, min(top_score, 0.70))
         if ch_window.sub_signals.get('mixed_signal') and ch_window.severity != 'GREEN':
+            channel_details['triggering_rule'] = 'primary_amber_mixed_windowing'
             return 'MIXED', f"{reason} [windowed variance suggests hybrid text]", min(conf, 0.60), channel_details
+        channel_details['triggering_rule'] = 'primary_amber_single_channel'
         return det, reason, conf, channel_details
 
     if mode == 'task_prompt':
@@ -170,33 +200,41 @@ def determine(preamble_score, preamble_severity, prompt_sig, voice_dis,
     if convergence_count >= 2:
         det, reason, conf = _apply_cap('AMBER', f"{combined_reason} [multi-channel convergence]", min(top_score, 0.60))
         if ch_window.sub_signals.get('mixed_signal') and ch_window.severity != 'GREEN':
+            channel_details['triggering_rule'] = 'multi_channel_convergence_mixed'
             return 'MIXED', f"{reason} [windowed variance suggests hybrid text]", min(conf, 0.55), channel_details
+        channel_details['triggering_rule'] = 'multi_channel_convergence'
         return det, reason, conf, channel_details
 
     # Supporting channels at AMBER in task_prompt mode
     if mode == 'task_prompt' and any(ch.sev_level >= 2 for ch in support_active):
         support_expl = [ch.explanation for ch in support_active if ch.sev_level >= 2]
         det, reason, conf = _apply_cap('AMBER', f"{' + '.join(support_expl)} [supporting channel]", 0.55)
+        channel_details['triggering_rule'] = 'supporting_channel_amber'
         return det, reason, conf, channel_details
 
     # YELLOW: one channel at YELLOW+
     if n_yellow_plus >= 1:
         det, reason, conf = _apply_cap('YELLOW', combined_reason, min(top_score, 0.45))
         if ch_window.sub_signals.get('mixed_signal') and ch_window.severity != 'GREEN':
+            channel_details['triggering_rule'] = 'yellow_signal_mixed_windowing'
             return 'MIXED', f"{reason} [windowed variance suggests hybrid text]", min(conf, 0.50), channel_details
+        channel_details['triggering_rule'] = 'yellow_signal'
         return det, reason, conf, channel_details
 
     # Obfuscation delta
     if norm_report and norm_report.get('obfuscation_delta', 0) >= 0.05:
         delta = norm_report['obfuscation_delta']
         det, reason, conf = _apply_cap('YELLOW', f"Text normalization delta ({delta:.1%}) suggests obfuscation", 0.35)
+        channel_details['triggering_rule'] = 'obfuscation_delta'
         return det, reason, conf, channel_details
 
     # REVIEW: any channel has non-zero score
     any_signal = any(ch.score > 0.05 for ch in channels)
     if any_signal:
         weak_parts = [ch.explanation for ch in channels if ch.score > 0.05]
+        channel_details['triggering_rule'] = 'weak_signals_below_threshold'
         return 'REVIEW', f"Weak signals below threshold: {' + '.join(weak_parts[:2])}", 0.10, channel_details
 
     # GREEN
+    channel_details['triggering_rule'] = 'no_signal'
     return 'GREEN', 'No significant signals', 0.0, channel_details
