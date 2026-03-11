@@ -436,6 +436,54 @@ def test_gui_refresh_reports_lists_dna_hits():
         root.destroy()
 
 
+def test_gui_collect_dna_hits_fallbacks():
+    """_collect_dna_hits uses channel score/mode fallbacks when top-level fields missing."""
+    print("\n-- GUI: _collect_dna_hits fallbacks --")
+    from llm_detector.compat import HAS_TK
+    if not HAS_TK:
+        print("  [SKIP] tkinter not available")
+        return
+
+    import tkinter as tk
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        from llm_detector.gui import DetectorGUI
+        gui = DetectorGUI(root)
+
+        via_channel = _make_result(
+            'via-channel', 'AMBER',
+            channel_details={
+                'channels': {
+                    'continuation': {'severity': 'YELLOW', 'score': 0.55, 'mode': 'API'},
+                }
+            },
+        )
+        via_mode_fallback = _make_result(
+            'mode-fallback', 'AMBER',
+            channel_details={
+                'channels': {
+                    'continuation': {'severity': 'YELLOW', 'score': 0.42},
+                }
+            },
+        )
+        via_mode_fallback['continuation_mode'] = ''  # force to use channel/r default
+        via_mode_fallback['mode'] = 'manual'
+
+        hits = gui._collect_dna_hits([via_channel, via_mode_fallback])
+        bscore_map = {h['task_id']: h['bscore'] for h in hits}
+        mode_map = {h['task_id']: h['mode'] for h in hits}
+
+        check("channel score used when continuation_bscore missing",
+              abs(bscore_map['via-channel'] - 0.55) < 1e-6)
+        check("channel mode used when continuation_mode missing",
+              mode_map['via-channel'] == 'API')
+        check("fallback to result mode when channel mode missing",
+              mode_map['mode-fallback'] == 'manual')
+    finally:
+        root.destroy()
+
+
 # ---------------------------------------------------------------------------
 # GUI: _LabelingDialog logic (no display)
 # ---------------------------------------------------------------------------
