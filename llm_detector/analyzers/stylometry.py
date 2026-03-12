@@ -9,6 +9,27 @@ from collections import Counter
 
 from llm_detector.text_utils import ENGLISH_FUNCTION_WORDS, get_sentences, type_token_ratio
 
+
+def _mattr(words, window=50):
+    """Moving-Average Type-Token Ratio over rolling windows.
+
+    Eliminates document-length bias inherent in standard TTR by averaging
+    the TTR across overlapping windows of fixed size.
+
+    Args:
+        words: List of word tokens (already lowercased).
+        window: Window size in words (default 50).
+
+    Returns float MATTR value.
+    """
+    if len(words) < window:
+        return len(set(words)) / max(len(words), 1)
+    ratios = []
+    for i in range(len(words) - window + 1):
+        chunk = words[i:i + window]
+        ratios.append(len(set(chunk)) / window)
+    return statistics.mean(ratios)
+
 # Topic masking patterns
 _TOPIC_URL_RE = re.compile(r'https?://\S+|www\.\S+', re.I)
 _TOPIC_EMAIL_RE = re.compile(r'\b[\w.+-]+@[\w-]+\.[\w.-]+\b')
@@ -98,6 +119,9 @@ def extract_stylometric_features(text, masked_text=None):
     short_words = sum(1 for w in orig_words if len(w) <= 3)
     short_word_ratio = short_words / n_orig
 
+    # MATTR: Moving-Average Type-Token Ratio (length-independent lexical diversity)
+    mattr_val = _mattr(orig_words, window=50)
+
     return {
         'char_ngram_profile': char_ngram_profile,
         'function_word_ratio': round(function_word_ratio, 4),
@@ -106,4 +130,5 @@ def extract_stylometric_features(text, masked_text=None):
         'type_token_ratio': round(type_token_ratio_val, 4),
         'avg_word_length': round(avg_word_length, 2),
         'short_word_ratio': round(short_word_ratio, 4),
+        'mattr': round(mattr_val, 4),
     }
