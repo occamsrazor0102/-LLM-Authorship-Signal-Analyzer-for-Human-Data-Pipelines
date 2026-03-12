@@ -6,7 +6,7 @@ Combines NSSI, semantic resonance, perplexity, and fingerprints.
 from llm_detector.channels import ChannelResult
 
 
-def score_stylometric(fingerprint_score, self_sim, voice_dis=None, semantic=None, ppl=None, tocsin=None, semantic_flow=None):
+def score_stylometric(fingerprint_score, self_sim, voice_dis=None, semantic=None, ppl=None, tocsin=None):
     """Score stylometric channel. Returns ChannelResult."""
     sub = {}
     score = 0.0
@@ -139,38 +139,6 @@ def score_stylometric(fingerprint_score, self_sim, voice_dis=None, semantic=None
         elif bino_det == 'YELLOW' and severity != 'GREEN':
             score = min(score + 0.05, 1.0)
             parts.append(f"Bino={bino_score:.2f}(YELLOW,supporting)")
-
-    # Semantic flow: inter-sentence smoothness signal
-    if semantic_flow and semantic_flow.get('determination'):
-        flow_det = semantic_flow['determination']
-        flow_var = semantic_flow.get('flow_variance', 0)
-        sub['flow_variance'] = flow_var
-
-        if flow_det == 'AMBER':
-            if severity in ('RED', 'AMBER'):
-                score = min(score + 0.10, 1.0)
-                parts.append(f"Flow=AMBER(var={flow_var:.4f},boost)")
-            else:
-                score = max(score, semantic_flow.get('confidence', 0.50))
-                severity = max(severity, 'AMBER',
-                               key=lambda s: ChannelResult.SEV_ORDER.get(s, 0))
-                parts.append(f"Flow=AMBER(var={flow_var:.4f})")
-        elif flow_det == 'YELLOW':
-            if severity != 'GREEN':
-                score = min(score + 0.05, 1.0)
-                parts.append(f"Flow=YELLOW(var={flow_var:.4f},supporting)")
-            else:
-                score = max(score, semantic_flow.get('confidence', 0.25))
-                severity = 'YELLOW'
-                parts.append(f"Flow=YELLOW(var={flow_var:.4f})")
-
-    # Perplexity burstiness: low burstiness = AI uniform rhythm
-    if ppl and ppl.get('ppl_burstiness', 0) > 0 and ppl.get('sentence_ppl_count', 0) >= 3:
-        burst = ppl['ppl_burstiness']
-        sub['ppl_burstiness'] = burst
-        if severity != 'GREEN' and burst < 0.5:
-            score = min(score + 0.06, 1.0)
-            parts.append(f"Burst={burst:.2f}(low,supporting)")
 
     # Fingerprints add supporting weight if any stylometric signal is active
     if fingerprint_score >= 0.30 and severity != 'GREEN':

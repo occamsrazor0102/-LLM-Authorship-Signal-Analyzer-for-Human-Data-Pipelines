@@ -17,7 +17,6 @@ from llm_detector.analyzers.continuation_local import run_continuation_local_mul
 from llm_detector.analyzers.perplexity import run_perplexity
 from llm_detector.analyzers.token_cohesiveness import run_token_cohesiveness
 from llm_detector.analyzers.stylometry import mask_topical_content, extract_stylometric_features
-from llm_detector.analyzers.semantic_flow import run_semantic_flow
 from llm_detector.analyzers.windowing import score_windows, score_surprisal_windows, get_hot_window_spans
 from llm_detector.fusion import determine
 from llm_detector.calibration import apply_calibration
@@ -30,7 +29,7 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
                    mode='auto', cal_table=None, memory_store=None,
                    disabled_channels=None, precomputed_continuation=None,
                    ppl_model=None):
-    """Run full v0.68 pipeline on a single prompt. Returns result dict."""
+    """Run full v0.66 pipeline on a single prompt. Returns result dict."""
     # Normalization pre-pass
     normalized_text, norm_report = normalize_text(text)
     word_count_raw = len(text.split())
@@ -71,9 +70,6 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
     ppl = run_perplexity(text_for_analysis, model_id=ppl_model)
     tocsin = run_token_cohesiveness(text_for_analysis)
 
-    # Semantic flow: inter-sentence embedding similarity variance
-    semantic_flow = run_semantic_flow(text_for_analysis)
-
     # FEAT 10: Surprisal trajectory from per-token losses
     surprisal_traj = {}
     token_losses = ppl.get('token_losses')
@@ -111,7 +107,6 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         mode=mode, fingerprint_score=fingerprint_score,
         semantic=semantic, ppl=ppl,
         tocsin=tocsin,
-        semantic_flow=semantic_flow,
         window_result=window_result,
         disabled_channels=disabled_channels,
     )
@@ -130,7 +125,7 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
 
     # Audit trail
     audit_trail = {
-        'pipeline_version': 'v0.68',
+        'pipeline_version': 'v0.66',
         'mode_resolved': channel_details.get('mode', mode),
         'channels': channel_details.get('channels', {}),
         'fairness_gate': {
@@ -164,8 +159,8 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         'mode': channel_details.get('mode', mode),
         'channel_details': channel_details,
         'audit_trail': audit_trail,
-        'pipeline_version': 'v0.68',
-        # Detection spans
+        'pipeline_version': 'v0.66',
+        # Detection spans (v0.66 span-level annotation)
         'detection_spans': detection_spans,
         # Normalization
         'norm_obfuscation_delta': norm_report.get('obfuscation_delta', 0.0),
@@ -248,7 +243,6 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         'stylo_avg_word_len': stylo_features.get('avg_word_length', 0.0),
         'stylo_short_word_ratio': stylo_features.get('short_word_ratio', 0.0),
         'stylo_mask_count': mask_count,
-        'stylo_mattr': stylo_features.get('mattr', 0.0),
     }
 
     # Semantic resonance
@@ -363,21 +357,6 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         'perplexity_comp_ratio': ppl.get('comp_ratio', 0.0),
         'perplexity_zlib_normalized_ppl': ppl.get('zlib_normalized_ppl', 0.0),
         'perplexity_comp_ppl_ratio': ppl.get('comp_ppl_ratio', 0.0),
-    })
-
-    # Semantic flow (inter-sentence variance)
-    result.update({
-        'semantic_flow_variance': semantic_flow.get('flow_variance', 0.0),
-        'semantic_flow_mean': semantic_flow.get('flow_mean', 0.0),
-        'semantic_flow_std': semantic_flow.get('flow_std', 0.0),
-        'semantic_flow_determination': semantic_flow.get('determination'),
-        'semantic_flow_confidence': semantic_flow.get('confidence', 0.0),
-    })
-
-    # Perplexity burstiness
-    result.update({
-        'ppl_burstiness': ppl.get('ppl_burstiness', 0.0),
-        'sentence_ppl_count': ppl.get('sentence_ppl_count', 0),
     })
 
     # Surprisal trajectory (FEAT 10)

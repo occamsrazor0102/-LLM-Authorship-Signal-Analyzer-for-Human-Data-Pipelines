@@ -496,52 +496,6 @@ class DetectorGUI:
         ttk.Button(btn_row2, text='Discover Lexicon', command=lambda: self._run_async(self._discover_lexicon)).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(btn_row2, text='Rebuild All', command=lambda: self._run_async(self._rebuild_all)).pack(side=tk.LEFT)
 
-        # ML Fusion Readiness
-        mlf = ttk.LabelFrame(tab, text='ML Fusion Readiness')
-        mlf.pack(fill=tk.X, pady=(0, 10))
-        ttk.Label(mlf, text=(
-            'ML fusion replaces heuristic rules with a trained classifier.\n'
-            'Requires confirmed ground-truth labels in the memory store.'
-        ), style='DashboardSubtitle.TLabel').grid(
-            row=0, column=0, columnspan=4, sticky='w', padx=6, pady=(4, 2))
-
-        # Progress row
-        ttk.Label(mlf, text='Confirmed labels:').grid(row=1, column=0, sticky='w', padx=6, pady=4)
-        self._ml_fusion_progress_var = tk.StringVar(value='0 / 200 (0%)')
-        ttk.Label(mlf, textvariable=self._ml_fusion_progress_var).grid(
-            row=1, column=1, sticky='w', padx=(0, 12), pady=4)
-
-        ttk.Label(mlf, text='Class balance:').grid(row=1, column=2, sticky='w', padx=(12, 6), pady=4)
-        self._ml_fusion_balance_var = tk.StringVar(value='AI: 0  |  Human: 0')
-        ttk.Label(mlf, textvariable=self._ml_fusion_balance_var).grid(
-            row=1, column=3, sticky='w', pady=4)
-
-        # Progress bar
-        self._ml_fusion_progress_bar = ttk.Progressbar(mlf, length=300, mode='determinate', maximum=100)
-        self._ml_fusion_progress_bar.grid(row=2, column=0, columnspan=4, sticky='ew', padx=6, pady=(0, 4))
-
-        # Model status
-        ttk.Label(mlf, text='Model status:').grid(row=3, column=0, sticky='w', padx=6, pady=4)
-        self._ml_fusion_model_var = tk.StringVar(value='No model trained')
-        ttk.Label(mlf, textvariable=self._ml_fusion_model_var,
-                  foreground=_DASHBOARD_THEME['muted']).grid(
-            row=3, column=1, columnspan=3, sticky='w', pady=4)
-
-        # Buttons
-        btn_row_ml = ttk.Frame(mlf)
-        btn_row_ml.grid(row=4, column=0, columnspan=4, sticky='w', padx=6, pady=4)
-        ttk.Button(btn_row_ml, text='Refresh', command=self._refresh_fusion_readiness).pack(side=tk.LEFT, padx=(0, 6))
-        self._train_fusion_btn = ttk.Button(btn_row_ml, text='Train ML Fusion', command=lambda: self._run_async(self._train_fusion_model), state='disabled')
-        self._train_fusion_btn.pack(side=tk.LEFT, padx=(0, 6))
-
-        self._ml_fusion_enabled_var = tk.BooleanVar(value=False)
-        self._ml_fusion_checkbox = ttk.Checkbutton(
-            btn_row_ml, text='Enable ML Fusion (use trained model)',
-            variable=self._ml_fusion_enabled_var, state='disabled')
-        self._ml_fusion_checkbox.pack(side=tk.LEFT, padx=(12, 0))
-
-        mlf.columnconfigure(1, weight=1)
-
         # Interactive Labeling
         lbl = ttk.LabelFrame(tab, text='Interactive Labeling')
         lbl.pack(fill=tk.X, pady=(0, 10))
@@ -1621,61 +1575,6 @@ class DetectorGUI:
             self._append(f"Shadow model rebuilt: AUC={pkg['cv_auc']:.3f}\n", 'HEADER')
         else:
             self._append("Shadow model: insufficient labeled data\n", 'ALERT')
-
-    def _refresh_fusion_readiness(self):
-        if not self._memory_store:
-            self._ml_fusion_progress_var.set('0 / 200 (0%)')
-            self._ml_fusion_balance_var.set('AI: 0  |  Human: 0')
-            self._ml_fusion_model_var.set('No memory store loaded')
-            self._ml_fusion_progress_bar['value'] = 0
-            self._train_fusion_btn.configure(state='disabled')
-            self._ml_fusion_checkbox.configure(state='disabled')
-            return
-
-        readiness = self._memory_store.get_fusion_readiness()
-        total = readiness['total_confirmed']
-        pct = readiness['progress_pct']
-        self._ml_fusion_progress_var.set(
-            f"{total} / {readiness['min_required']} ({pct:.0f}%)")
-        self._ml_fusion_balance_var.set(
-            f"AI: {readiness['n_ai']}  |  Human: {readiness['n_human']}")
-        self._ml_fusion_progress_bar['value'] = pct
-
-        if readiness['ready']:
-            self._train_fusion_btn.configure(state='normal')
-        else:
-            self._train_fusion_btn.configure(state='disabled')
-
-        info = readiness.get('model_info')
-        if info:
-            self._ml_fusion_model_var.set(
-                f"Trained {info['trained_at'][:10]}  |  "
-                f"AUC={info['cv_auc']:.3f}  |  "
-                f"n={info['n_samples']}  |  "
-                f"{info['algorithm']}")
-            self._ml_fusion_checkbox.configure(state='normal')
-        else:
-            self._ml_fusion_model_var.set('No model trained')
-            self._ml_fusion_checkbox.configure(state='disabled')
-            self._ml_fusion_enabled_var.set(False)
-
-    def _train_fusion_model(self):
-        if not self._ensure_memory():
-            return
-        from llm_detector.ml_fusion import train_fusion_model
-        result = train_fusion_model(self._memory_store)
-        if result and 'error' not in result:
-            self._append(
-                f"ML Fusion model trained: AUC={result['cv_auc']:.3f}, "
-                f"n={result['n_samples']}, features={result['n_features']}\n", 'HEADER')
-            if result.get('top_features'):
-                self._append("  Top features:\n", 'HEADER')
-                for feat, imp in result['top_features'][:10]:
-                    self._append(f"    {feat:<45} {imp:.4f}\n", 'DIM')
-        else:
-            msg = result.get('error', 'Unknown error') if result else 'Training failed'
-            self._append(f"ML Fusion training: {msg}\n", 'ALERT')
-        self.root.after(0, self._refresh_fusion_readiness)
 
     def _rebuild_centroids(self):
         if not self._ensure_memory():
