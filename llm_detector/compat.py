@@ -15,7 +15,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 def _get_hf_token():
-    """Return Hugging Face token from common env vars, or None."""
+    """Return Hugging Face token from environment (HF_TOKEN → HUGGINGFACEHUB_API_TOKEN)."""
     return os.getenv('HF_TOKEN') or os.getenv('HUGGINGFACEHUB_API_TOKEN')
 
 # ── tkinter ──────────────────────────────────────────────────────────────────

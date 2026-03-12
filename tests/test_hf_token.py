@@ -10,19 +10,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import llm_detector.compat as compat  # noqa: E402
 
-PASSED = 0
-FAILED = 0
-
-
-def check(label, condition, detail=""):
-    global PASSED, FAILED
-    if condition:
-        PASSED += 1
-        print(f"  [PASS] {label}")
-    else:
-        FAILED += 1
-        print(f"  [FAIL] {label}  -- {detail}")
-
 
 @pytest.fixture(autouse=True)
 def reset_env(monkeypatch):
@@ -48,14 +35,14 @@ def test_get_hf_token_prefers_HF_TOKEN(monkeypatch):
     monkeypatch.setenv("HF_TOKEN", "primary_token")
     monkeypatch.setenv("HUGGINGFACEHUB_API_TOKEN", "backup_token")
     token = compat._get_hf_token()
-    check("Prefers HF_TOKEN over HUGGINGFACEHUB_API_TOKEN", token == "primary_token", token)
+    assert token == "primary_token", token
 
 
 def test_get_hf_token_falls_back(monkeypatch):
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.setenv("HUGGINGFACEHUB_API_TOKEN", "backup_token")
     token = compat._get_hf_token()
-    check("Falls back to HUGGINGFACEHUB_API_TOKEN", token == "backup_token", token)
+    assert token == "backup_token", token
 
 
 def test_perplexity_loader_passes_token(monkeypatch):
@@ -89,8 +76,8 @@ def test_perplexity_loader_passes_token(monkeypatch):
 
     compat.get_perplexity_model("dummy-model")
 
-    check("Model receives token kwarg", DummyAutoModel.last_kwargs.get("token") == "abc123")
-    check("Tokenizer receives token kwarg", DummyAutoTokenizer.last_kwargs.get("token") == "abc123")
+    assert DummyAutoModel.last_kwargs.get("token") == "abc123"
+    assert DummyAutoTokenizer.last_kwargs.get("token") == "abc123"
 
 
 def test_binoculars_loader_passes_token(monkeypatch):
@@ -124,5 +111,5 @@ def test_binoculars_loader_passes_token(monkeypatch):
 
     compat.get_binoculars_model()
 
-    check("Observer model receives token kwarg", DummyAutoModel.last_kwargs.get("token") == "xyz789")
-    check("Observer tokenizer receives token kwarg", DummyAutoTokenizer.last_kwargs.get("token") == "xyz789")
+    assert DummyAutoModel.last_kwargs.get("token") == "xyz789"
+    assert DummyAutoTokenizer.last_kwargs.get("token") == "xyz789"
