@@ -35,8 +35,17 @@ def determine(preamble_score, preamble_severity, prompt_sig, voice_dis,
               instr_density=None, word_count=0,
               self_sim=None, cont_result=None, lang_gate=None, norm_report=None,
               mode='auto', fingerprint_score=0.0, semantic=None, ppl=None,
-              tocsin=None, disabled_channels=None, **kwargs):
+              tocsin=None, disabled_channels=None,
+              semantic_flow=None, ml_fusion_enabled=False, ml_model_path=None,
+              **kwargs):
     """Evidence fusion with channel-based corroboration.
+
+    Args:
+        semantic_flow: Semantic flow analyzer result dict (inter-sentence variance).
+        ml_fusion_enabled: If True and a trained model exists, use ML fusion
+            instead of heuristic rules. Disabled by default.
+        ml_model_path: Path to trained ML fusion model (.pkl). Defaults to
+            .beet/fusion_model.pkl if not specified.
 
     Returns (determination, reason, confidence, channel_details).
     """
@@ -46,7 +55,7 @@ def determine(preamble_score, preamble_severity, prompt_sig, voice_dis,
 
     # Score all channels
     ch_prompt = score_prompt_structure(preamble_score, preamble_severity, prompt_sig, voice_dis, instr_density, word_count)
-    ch_style = score_stylometric(fingerprint_score, self_sim, voice_dis, semantic=semantic, ppl=ppl, tocsin=tocsin)
+    ch_style = score_stylometric(fingerprint_score, self_sim, voice_dis, semantic=semantic, ppl=ppl, tocsin=tocsin, semantic_flow=semantic_flow)
     ch_cont = score_continuation(cont_result)
     ch_window = score_windowed(window_result=kwargs.get('window_result'))
 
@@ -65,6 +74,24 @@ def determine(preamble_score, preamble_severity, prompt_sig, voice_dis,
             'disabled': ch.channel in _disabled,
         } for ch in channels},
     }
+
+    # ML Fusion: if enabled and model exists, use trained classifier
+    if ml_fusion_enabled:
+        try:
+            from llm_detector.ml_fusion import ml_determine, extract_fusion_features
+            feat_names, feat_values = extract_fusion_features(channel_details, kwargs)
+            ml_result = ml_determine(feat_names, feat_values, model_path=ml_model_path)
+            if ml_result is not None:
+                ml_det, ml_conf, ml_explanation = ml_result
+                channel_details['triggering_rule'] = 'ml_fusion'
+                channel_details['ml_fusion'] = {
+                    'determination': ml_det,
+                    'confidence': ml_conf,
+                    'explanation': ml_explanation,
+                }
+                return ml_det, ml_explanation, ml_conf, channel_details
+        except Exception:
+            pass  # Fall through to heuristic rules
 
     # Channel ablation: remove disabled channels from fusion
     if _disabled:
