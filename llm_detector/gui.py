@@ -41,6 +41,8 @@ _DASHBOARD_THEME = {
     'accent_light': '#dbeafe',
 }
 
+_TASK_ID_DISPLAY_LEN = 24
+
 # Descriptions shown when hovering each notebook tab header.
 _TAB_TOOLTIPS = [
     None,  # Analysis tab — self-explanatory
@@ -1780,6 +1782,34 @@ class DetectorGUI:
             self.report_output.insert(tk.END, text),
             self.report_output.see(tk.END)))
 
+    def _collect_dna_hits(self, results):
+        """Return DNA-GPT-positive results where continuation severity is RED/AMBER/YELLOW."""
+        hits = []
+        for r in results:
+            channels = (r.get('channel_details') or {}).get('channels', {})
+            cont = channels.get('continuation') or {}
+            severity = cont.get('severity') or r.get('continuation_determination')
+            if severity not in ('RED', 'AMBER', 'YELLOW'):
+                continue
+
+            bscore = r.get('continuation_bscore')
+            if bscore is None:
+                bscore = cont.get('score')
+            mode = (
+                r.get('continuation_mode')
+                or cont.get('mode')
+                or r.get('mode')
+                or 'n/a'
+            )
+            hits.append({
+                'task_id': r.get('task_id', '') or '(unknown task)',
+                'overall': r.get('determination', '?'),
+                'severity': severity,
+                'bscore': bscore,
+                'mode': mode,
+            })
+        return hits
+
     def _refresh_reports(self):
         self.report_output.delete('1.0', tk.END)
         if not self._last_results:
@@ -1830,6 +1860,27 @@ class DetectorGUI:
                         channel_counts[ch_name] += 1
             for ch, ct in channel_counts.most_common():
                 self._report_append(f"  {ch:20s}: {ct} flags\n")
+
+        # DNA-GPT positives (API or offline local)
+        dna_hits = self._collect_dna_hits(results)
+        if dna_hits:
+            self._report_append(f"\n{'=' * 60}\n")
+            self._report_append("  DNA-GPT POSITIVE CONTINUATIONS (offline/local-friendly)\n")
+            self._report_append(f"{'=' * 60}\n")
+            for hit in dna_hits:
+                bscore = hit.get('bscore')
+                bscore_str = f"{bscore:.3f}" if bscore is not None else 'n/a'
+                self._report_append(
+                    f"  {hit['task_id'][:_TASK_ID_DISPLAY_LEN]:{_TASK_ID_DISPLAY_LEN}s} "
+                    f"cont={hit['severity']:<6} "
+                    f"bscore={bscore_str} "
+                    f"mode={hit['mode']} "
+                    f"overall={hit['overall']}\n"
+                )
+        else:
+            self._report_append(
+                "\nNo DNA-GPT-positive continuations found in current results.\n"
+            )
 
         # Financial impact
         if len(results) >= 10:
