@@ -40,7 +40,7 @@ all = [
     "llm-detector[api,nlp,perplexity,pdf,web]",
 ]
 bundle = [
-    "llm-detector[api,nlp,perplexity,pdf]",
+    "llm-detector[api,nlp,perplexity,pdf,web]",
     "pyinstaller>=6.0",
 ]
 

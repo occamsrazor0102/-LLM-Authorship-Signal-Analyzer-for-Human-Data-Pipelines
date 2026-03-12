@@ -91,7 +91,7 @@ pyinstaller llm_detector.spec --noconfirm --clean
 
 ## What's included in the executable
 
-The standalone exe bundles **all features** — built-in analyzers, lexicon packs, CLI, GUI, and all optional NLP dependencies (spaCy, sentence-transformers, scikit-learn, ftfy, PyTorch/transformers, Anthropic/OpenAI API clients, and pypdf).
+The standalone exe bundles **all features** — built-in analyzers, lexicon packs, CLI, GUI, Streamlit web dashboard, and all optional NLP dependencies (spaCy, sentence-transformers, scikit-learn, ftfy, PyTorch/transformers, Anthropic/OpenAI API clients, and pypdf).
 
 To build the **standard** exe (all features, recommended):
 ```bash
