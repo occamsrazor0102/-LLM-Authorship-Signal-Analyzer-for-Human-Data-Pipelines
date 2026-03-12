@@ -25,7 +25,8 @@ datas = []
 
 # Optional deps — include if installed, skip gracefully if not
 for mod in ['anthropic', 'openai', 'pypdf', 'spacy', 'ftfy',
-            'sentence_transformers', 'sklearn', 'transformers', 'torch']:
+            'sentence_transformers', 'sklearn', 'transformers', 'torch',
+            'streamlit']:
     try:
         __import__(mod)
         hiddenimports += collect_submodules(mod)
