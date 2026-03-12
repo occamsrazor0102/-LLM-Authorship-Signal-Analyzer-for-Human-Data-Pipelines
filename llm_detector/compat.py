@@ -14,6 +14,10 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+def _get_hf_token():
+    """Return Hugging Face token from common env vars, or None."""
+    return os.getenv('HF_TOKEN') or os.getenv('HUGGINGFACEHUB_API_TOKEN')
+
 # ── tkinter ──────────────────────────────────────────────────────────────────
 try:
     import tkinter as tk
@@ -101,7 +105,7 @@ def get_semantic_models():
         from sentence_transformers import SentenceTransformer
         import numpy as np
 
-        _EMBEDDER = SentenceTransformer('all-MiniLM-L6-v2')
+        _EMBEDDER = SentenceTransformer('all-MiniLM-L6-v2', token=_get_hf_token())
 
         centroid_paths = [
             '.beet/centroids/centroids_latest.npz',
@@ -184,8 +188,13 @@ def get_perplexity_model(model_id=None):
         from transformers import AutoModelForCausalLM, AutoTokenizer
         logger.info("Loading perplexity model: %s", model_id)
         _PPL_MODEL_ID = model_id
-        _PPL_MODEL = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=True)
-        _PPL_TOKENIZER = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+        hf_token = _get_hf_token()
+        _PPL_MODEL = AutoModelForCausalLM.from_pretrained(
+            model_id, trust_remote_code=True, token=hf_token
+        )
+        _PPL_TOKENIZER = AutoTokenizer.from_pretrained(
+            model_id, trust_remote_code=True, token=hf_token
+        )
         _PPL_MODEL.eval()
     return _PPL_MODEL, _PPL_TOKENIZER
 
@@ -201,8 +210,9 @@ def get_binoculars_model():
     if _BINO_MODEL is None and HAS_BINOCULARS:
         from transformers import AutoModelForCausalLM, AutoTokenizer
         # Use distilgpt2 as observer — small and different enough for contrastive signal
-        _BINO_MODEL = AutoModelForCausalLM.from_pretrained('distilgpt2')
-        _BINO_TOKENIZER = AutoTokenizer.from_pretrained('distilgpt2')
+        hf_token = _get_hf_token()
+        _BINO_MODEL = AutoModelForCausalLM.from_pretrained('distilgpt2', token=hf_token)
+        _BINO_TOKENIZER = AutoTokenizer.from_pretrained('distilgpt2', token=hf_token)
         _BINO_MODEL.eval()
     return _BINO_MODEL, _BINO_TOKENIZER
 
