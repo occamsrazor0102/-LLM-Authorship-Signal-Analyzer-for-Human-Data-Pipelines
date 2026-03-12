@@ -1,4 +1,4 @@
-# Core dependencies (matches pyproject.toml [project.dependencies])
+# Core runtime dependencies plus scikit-learn (required for semantic flow tests/CI)
 pandas
 openpyxl
 scikit-learn
