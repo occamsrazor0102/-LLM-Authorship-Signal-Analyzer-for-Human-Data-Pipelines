@@ -508,52 +508,6 @@ class MemoryStore:
 
         print(f"  Confirmed: {task_id} = {ground_truth} (by {verified_by})")
 
-    # ── ML Fusion Readiness ─────────────────────────────────────
-
-    def get_fusion_readiness(self, min_required=200, min_per_class=30):
-        """Return stats about confirmed label availability for ML fusion training.
-
-        Returns dict with total_confirmed, n_ai, n_human, min_required,
-        min_per_class, ready (bool), progress_pct (0-100), and model_info
-        (if a trained model exists).
-        """
-        confirmed = self._load_confirmed_labels()
-        n_ai = sum(1 for c in confirmed if c.get('ground_truth') == 'ai')
-        n_human = sum(1 for c in confirmed if c.get('ground_truth') == 'human')
-        total = n_ai + n_human
-
-        ready = total >= min_required and n_ai >= min_per_class and n_human >= min_per_class
-        progress_pct = min(100.0, (total / min_required) * 100) if min_required > 0 else 0.0
-
-        result = {
-            'total_confirmed': total,
-            'n_ai': n_ai,
-            'n_human': n_human,
-            'min_required': min_required,
-            'min_per_class': min_per_class,
-            'ready': ready,
-            'progress_pct': round(progress_pct, 1),
-        }
-
-        # Check for existing trained model
-        model_path = self.store_dir / 'fusion_model.pkl'
-        if model_path.exists():
-            try:
-                import joblib
-                pkg = joblib.load(model_path)
-                result['model_info'] = {
-                    'trained_at': pkg.get('trained_at', 'unknown'),
-                    'cv_auc': pkg.get('cv_auc', 0),
-                    'n_samples': pkg.get('n_samples', 0),
-                    'algorithm': pkg.get('algorithm', 'unknown'),
-                }
-            except Exception:
-                result['model_info'] = None
-        else:
-            result['model_info'] = None
-
-        return result
-
     # ── Calibration Integration ──────────────────────────────────
 
     def rebuild_calibration(self):
