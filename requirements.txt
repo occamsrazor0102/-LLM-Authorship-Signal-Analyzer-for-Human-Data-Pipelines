@@ -1,6 +1,7 @@
 # Core dependencies (matches pyproject.toml [project.dependencies])
 pandas
 openpyxl
+scikit-learn
 
 # Optional: API providers for DNA-GPT continuation analysis
 # Install with: pip install ".[api]"
@@ -11,7 +12,6 @@ openpyxl
 # Install with: pip install ".[nlp]"
 # spacy
 # sentence-transformers
-# scikit-learn
 # ftfy
 
 # Optional: local perplexity scoring
