@@ -8,9 +8,11 @@ Surprisal diversity features based on:
 - "When AI Settles Down" (volatility decay across text halves)
 """
 
+import statistics as _statistics
 import zlib
 
 from llm_detector.compat import HAS_PERPLEXITY, get_perplexity_model, HAS_BINOCULARS, get_binoculars_model
+from llm_detector.text_utils import get_sentences
 
 if HAS_PERPLEXITY:
     import torch as _torch
@@ -22,6 +24,7 @@ _PPL_EMPTY = {
     'comp_ratio': 0.0, 'zlib_normalized_ppl': 0.0, 'comp_ppl_ratio': 0.0,
     'token_losses': None,
     'binoculars_score': 0.0, 'binoculars_determination': None,
+    'ppl_burstiness': 0.0, 'sentence_ppl_count': 0,
 }
 
 
@@ -118,6 +121,43 @@ def run_perplexity(text, model_id=None):
     except Exception:
         pass  # Variance features are supplementary
 
+    # ── Perplexity burstiness: per-sentence PPL variance ──
+    # Humans write in bursts — complex sentences followed by simple ones.
+    # LLMs maintain flat, uniform perplexity across sentences.
+    ppl_burstiness = 0.0
+    sentence_ppl_count = 0
+    if token_losses_list and n_tokens >= 20:
+        try:
+            sentences = get_sentences(text)
+            sentences = [s.strip() for s in sentences if s.strip()]
+            if len(sentences) >= 3:
+                # Approximate sentence boundaries in token space by tokenizing
+                # each sentence and mapping token counts
+                sentence_token_counts = []
+                for sent in sentences:
+                    sent_enc = tokenizer(sent, return_tensors='pt', truncation=True, max_length=512)
+                    # Subtract 1 for BOS/special tokens if present, but ensure >= 1
+                    n_tok = max(sent_enc.input_ids.size(1) - 1, 1)
+                    sentence_token_counts.append(n_tok)
+
+                # Map per-token losses to sentences
+                sentence_mean_losses = []
+                offset = 0
+                for stc in sentence_token_counts:
+                    end = min(offset + stc, len(token_losses_list))
+                    if end > offset:
+                        chunk = token_losses_list[offset:end]
+                        sentence_mean_losses.append(_statistics.mean(chunk))
+                    offset = end
+                    if offset >= len(token_losses_list):
+                        break
+
+                if len(sentence_mean_losses) >= 3:
+                    ppl_burstiness = _statistics.variance(sentence_mean_losses)
+                    sentence_ppl_count = len(sentence_mean_losses)
+        except Exception:
+            pass  # Burstiness is supplementary; don't fail the analyzer
+
     if ppl <= 15.0:
         det = 'AMBER'
         conf = min(0.65, (20.0 - ppl) / 20.0)
@@ -185,4 +225,6 @@ def run_perplexity(text, model_id=None):
         'token_losses': token_losses_list,
         'binoculars_score': binoculars_score,
         'binoculars_determination': binoculars_det,
+        'ppl_burstiness': round(ppl_burstiness, 4),
+        'sentence_ppl_count': sentence_ppl_count,
     }
