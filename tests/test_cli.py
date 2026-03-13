@@ -342,9 +342,15 @@ def test_version_consistency():
     """Ensure version strings are consistent across package."""
     print("\n-- VERSION CONSISTENCY --")
     import llm_detector
-    check("Package version is 0.66.0",
-          llm_detector.__version__ == '0.66.0',
-          f"got {llm_detector.__version__}")
+    from pathlib import Path
+    import tomllib
+
+    pyproject = Path(__file__).resolve().parents[1] / 'pyproject.toml'
+    expected_version = tomllib.loads(pyproject.read_text())['project']['version']
+
+    check("Package version matches pyproject.toml",
+          llm_detector.__version__ == expected_version,
+          f"got {llm_detector.__version__}, expected {expected_version}")
 
 
 if __name__ == '__main__':
