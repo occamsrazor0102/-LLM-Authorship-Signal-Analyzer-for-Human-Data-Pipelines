@@ -61,12 +61,11 @@ def _det_badge(det: str) -> str:
 
 def _rerun():
     """Compatibility wrapper for Streamlit rerun across versions."""
-    rerun_fn = getattr(st, "rerun", None)
+    rerun_fn = getattr(st, "rerun", None) or getattr(st, "experimental_rerun", None)
     if callable(rerun_fn):
         rerun_fn()
     else:
-        # Fallback for older Streamlit versions
-        st.experimental_rerun()
+        raise RuntimeError("Streamlit rerun unavailable; please upgrade Streamlit.")
 
 
 # ── Page configuration ───────────────────────────────────────────────────────
