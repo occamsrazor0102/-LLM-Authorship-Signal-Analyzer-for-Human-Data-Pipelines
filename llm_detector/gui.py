@@ -159,6 +159,10 @@ class DetectorGUI:
         self.prompt_col_var = tk.StringVar(value='prompt')
         self.sheet_var = tk.StringVar()
         self.attempter_var = tk.StringVar()
+        self.id_col_var = tk.StringVar(value='task_id')
+        self.occ_col_var = tk.StringVar(value='occupation')
+        self.attempter_col_var = tk.StringVar(value='attempter_name')
+        self.stage_col_var = tk.StringVar(value='pipeline_stage_name')
         self.provider_var = tk.StringVar(value='anthropic')
         self.api_key_var = tk.StringVar()
         self.status_var = tk.StringVar(value='Ready')
@@ -278,8 +282,20 @@ class DetectorGUI:
         ttk.Entry(opts, textvariable=self.prompt_col_var, width=14).grid(row=0, column=1, sticky='w', padx=4)
         ttk.Label(opts, text='Sheet').grid(row=0, column=2, sticky='w')
         ttk.Entry(opts, textvariable=self.sheet_var, width=14).grid(row=0, column=3, sticky='w', padx=4)
-        ttk.Label(opts, text='Attempter').grid(row=0, column=4, sticky='w')
+        ttk.Label(opts, text='Filter by attempter').grid(row=0, column=4, sticky='w')
         ttk.Entry(opts, textvariable=self.attempter_var, width=14).grid(row=0, column=5, sticky='w', padx=4)
+
+        # Column mapping (advanced options)
+        col_map = ttk.LabelFrame(tab, text='Column Mapping (optional - accepts column names or Excel letters A-Z)')
+        col_map.pack(fill=tk.X, pady=(0, 6))
+        ttk.Label(col_map, text='Task ID col:').grid(row=0, column=0, sticky='w', padx=6, pady=3)
+        ttk.Entry(col_map, textvariable=self.id_col_var, width=18).grid(row=0, column=1, sticky='w', padx=4, pady=3)
+        ttk.Label(col_map, text='Occupation col:').grid(row=0, column=2, sticky='w', padx=(12, 6), pady=3)
+        ttk.Entry(col_map, textvariable=self.occ_col_var, width=18).grid(row=0, column=3, sticky='w', padx=4, pady=3)
+        ttk.Label(col_map, text='Attempter col:').grid(row=1, column=0, sticky='w', padx=6, pady=3)
+        ttk.Entry(col_map, textvariable=self.attempter_col_var, width=18).grid(row=1, column=1, sticky='w', padx=4, pady=3)
+        ttk.Label(col_map, text='Stage col:').grid(row=1, column=2, sticky='w', padx=(12, 6), pady=3)
+        ttk.Entry(col_map, textvariable=self.stage_col_var, width=18).grid(row=1, column=3, sticky='w', padx=4, pady=3)
 
         # Mode & detection options
         mode_row = ttk.Frame(tab)
@@ -962,9 +978,17 @@ class DetectorGUI:
         ext = os.path.splitext(path)[1].lower()
         if ext in ('.xlsx', '.xlsm'):
             tasks = load_xlsx(path, sheet=self.sheet_var.get().strip() or None,
-                              prompt_col=self.prompt_col_var.get().strip() or 'prompt')
+                              prompt_col=self.prompt_col_var.get().strip() or 'prompt',
+                              id_col=self.id_col_var.get().strip() or 'task_id',
+                              occ_col=self.occ_col_var.get().strip() or 'occupation',
+                              attempter_col=self.attempter_col_var.get().strip() or 'attempter_name',
+                              stage_col=self.stage_col_var.get().strip() or 'pipeline_stage_name')
         elif ext == '.csv':
-            tasks = load_csv(path, prompt_col=self.prompt_col_var.get().strip() or 'prompt')
+            tasks = load_csv(path, prompt_col=self.prompt_col_var.get().strip() or 'prompt',
+                             id_col=self.id_col_var.get().strip() or 'task_id',
+                             occ_col=self.occ_col_var.get().strip() or 'occupation',
+                             attempter_col=self.attempter_col_var.get().strip() or 'attempter_name',
+                             stage_col=self.stage_col_var.get().strip() or 'pipeline_stage_name')
         elif ext == '.pdf':
             if not HAS_PYPDF:
                 self.root.after(0, lambda: messagebox.showerror(
