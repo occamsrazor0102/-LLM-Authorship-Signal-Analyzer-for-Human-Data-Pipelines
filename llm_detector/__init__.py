@@ -1,5 +1,5 @@
 """
-LLM-Generated Task Prompt Detection Pipeline v0.68
+LLM-Generated Task Prompt Detection Pipeline
 ===================================================
 Multi-layer stylometric detection pipeline for identifying LLM-generated
 or LLM-assisted task prompts in human data collection workflows.
