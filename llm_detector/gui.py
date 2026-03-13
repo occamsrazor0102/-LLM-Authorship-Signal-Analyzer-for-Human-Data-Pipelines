@@ -286,7 +286,10 @@ class DetectorGUI:
         ttk.Entry(opts, textvariable=self.attempter_var, width=14).grid(row=0, column=5, sticky='w', padx=4)
 
         # Column mapping (advanced options)
-        col_map = ttk.LabelFrame(tab, text='Column Mapping (optional - accepts column names or Excel letters A-Z)')
+        col_map = ttk.LabelFrame(
+            tab,
+            text='Column Mapping (optional - accepts column names, Excel letters A-Z, or 1-based numeric positions)',
+        )
         col_map.pack(fill=tk.X, pady=(0, 6))
         ttk.Label(col_map, text='Task ID col:').grid(row=0, column=0, sticky='w', padx=6, pady=3)
         ttk.Entry(col_map, textvariable=self.id_col_var, width=18).grid(row=0, column=1, sticky='w', padx=4, pady=3)
