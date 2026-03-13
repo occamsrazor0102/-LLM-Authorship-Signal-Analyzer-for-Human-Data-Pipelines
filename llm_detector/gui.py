@@ -950,6 +950,19 @@ class DetectorGUI:
             collect_baselines([result], collect_path)
             self._append(f"  Baseline appended to {collect_path}\n", 'DIM')
 
+    def _build_loader_column_kwargs(self):
+        """
+        Build keyword arguments for loader functions with consistent defaults
+        for column names. This avoids duplication between CSV/XLSX branches.
+        """
+        return {
+            'prompt_col': self.prompt_col_var.get().strip() or 'prompt',
+            'id_col': self.id_col_var.get().strip() or 'task_id',
+            'occ_col': self.occ_col_var.get().strip() or 'occupation',
+            'attempter_col': self.attempter_col_var.get().strip() or 'attempter_name',
+            'stage_col': self.stage_col_var.get().strip() or 'pipeline_stage_name',
+        }
+
     def _analyze_file(self):
         path = self.file_var.get().strip()
         if not path:
@@ -977,18 +990,18 @@ class DetectorGUI:
 
         ext = os.path.splitext(path)[1].lower()
         if ext in ('.xlsx', '.xlsm'):
-            tasks = load_xlsx(path, sheet=self.sheet_var.get().strip() or None,
-                              prompt_col=self.prompt_col_var.get().strip() or 'prompt',
-                              id_col=self.id_col_var.get().strip() or 'task_id',
-                              occ_col=self.occ_col_var.get().strip() or 'occupation',
-                              attempter_col=self.attempter_col_var.get().strip() or 'attempter_name',
-                              stage_col=self.stage_col_var.get().strip() or 'pipeline_stage_name')
+            column_kwargs = self._build_loader_column_kwargs()
+            tasks = load_xlsx(
+                path,
+                sheet=self.sheet_var.get().strip() or None,
+                **column_kwargs,
+            )
         elif ext == '.csv':
-            tasks = load_csv(path, prompt_col=self.prompt_col_var.get().strip() or 'prompt',
-                             id_col=self.id_col_var.get().strip() or 'task_id',
-                             occ_col=self.occ_col_var.get().strip() or 'occupation',
-                             attempter_col=self.attempter_col_var.get().strip() or 'attempter_name',
-                             stage_col=self.stage_col_var.get().strip() or 'pipeline_stage_name')
+            column_kwargs = self._build_loader_column_kwargs()
+            tasks = load_csv(
+                path,
+                **column_kwargs,
+            )
         elif ext == '.pdf':
             if not HAS_PYPDF:
                 self.root.after(0, lambda: messagebox.showerror(
