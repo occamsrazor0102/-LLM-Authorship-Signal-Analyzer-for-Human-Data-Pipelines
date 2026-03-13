@@ -59,6 +59,17 @@ def _det_badge(det: str) -> str:
     return f":{color[1:]}[{emoji} **{det}**]"
 
 
+def _rerun():
+    """Compatibility wrapper for Streamlit rerun across versions."""
+    rerun_fn = getattr(st, "rerun", None)
+    if not callable(rerun_fn):
+        rerun_fn = getattr(st, "experimental_rerun", None)
+    if callable(rerun_fn):
+        rerun_fn()
+    else:
+        raise RuntimeError("Streamlit rerun unavailable; please upgrade Streamlit.")
+
+
 # ── Page configuration ───────────────────────────────────────────────────────
 
 def _configure_page():
@@ -468,7 +479,7 @@ def _page_analysis():
             st.session_state["results"] = results
             st.session_state["text_map"] = text_map
             st.session_state["run_count"] += 1
-        st.rerun()
+        _rerun()
 
     if analyze_file_btn and uploaded is not None:
         with st.spinner("Analyzing file..."):
@@ -597,7 +608,7 @@ def _page_analysis():
                     all_results, text_map
                 )
 
-                st.rerun()
+                _rerun()
 
     # ── Display Results ────────────
     if results:
@@ -1176,7 +1187,7 @@ def _page_memory():
                 from llm_detector.memory import MemoryStore
                 st.session_state["memory_store"] = MemoryStore(".beet")
                 st.success("Memory store ready: .beet")
-                st.rerun()
+                _rerun()
             except Exception as e:
                 st.error(str(e))
 
@@ -1191,7 +1202,7 @@ def _page_memory():
                         from llm_detector.memory import MemoryStore
                         st.session_state["memory_store"] = MemoryStore(_dir)
                         st.success(f"Loaded: {_dir}")
-                        st.rerun()
+                        _rerun()
                     except Exception as e:
                         st.error(str(e))
 
@@ -1438,7 +1449,7 @@ def _page_memory():
                         "labeled_ai": 0, "labeled_human": 0,
                         "labeled_unsure": 0, "skipped": 0,
                     }
-                    st.rerun()
+                    _rerun()
 
             # Active labeling session
             queue = st.session_state.get("lbl_queue", [])
@@ -1523,7 +1534,7 @@ def _page_memory():
                     else:
                         st.session_state["lbl_stats"]["labeled_unsure"] += 1
                     st.session_state["lbl_idx"] += 1
-                    st.rerun()
+                    _rerun()
 
                 with bc1:
                     if st.button("\U0001f916 AI", use_container_width=True, key=f"lbl_ai_{idx}"):
@@ -1538,11 +1549,11 @@ def _page_memory():
                     if st.button("Skip", use_container_width=True, key=f"lbl_skip_{idx}"):
                         st.session_state["lbl_stats"]["skipped"] += 1
                         st.session_state["lbl_idx"] += 1
-                        st.rerun()
+                        _rerun()
                 with bc5:
                     if st.button("Quit", use_container_width=True, key=f"lbl_quit_{idx}"):
                         st.session_state["lbl_queue"] = []
-                        st.rerun()
+                        _rerun()
 
             elif queue and idx >= len(queue):
                 stats = st.session_state.get("lbl_stats", {})
