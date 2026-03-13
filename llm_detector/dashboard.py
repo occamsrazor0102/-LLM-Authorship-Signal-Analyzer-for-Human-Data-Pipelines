@@ -61,7 +61,9 @@ def _det_badge(det: str) -> str:
 
 def _rerun():
     """Compatibility wrapper for Streamlit rerun across versions."""
-    rerun_fn = getattr(st, "rerun", None) or getattr(st, "experimental_rerun", None)
+    rerun_fn = getattr(st, "rerun", None)
+    if not callable(rerun_fn):
+        rerun_fn = getattr(st, "experimental_rerun", None)
     if callable(rerun_fn):
         rerun_fn()
     else:

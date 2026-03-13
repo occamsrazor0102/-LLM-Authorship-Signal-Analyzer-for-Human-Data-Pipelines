@@ -53,5 +53,5 @@ def test_rerun_falls_back_to_experimental():
 def test_rerun_raises_if_unavailable():
     dash = _reload_dashboard_with(_fake_streamlit())
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="Streamlit rerun unavailable"):
         dash._rerun()
