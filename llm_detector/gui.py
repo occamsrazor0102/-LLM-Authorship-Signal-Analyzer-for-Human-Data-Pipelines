@@ -1245,14 +1245,17 @@ class DetectorGUI:
         if not path:
             return
 
-        import pandas as pd
-        flat = []
-        for r in self._last_results:
-            row = {k: v for k, v in r.items() if k != 'preamble_details'}
-            row['preamble_details'] = str(r.get('preamble_details', []))
-            flat.append(row)
-        pd.DataFrame(flat).to_csv(path, index=False)
-        self.status_var.set(f'Results saved to {path}')
+        try:
+            import pandas as pd
+            flat = []
+            for r in self._last_results:
+                row = {k: v for k, v in r.items() if k != 'preamble_details'}
+                row['preamble_details'] = str(r.get('preamble_details', []))
+                flat.append(row)
+            pd.DataFrame(flat).to_csv(path, index=False)
+            self.status_var.set(f'Results saved to {path}')
+        except Exception as e:
+            messagebox.showerror('Error', f'Failed to save CSV: {e}')
 
     def _save_html_reports(self):
         if not self._last_results:
