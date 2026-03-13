@@ -2267,61 +2267,67 @@ if HAS_TK:
             self._notes_var.set('')
 
         def _label(self, ground_truth):
-            import json
-            from datetime import datetime
-            r = self._results[self._idx]
-            notes = self._notes_var.get().strip()
+            try:
+                import json
+                from datetime import datetime
+                r = self._results[self._idx]
+                notes = self._notes_var.get().strip()
 
-            wc = r.get('word_count', 0)
-            length_bin = (
-                'short' if wc < 100 else
-                'medium' if wc < 300 else
-                'long' if wc < 800 else
-                'very_long'
-            )
-            record = {
-                'task_id': r.get('task_id', ''),
-                'attempter': r.get('attempter', ''),
-                'occupation': r.get('occupation', ''),
-                'ground_truth': ground_truth,
-                'pipeline_determination': r.get('determination', ''),
-                'pipeline_confidence': r.get('confidence', 0),
-                'reviewer': self._reviewer,
-                'notes': notes,
-                'timestamp': datetime.now().isoformat(),
-                'pipeline_version': 'v0.66',
-                'confidence': r.get('confidence', 0),
-                'word_count': wc,
-                'domain': r.get('domain', ''),
-                'mode': r.get('mode', ''),
-                'length_bin': length_bin,
-            }
-
-            with open(self._output_path, 'a') as f:
-                f.write(json.dumps(record) + '\n')
-
-            if self._store and ground_truth in ('ai', 'human'):
-                self._store.record_confirmation(
-                    r.get('task_id', ''), ground_truth,
-                    verified_by=self._reviewer, notes=notes,
+                wc = r.get('word_count', 0)
+                length_bin = (
+                    'short' if wc < 100 else
+                    'medium' if wc < 300 else
+                    'long' if wc < 800 else
+                    'very_long'
                 )
+                record = {
+                    'task_id': r.get('task_id', ''),
+                    'attempter': r.get('attempter', ''),
+                    'occupation': r.get('occupation', ''),
+                    'ground_truth': ground_truth,
+                    'pipeline_determination': r.get('determination', ''),
+                    'pipeline_confidence': r.get('confidence', 0),
+                    'reviewer': self._reviewer,
+                    'notes': notes,
+                    'timestamp': datetime.now().isoformat(),
+                    'pipeline_version': 'v0.66',
+                    'confidence': r.get('confidence', 0),
+                    'word_count': wc,
+                    'domain': r.get('domain', ''),
+                    'mode': r.get('mode', ''),
+                    'length_bin': length_bin,
+                }
 
-            if ground_truth == 'ai':
-                self._stats['labeled_ai'] += 1
-            elif ground_truth == 'human':
-                self._stats['labeled_human'] += 1
-            else:
-                self._stats['labeled_unsure'] += 1
-            self._stats['total_presented'] += 1
+                with open(self._output_path, 'a') as f:
+                    f.write(json.dumps(record) + '\n')
 
-            self._idx += 1
-            self._show_current()
+                if self._store and ground_truth in ('ai', 'human'):
+                    self._store.record_confirmation(
+                        r.get('task_id', ''), ground_truth,
+                        verified_by=self._reviewer, notes=notes,
+                    )
+
+                if ground_truth == 'ai':
+                    self._stats['labeled_ai'] += 1
+                elif ground_truth == 'human':
+                    self._stats['labeled_human'] += 1
+                else:
+                    self._stats['labeled_unsure'] += 1
+                self._stats['total_presented'] += 1
+
+                self._idx += 1
+                self._show_current()
+            except Exception as e:
+                messagebox.showerror('Labeling Error', f'Failed to record label: {e}')
 
         def _skip(self):
-            self._stats['skipped'] += 1
-            self._stats['total_presented'] += 1
-            self._idx += 1
-            self._show_current()
+            try:
+                self._stats['skipped'] += 1
+                self._stats['total_presented'] += 1
+                self._idx += 1
+                self._show_current()
+            except Exception as e:
+                messagebox.showerror('Skip Error', f'Failed to skip: {e}')
 
         def _quit(self):
             self._finish()
