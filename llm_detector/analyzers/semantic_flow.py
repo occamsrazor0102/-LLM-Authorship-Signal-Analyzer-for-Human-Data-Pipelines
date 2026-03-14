@@ -49,7 +49,23 @@ def run_semantic_flow(text, min_sentences=5):
                 'reason': f'Semantic flow: too few sentences ({len(sentences)})'}
 
     embedder, _, _ = get_semantic_models()
-    from sklearn.metrics.pairwise import cosine_similarity
+
+    try:
+        from sklearn.metrics.pairwise import cosine_similarity
+
+        def _cosine(a, b):
+            return float(cosine_similarity(
+                a.reshape(1, -1),
+                b.reshape(1, -1),
+            )[0][0])
+    except ImportError:  # pragma: no cover - exercised in tests via missing sklearn
+        import numpy as np
+
+        def _cosine(a, b):
+            denom = float(np.linalg.norm(a) * np.linalg.norm(b))
+            if denom == 0.0:
+                return 0.0
+            return float(np.dot(a, b) / denom)
 
     # Encode all sentences in one batch for efficiency
     embeddings = embedder.encode(sentences)
@@ -57,10 +73,7 @@ def run_semantic_flow(text, min_sentences=5):
     # Compute consecutive cosine similarities
     similarities = []
     for i in range(len(embeddings) - 1):
-        sim = cosine_similarity(
-            embeddings[i].reshape(1, -1),
-            embeddings[i + 1].reshape(1, -1),
-        )[0][0]
+        sim = _cosine(embeddings[i], embeddings[i + 1])
         similarities.append(float(sim))
 
     if len(similarities) < 2:
