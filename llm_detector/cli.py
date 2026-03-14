@@ -1182,6 +1182,9 @@ def main():
     if sim_pairs:
         sim_lookup = defaultdict(list)
         for p in sim_pairs:
+            # Skip baseline statistics that don't have id_a/id_b
+            if p.get('_type') == 'baseline':
+                continue
             sim_lookup[p['id_a']].append(f"{p['id_b']}(J={p['jaccard']:.2f})")
             sim_lookup[p['id_b']].append(f"{p['id_a']}(J={p['jaccard']:.2f})")
         for row in flat:
