@@ -5,7 +5,7 @@
 **File:** `llm_detector/cli.py`
 **Line:** 1185
 **Severity:** Medium
-**Status:** Documented, fix ready
+**Status:** ✅ FIXED (commit 2de79ab)
 
 ## Problem
 

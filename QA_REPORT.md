@@ -734,3 +734,19 @@ With the documented workaround (`--no-similarity` flag), users can achieve all c
 **Date:** 2026-03-14
 **Session ID:** qa-session-2026-03-14
 
+
+---
+
+## UPDATE (2026-03-14)
+
+### BUG-001 Status: ✅ FIXED
+
+The similarity analysis KeyError has been resolved in commit 2de79ab.
+
+**Fix Applied:**
+- Added filter to skip baseline statistics in similarity lookup (cli.py:1185-1187)
+- All tests passing (12/12 similarity tests, 12/12 CLI tests)
+- Manual verification confirms batch CSV processing works with similarity enabled
+
+**No workaround needed** - batch processing now works with default settings.
+
