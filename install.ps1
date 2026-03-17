@@ -1,13 +1,15 @@
 # install.ps1 — Build and install llm-detector as a standalone .exe on Windows.
 #
 # Usage (PowerShell):
-#   .\install.ps1                              # build + install to %LOCALAPPDATA%\llm-detector
-#   .\install.ps1 -Prefix "C:\Tools"           # install to C:\Tools\bin
-#   .\install.ps1 -BuildOnly                   # build without installing
+#   .\install.ps1                                          # build + install to %LOCALAPPDATA%\llm-detector
+#   .\install.ps1 -Prefix "C:\Tools"                       # install to C:\Tools\bin
+#   .\install.ps1 -InstallDir "C:\LLMDetector"             # centralised single-directory install
+#   .\install.ps1 -BuildOnly                               # build without installing
 #
 
 param(
     [string]$Prefix = "$env:LOCALAPPDATA\llm-detector",
+    [string]$InstallDir = "",
     [switch]$BuildOnly,
     [switch]$Help
 )
@@ -16,16 +18,22 @@ $ErrorActionPreference = "Stop"
 
 if ($Help) {
     Write-Host @"
-Usage: .\install.ps1 [-Prefix DIR] [-BuildOnly]
+Usage: .\install.ps1 [-Prefix DIR] [-InstallDir DIR] [-BuildOnly]
 
 Options:
-  -Prefix DIR    Install to DIR\bin (default: %LOCALAPPDATA%\llm-detector)
-  -BuildOnly     Only build, do not install
+  -Prefix DIR       Install to DIR\bin (default: %LOCALAPPDATA%\llm-detector)
+  -InstallDir DIR   Install executable and all components to DIR
+                    (centralised single-directory installation)
+  -BuildOnly        Only build, do not install
 "@
     exit 0
 }
 
-$InstallDir = Join-Path $Prefix "bin"
+if ($InstallDir) {
+    $TargetDir = $InstallDir
+} else {
+    $TargetDir = Join-Path $Prefix "bin"
+}
 $ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 Write-Host "==> Checking Python environment..."
@@ -62,22 +70,33 @@ if ($BuildOnly) {
     exit 0
 }
 
-Write-Host "==> Installing to $InstallDir..."
-New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-Copy-Item -Force $ExePath (Join-Path $InstallDir "llm-detector.exe")
+Write-Host "==> Installing to $TargetDir..."
+New-Item -ItemType Directory -Path $TargetDir -Force | Out-Null
+Copy-Item -Force $ExePath (Join-Path $TargetDir "llm-detector.exe")
+
+# When using -InstallDir, copy additional components for a centralised install
+if ($InstallDir) {
+    Write-Host "==> Copying components to $TargetDir..."
+    Copy-Item -Force (Join-Path $ScriptDir "requirements.txt") $TargetDir -ErrorAction SilentlyContinue
+    Copy-Item -Force (Join-Path $ScriptDir "pyproject.toml") $TargetDir -ErrorAction SilentlyContinue
+    Copy-Item -Force (Join-Path $ScriptDir "README.md") $TargetDir -ErrorAction SilentlyContinue
+    $configDir = Join-Path $TargetDir "config"
+    New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+    "Install directory: $TargetDir`nInstalled at: $(Get-Date -Format o)" | Out-File (Join-Path $configDir "install_info.txt")
+}
 
 # Check if install dir is on PATH
 $currentPath = [Environment]::GetEnvironmentVariable("PATH", "User")
-if ($currentPath -notlike "*$InstallDir*") {
+if ($currentPath -notlike "*$TargetDir*") {
     Write-Host ""
-    Write-Host "NOTE: $InstallDir is not on your PATH."
+    Write-Host "NOTE: $TargetDir is not on your PATH."
     Write-Host "Adding it now for the current user..."
     [Environment]::SetEnvironmentVariable(
         "PATH",
-        "$InstallDir;$currentPath",
+        "$TargetDir;$currentPath",
         "User"
     )
-    $env:PATH = "$InstallDir;$env:PATH"
+    $env:PATH = "$TargetDir;$env:PATH"
     Write-Host "Done. Restart your terminal for the change to take effect."
 }
 

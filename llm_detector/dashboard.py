@@ -172,6 +172,8 @@ def _render_sidebar():
                 "\U0001f9e0  Memory & Learning",
                 "\u2696\ufe0f  Calibration",
                 "\U0001f4ca  Reports",
+                "\U0001f4d6  Quick Reference",
+                "\u2705  Precheck",
             ],
             label_visibility="collapsed",
             help=(
@@ -1939,6 +1941,125 @@ def _page_reports():
             st.error(str(e))
 
 
+# ── Page: Quick Reference ────────────────────────────────────────────────────
+
+_QUICK_REFERENCE_TEXT = """\
+CHANNELS (fusion combines these into a final determination)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• **prompt_structure** — Rule-based structural analysis: preamble detection, \
+fingerprint matching, prompt-signature scoring (CFD, MFSR, framing), \
+instruction density (IDI), and voice dissonance (VSD).
+• **stylometry** — Statistical stylometric features: function-word ratio, \
+sentence-length dispersion, TTR, avg word length, short-word ratio, masked \
+topical tokens.
+• **continuation** — DNA-GPT continuation analysis: generates LLM \
+continuations and measures B-score, NCD, overlap, conditional surprisal, \
+repeat-4 rate, TTR.  Requires API key (Anthropic / OpenAI) or local model.
+• **windowing** — Sliding-window analysis: max/mean window score, variance, \
+hot-span detection, FW trajectory CV, comp trajectory, changepoint detection.
+
+INDIVIDUAL ANALYZERS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+| Analyzer | Key Signals |
+|---|---|
+| **Preamble** | Detects LLM boilerplate openings. Score, severity, hit count. |
+| **Fingerprint** | Pattern-matches known LLM output fingerprints. |
+| **Prompt Signature** | CFD, MFSR, distinct frames, framing completeness, conditional density, meta-design, contractions, must-rate, numbered criteria. |
+| **IDI** | Instruction Density Index: imperatives, conditionals, binary specs, missing references, flag count. |
+| **VSD** | Voice Dissonance Score: voice × spec, casual markers, misspellings, hedges, CamelCase columns, calculations. |
+| **SSI / NSSI** | Self-Similarity (Normalised): formulaic density, transition density, scare-quote/em-dash density, compression ratio, hapax ratio. |
+| **DNA-GPT** | Continuation B-score, NCD, internal overlap, conditional surprisal, repeat-4, TTR, composite stability. |
+| **Perplexity** | Mean PPL, burstiness, surprisal variance, volatility decay, Binoculars score, zlib-normalised PPL. |
+| **TOCSIN** | Token Cohesiveness: cohesiveness score and std. |
+| **Semantic Resonance** | AI/human centroid similarity: AI score, human score, delta. |
+| **Semantic Flow** | Cross-sentence semantic coherence (cosine similarity). |
+| **Lexicon Packs** | Domain-specific lexicon: constraint, exec-spec, schema scores. |
+
+POST-PROCESSING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• **Similarity** — Within-batch Jaccard similarity for near-duplicate detection.
+• **Cross-batch** — Persistent similarity store (JSONL) across sessions.
+• **Shadow Model** — ML classifier trained on confirmed labels; detects disagreements.
+• **Calibration** — Conformal prediction tables for well-calibrated probabilities.
+• **Normalization** — Unicode obfuscation detection: invisible chars, homoglyphs.
+• **Language Gate** — Non-English/non-Latin language support level check.
+"""
+
+
+def _page_quick_reference():
+    st.markdown("### \U0001f4d6 Quick Reference")
+    st.caption("Summary of every analysis, channel, and signal in the detection pipeline")
+    st.markdown(_QUICK_REFERENCE_TEXT)
+
+
+# ── Page: Precheck ───────────────────────────────────────────────────────────
+
+def _check_dependencies_st():
+    """Return list of (status, name, category, notes) for dependency checks."""
+    import importlib.util as iu
+    checks = []
+
+    def _probe(mod, display, cat, required=True, note_ok="", note_miss=""):
+        try:
+            ok = iu.find_spec(mod) is not None
+        except (ModuleNotFoundError, ValueError):
+            ok = False
+        if ok:
+            checks.append(("\u2705", display, cat, note_ok or "Available"))
+        elif required:
+            checks.append(("\u274c", display, cat, note_miss or "Missing — required"))
+        else:
+            checks.append(("\u2757", display, cat, note_miss or "Missing — optional"))
+
+    _probe("pandas", "pandas", "Core", True, "DataFrame processing")
+    _probe("openpyxl", "openpyxl", "Core", True, "Excel I/O")
+    _probe("spacy", "spacy", "NLP", False, note_miss="Optional — regex fallback used")
+    _probe("ftfy", "ftfy", "NLP", False, note_miss="Optional — text normalisation")
+    _probe("sentence_transformers", "sentence-transformers", "NLP", False,
+           note_miss="Optional — semantic resonance disabled")
+    _probe("sklearn", "scikit-learn", "NLP", False,
+           note_miss="Optional — ML fusion disabled")
+    _probe("transformers", "transformers (HuggingFace)", "Perplexity", False,
+           note_miss="Optional — perplexity analyser disabled")
+    _probe("torch", "PyTorch", "Perplexity", False,
+           note_miss="Optional — perplexity analyser disabled")
+    _probe("anthropic", "anthropic SDK", "API", False,
+           note_miss="Optional — Anthropic continuation disabled")
+    _probe("openai", "openai SDK", "API", False,
+           note_miss="Optional — OpenAI continuation disabled")
+    _probe("pypdf", "pypdf", "PDF", False, note_miss="Optional — PDF ingestion disabled")
+    _probe("streamlit", "streamlit", "Web", False,
+           note_miss="Optional — auto-install available")
+    _probe("tkinter", "tkinter", "GUI", False,
+           note_miss="Optional — desktop GUI unavailable")
+    _probe("PyInstaller", "PyInstaller", "Build", False,
+           note_miss="Optional — executable building only")
+    return checks
+
+
+def _page_precheck():
+    st.markdown("### \u2705 Precheck")
+    st.caption(
+        "Required and optional Python modules, models, and external programs. "
+        "\u2705 = available   \u2757 = missing (optional)   \u274c = missing (breaks analysis)"
+    )
+    rows = _check_dependencies_st()
+    df = pd.DataFrame(rows, columns=["Status", "Component", "Category", "Notes"])
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+    # Summary counts
+    ok_count = sum(1 for r in rows if r[0] == "\u2705")
+    warn_count = sum(1 for r in rows if r[0] == "\u2757")
+    err_count = sum(1 for r in rows if r[0] == "\u274c")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("Available", ok_count)
+    with c2:
+        st.metric("Optional Missing", warn_count)
+    with c3:
+        st.metric("Required Missing", err_count)
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -1957,6 +2078,10 @@ def main():
         _page_calibration()
     elif page.endswith("Reports"):
         _page_reports()
+    elif page.endswith("Quick Reference"):
+        _page_quick_reference()
+    elif page.endswith("Precheck"):
+        _page_precheck()
 
 
 if __name__ == "__main__":

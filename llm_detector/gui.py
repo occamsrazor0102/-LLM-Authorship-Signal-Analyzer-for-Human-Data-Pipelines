@@ -43,6 +43,136 @@ _DASHBOARD_THEME = {
 
 _TASK_ID_DISPLAY_LEN = 24
 
+# ── Quick Reference content ──────────────────────────────────────────────────
+_QUICK_REFERENCE_TEXT = """\
+═══════════════════════════════════════════════════════════
+  QUICK REFERENCE — Detection Pipeline Analyses & Signals
+═══════════════════════════════════════════════════════════
+
+CHANNELS (fusion combines these into a final determination)
+──────────────────────────────────────────────────────────
+  prompt_structure   Rule-based structural analysis: preamble detection,
+                     fingerprint matching, prompt-signature scoring (CFD,
+                     MFSR, framing), instruction density (IDI), and voice
+                     dissonance (VSD).
+  stylometry         Statistical stylometric features: function-word ratio,
+                     sentence-length dispersion, TTR, avg word length,
+                     short-word ratio, masked topical tokens.
+  continuation       DNA-GPT continuation analysis: generates LLM
+                     continuations and measures B-score, NCD, overlap,
+                     conditional surprisal, repeat-4 rate, TTR. Requires
+                     API key (Anthropic / OpenAI) or local model.
+  windowing          Sliding-window analysis: max/mean window score,
+                     variance, hot-span detection, FW trajectory CV,
+                     comp trajectory, changepoint detection.
+
+INDIVIDUAL ANALYZERS
+──────────────────────────────────────────────────────────
+  Preamble           Detects LLM boilerplate openings (e.g. "Sure, here's",
+                     "Certainly!", "As an AI…"). Score, severity, hit count.
+  Fingerprint        Pattern-matches known LLM output fingerprints.
+  Prompt Signature   Composite metric: CFD (constraint-frame density), MFSR,
+                     distinct frames, framing completeness, conditional
+                     density, meta-design, contractions, must-rate, numbered
+                     criteria.
+  IDI                Instruction Density Index: imperatives, conditionals,
+                     binary specs, missing references, flag count.
+  VSD                Voice Dissonance Score: voice × spec score, casual
+                     markers, misspellings, hedges, CamelCase columns,
+                     calculations, gated voice detection.
+  SSI / NSSI         Self-Similarity Index (Normalised): formulaic density,
+                     power-adj density, demonstrative density, transition
+                     density, scare-quote density, em-dash density,
+                     this/the start rate, section depth, sentence-length CV,
+                     compression ratio, hapax ratio, structural compression
+                     delta.
+  DNA-GPT            Continuation-based analysis: B-score, B-score max,
+                     NCD, internal overlap, conditional surprisal, repeat-4,
+                     TTR, composite, composite variance/stability.
+  Perplexity         Token-level surprisal: mean perplexity, burstiness,
+                     surprisal variance (first/second half), volatility
+                     decay ratio, Binoculars score, compression ratio,
+                     zlib-normalised PPL, comp/PPL ratio.
+  TOCSIN             Token Cohesiveness: cohesiveness score and std.
+  Semantic Resonance AI/human centroid similarity: AI score, human score,
+                     delta, determination, confidence.
+  Semantic Flow      Cross-sentence semantic coherence (cosine similarity).
+  Lexicon Packs      Domain-specific lexicon matching: constraint, exec-spec,
+                     schema scores, active families, prompt boost, IDI boost.
+
+POST-PROCESSING
+──────────────────────────────────────────────────────────
+  Similarity         Within-batch Jaccard similarity to detect near-duplicates.
+  Cross-batch        Persistent similarity store (JSONL) to compare across
+                     analysis sessions.
+  Shadow Model       ML-based classifier trained on confirmed labels;
+                     detects disagreements with rule-based determination.
+  Calibration        Conformal prediction tables for well-calibrated
+                     confidence probabilities.
+  Normalization      Unicode obfuscation detection: invisible chars,
+                     homoglyphs, attack neutralisation.
+  Language Gate      Non-English/non-Latin language support level check.
+"""
+
+
+def _check_dependencies():
+    """Return a list of (status_icon, name, category, notes) tuples."""
+    checks = []
+
+    def _probe(module_name, display, category, required=True, note_ok='', note_miss=''):
+        try:
+            importlib.util.find_spec(module_name)
+            ok = importlib.util.find_spec(module_name) is not None
+        except (ModuleNotFoundError, ValueError):
+            ok = False
+        if ok:
+            checks.append(('\u2705', display, category, note_ok or 'Available'))
+        elif required:
+            checks.append(('\u274c', display, category, note_miss or 'Missing — required'))
+        else:
+            checks.append(('\u2757', display, category, note_miss or 'Missing — optional'))
+
+    # Core (required)
+    _probe('pandas', 'pandas', 'Core', required=True, note_ok='DataFrame processing')
+    _probe('openpyxl', 'openpyxl', 'Core', required=True, note_ok='Excel I/O')
+
+    # NLP (optional but recommended)
+    _probe('spacy', 'spacy', 'NLP', required=False, note_miss='Optional — sentenciser will use regex fallback')
+    _probe('ftfy', 'ftfy', 'NLP', required=False, note_miss='Optional — text normalisation')
+    _probe('sentence_transformers', 'sentence-transformers', 'NLP', required=False,
+           note_miss='Optional — semantic resonance and flow disabled')
+    _probe('sklearn', 'scikit-learn', 'NLP', required=False,
+           note_miss='Optional — ML fusion and semantic similarity disabled')
+
+    # Perplexity (optional)
+    _probe('transformers', 'transformers (HuggingFace)', 'Perplexity', required=False,
+           note_miss='Optional — perplexity analyser disabled')
+    _probe('torch', 'PyTorch', 'Perplexity', required=False,
+           note_miss='Optional — perplexity analyser disabled')
+
+    # API continuation (optional)
+    _probe('anthropic', 'anthropic SDK', 'API', required=False,
+           note_miss='Optional — Anthropic DNA-GPT continuation disabled')
+    _probe('openai', 'openai SDK', 'API', required=False,
+           note_miss='Optional — OpenAI DNA-GPT continuation disabled')
+
+    # PDF (optional)
+    _probe('pypdf', 'pypdf', 'PDF', required=False, note_miss='Optional — PDF ingestion disabled')
+
+    # Web dashboard (optional)
+    _probe('streamlit', 'streamlit', 'Web', required=False,
+           note_miss='Optional — web dashboard unavailable (auto-install available)')
+
+    # GUI
+    _probe('tkinter', 'tkinter', 'GUI', required=False,
+           note_miss='Optional — desktop GUI unavailable')
+
+    # Build tools (optional)
+    _probe('PyInstaller', 'PyInstaller', 'Build', required=False,
+           note_miss='Optional — needed only for building executables')
+
+    return checks
+
 # Descriptions shown when hovering each notebook tab header.
 _TAB_TOOLTIPS = [
     None,  # Analysis tab — self-explanatory
@@ -67,6 +197,19 @@ _TAB_TOOLTIPS = [
         'tune detection thresholds for your specific domain.'
     ),
     None,  # Reports tab — self-explanatory
+    (
+        'Quick Reference\n\n'
+        'Summary of every analysis, channel, and signal that runs in '
+        'the detection pipeline. Use this as a quick lookup.'
+    ),
+    (
+        'Precheck\n\n'
+        'Shows all required and optional Python modules, models, and '
+        'external programs needed by the pipeline. Green checkmarks '
+        'indicate available items; exclamation marks indicate missing '
+        'but non-critical items; red X marks indicate items whose '
+        'absence will break parts of the analysis.'
+    ),
 ]
 
 
@@ -239,7 +382,7 @@ class DetectorGUI:
         notebook = ttk.Notebook(self.root, style='Dashboard.TNotebook')
         notebook.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
 
-        # Tab 1: Analysis
+        # Tab 1: Analysis (primary workflow)
         self._build_analysis_tab(notebook)
         # Tab 2: Configuration
         self._build_config_tab(notebook)
@@ -249,6 +392,10 @@ class DetectorGUI:
         self._build_calibration_tab(notebook)
         # Tab 5: Reports
         self._build_reports_tab(notebook)
+        # Tab 6: Quick Reference
+        self._build_quick_reference_tab(notebook)
+        # Tab 7: Precheck
+        self._build_precheck_tab(notebook)
 
         # Hover tooltips on tab headers
         _NotebookToolTip(notebook, _TAB_TOOLTIPS)
@@ -2016,6 +2163,59 @@ class DetectorGUI:
         self.root.after(0, lambda: (
             self.report_output.insert(tk.END, text),
             self.report_output.see(tk.END)))
+
+    # ── Tab 6: Quick Reference ─────────────────────────────────────────
+
+    def _build_quick_reference_tab(self, notebook):
+        tab = ttk.Frame(notebook, padding=8)
+        notebook.add(tab, text='  Quick Reference  ')
+
+        scrollbar = ttk.Scrollbar(tab, orient=tk.VERTICAL)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        ref_text = tk.Text(tab, wrap=tk.WORD, font=('Consolas', 9),
+                           state='disabled', yscrollcommand=scrollbar.set)
+        ref_text.pack(fill=tk.BOTH, expand=True)
+        scrollbar.config(command=ref_text.yview)
+
+        content = _QUICK_REFERENCE_TEXT
+        ref_text.configure(state='normal')
+        ref_text.insert('1.0', content)
+        ref_text.configure(state='disabled')
+
+    # ── Tab 7: Precheck ────────────────────────────────────────────────
+
+    def _build_precheck_tab(self, notebook):
+        tab = ttk.Frame(notebook, padding=8)
+        notebook.add(tab, text='  Precheck  ')
+
+        ttk.Label(tab, text=(
+            'Required and optional dependencies for the detection pipeline.\n'
+            '\u2705 = available   \u2757 = missing (optional, pipeline still works)   \u274c = missing (may break analysis)'
+        ), style='DashboardSubtitle.TLabel').pack(anchor='w', pady=(0, 8))
+
+        ttk.Button(tab, text='Refresh', command=lambda: self._refresh_precheck(tree)).pack(anchor='w', pady=(0, 6))
+
+        columns = ('Status', 'Component', 'Category', 'Notes')
+        tree = ttk.Treeview(tab, columns=columns, show='headings', height=20)
+        for col in columns:
+            tree.heading(col, text=col)
+        tree.column('Status', width=60, anchor='center')
+        tree.column('Component', width=220)
+        tree.column('Category', width=120)
+        tree.column('Notes', width=400)
+
+        tree_scroll = ttk.Scrollbar(tab, orient=tk.VERTICAL, command=tree.yview)
+        tree.configure(yscrollcommand=tree_scroll.set)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self._refresh_precheck(tree)
+
+    def _refresh_precheck(self, tree):
+        for item in tree.get_children():
+            tree.delete(item)
+        for status, name, category, notes in _check_dependencies():
+            tree.insert('', tk.END, values=(status, name, category, notes))
 
     def _collect_dna_hits(self, results):
         """Return DNA-GPT-positive results where continuation severity is RED/AMBER/YELLOW."""
