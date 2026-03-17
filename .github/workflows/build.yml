@@ -91,7 +91,7 @@ jobs:
           name: llm-detector-windows-x86_64
           path: windows/
 
-      - name: Prepare release assets
+      - name: Rename Windows executable for release
         run: |
           cp windows/llm-detector.exe  llm-detector-windows-x86_64.exe
 
