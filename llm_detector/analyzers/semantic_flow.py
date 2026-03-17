@@ -21,6 +21,9 @@ try:
     from sklearn.metrics.pairwise import cosine_similarity
 
     def _cosine(a, b):
+        denom = float(np.linalg.norm(a) * np.linalg.norm(b))
+        if abs(denom) < _COSINE_EPS:
+            return 0.0
         return float(cosine_similarity(
             a.reshape(1, -1),
             b.reshape(1, -1),
@@ -76,7 +79,7 @@ def run_semantic_flow(text, min_sentences=5):
     similarities = []
     for i in range(len(embeddings) - 1):
         sim = _cosine(embeddings[i], embeddings[i + 1])
-        similarities.append(float(sim))
+        similarities.append(sim)
 
     if len(similarities) < 2:
         return {**_FLOW_EMPTY, 'n_sentences': len(sentences),

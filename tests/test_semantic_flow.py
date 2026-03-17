@@ -169,6 +169,7 @@ if __name__ == '__main__':
     test_uniform_text_low_variance()
     test_varied_text_high_variance()
     test_result_dict_keys()
+    test_zero_vectors_safe_similarity()
 
     print(f"\n{'=' * 70}")
     print(f"RESULTS: {PASSED} passed, {FAILED} failed")
