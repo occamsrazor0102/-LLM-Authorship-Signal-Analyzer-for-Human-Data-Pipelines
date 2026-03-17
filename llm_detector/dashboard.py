@@ -175,7 +175,7 @@ def _render_sidebar():
             ],
             label_visibility="collapsed",
             help=(
-                "\u2699\ufe0f Configuration — Set API keys for Layer 3 continuation "
+                "\u2699\ufe0f Configuration — Set API keys for DNA-GPT continuation "
                 "analysis, tune similarity thresholds, and choose output paths.\n\n"
                 "\U0001f9e0 Memory & Learning — Load the BEET memory store that "
                 "persists analysis history across sessions. Record ground-truth labels "
@@ -310,6 +310,22 @@ def _page_analysis():
                     "Stage column", value="pipeline_stage_name",
                     help="Column for pipeline stage (optional). Use a name or a letter, e.g. E",
                 )
+            c8, c9, c10 = st.columns(3)
+            with c8:
+                attempter_email_col_input = st.text_input(
+                    "Attempter email col (optional)", value="",
+                    help="Column for attempter email address",
+                )
+            with c9:
+                reviewer_col_input = st.text_input(
+                    "Reviewer col (optional)", value="",
+                    help="Column for reviewer name",
+                )
+            with c10:
+                reviewer_email_col_input = st.text_input(
+                    "Reviewer email col (optional)", value="",
+                    help="Column for reviewer email address",
+                )
             analyze_file_btn = st.button(
                 "\U0001f4c1 Analyze File", type="primary", key="analyze_file"
             )
@@ -340,7 +356,7 @@ def _page_analysis():
         with c2:
             verbose = st.checkbox("Verbose", value=False)
         with c3:
-            no_layer3 = st.checkbox("Skip Layer 3", value=False)
+            no_layer3 = st.checkbox("Skip API Continuation", value=False)
 
         st.markdown("**Channel Ablation**")
         abl_cols = st.columns(len(_CHANNELS))
@@ -562,6 +578,12 @@ def _page_analysis():
                         )
                         run_folder.mkdir(parents=True, exist_ok=True)
 
+                        # Auto-set sim_store and other paths
+                        if not st.session_state.get("sim_store", "").strip():
+                            st.session_state["sim_store"] = str(
+                                run_folder / "similarity.jsonl"
+                            )
+
                         # Save results CSV
                         flat = []
                         for r in all_results:
@@ -587,6 +609,10 @@ def _page_analysis():
                             generate_batch_html_report(
                                 flagged, text_map, str(html_path)
                             )
+
+                        # Save labels JSONL placeholder
+                        labels_path = run_folder / "labels.jsonl"
+                        labels_path.touch(exist_ok=True)
 
                         # Auto-create memory store in the run folder if not
                         # already configured
@@ -1045,8 +1071,8 @@ def _page_configuration():
     # Continuation Analysis
     with st.expander("\U0001f9ec Continuation Analysis (DNA-GPT)", expanded=True):
         st.caption(
-            "Optional: provide an API key to enable DNA-GPT continuation analysis "
-            "(Layer 3). Leave blank to skip Layer 3 and run faster."
+            "Optional: provide an API key to enable DNA-GPT continuation analysis. "
+            "Leave blank to skip API continuation and run faster."
         )
         c1, c2 = st.columns(2)
         with c1:
@@ -1058,13 +1084,13 @@ def _page_configuration():
         with c2:
             api_key = st.text_input(
                 "API Key", type="password", key="api_key",
-                placeholder="sk-... or leave blank to skip Layer 3",
+                placeholder="sk-... or leave blank to skip API continuation",
             )
         # Show whether a key is configured (without revealing it)
         if st.session_state.get("api_key", "").strip():
-            st.success("\u2705 API key set — Layer 3 continuation analysis enabled")
+            st.success("\u2705 API key set — DNA-GPT continuation analysis enabled")
         else:
-            st.info("\u2139\ufe0f No API key — Layer 3 will be skipped (faster, less accurate)")
+            st.info("\u2139\ufe0f No API key — API continuation will be skipped (faster, less accurate)")
 
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -1243,7 +1269,7 @@ def _page_memory():
             confirm_task = st.text_input("Task ID", key="confirm_task")
         with c2:
             confirm_label = st.selectbox(
-                "Label", ["ai", "human"], key="confirm_label"
+                "Label", ["ai", "human", "unsure"], key="confirm_label"
             )
         with c3:
             confirm_reviewer = st.text_input(
@@ -1264,6 +1290,57 @@ def _page_memory():
                     f"Confirmed: {confirm_task} = {confirm_label} "
                     f"by {confirm_reviewer}"
                 )
+
+    # Quick-confirm from recent results
+    with st.expander("\U0001f50d Quick Confirm — Recent Scanned Samples", expanded=False):
+        results = st.session_state.get("results", [])
+        text_map = st.session_state.get("text_map", {})
+        if not results:
+            st.info("Run an analysis first to see recent samples here.")
+        else:
+            qc_reviewer = st.text_input("Reviewer name", key="qc_reviewer")
+            for idx, r in enumerate(results):
+                tid = r.get("task_id", f"#{idx+1}")
+                det = r.get("determination", "?")
+                emoji = _DET_EMOJI.get(det, "")
+                preview = (text_map.get(tid, "") or "")[:120].replace("\n", " ")
+                st.markdown(
+                    f"**{emoji} [{det}] {tid}**  \n"
+                    f"<small style='color:#6b7280'>{preview}{'…' if len(text_map.get(tid, '') or '') > 120 else ''}</small>",
+                    unsafe_allow_html=True,
+                )
+                bc1, bc2, bc3 = st.columns(3)
+                with bc1:
+                    if st.button("\U0001f9d1 Human", key=f"qc_human_{idx}"):
+                        mem = st.session_state.get("memory_store")
+                        if not mem:
+                            st.warning("Load a memory store first.")
+                        elif not qc_reviewer.strip():
+                            st.warning("Enter a reviewer name above.")
+                        else:
+                            mem.record_confirmation(tid, "human", verified_by=qc_reviewer.strip())
+                            st.success(f"Confirmed: {tid} = human")
+                with bc2:
+                    if st.button("\U0001f916 AI", key=f"qc_ai_{idx}"):
+                        mem = st.session_state.get("memory_store")
+                        if not mem:
+                            st.warning("Load a memory store first.")
+                        elif not qc_reviewer.strip():
+                            st.warning("Enter a reviewer name above.")
+                        else:
+                            mem.record_confirmation(tid, "ai", verified_by=qc_reviewer.strip())
+                            st.success(f"Confirmed: {tid} = ai")
+                with bc3:
+                    if st.button("? Unsure", key=f"qc_unsure_{idx}"):
+                        mem = st.session_state.get("memory_store")
+                        if not mem:
+                            st.warning("Load a memory store first.")
+                        elif not qc_reviewer.strip():
+                            st.warning("Enter a reviewer name above.")
+                        else:
+                            mem.record_confirmation(tid, "unsure", verified_by=qc_reviewer.strip())
+                            st.success(f"Confirmed: {tid} = unsure")
+                st.divider()
 
     # Attempter History
     with st.expander("\U0001f464 Attempter History", expanded=False):

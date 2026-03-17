@@ -48,7 +48,7 @@ _TAB_TOOLTIPS = [
     None,  # Analysis tab — self-explanatory
     (
         'Configuration\n\n'
-        'Set the API key for Layer 3 continuation analysis (DNA-GPT), '
+        'Set the API key for DNA-GPT continuation analysis, '
         'choose the LLM provider, tune similarity detection thresholds, '
         'and configure output paths for CSV and HTML reports.'
     ),
@@ -163,6 +163,9 @@ class DetectorGUI:
         self.occ_col_var = tk.StringVar(value='occupation')
         self.attempter_col_var = tk.StringVar(value='attempter_name')
         self.stage_col_var = tk.StringVar(value='pipeline_stage_name')
+        self.attempter_email_col_var = tk.StringVar()
+        self.reviewer_col_var = tk.StringVar()
+        self.reviewer_email_col_var = tk.StringVar()
         self.provider_var = tk.StringVar(value='anthropic')
         self.api_key_var = tk.StringVar()
         self.status_var = tk.StringVar(value='Ready')
@@ -299,6 +302,12 @@ class DetectorGUI:
         ttk.Entry(col_map, textvariable=self.attempter_col_var, width=18).grid(row=1, column=1, sticky='w', padx=4, pady=3)
         ttk.Label(col_map, text='Stage col:').grid(row=1, column=2, sticky='w', padx=(12, 6), pady=3)
         ttk.Entry(col_map, textvariable=self.stage_col_var, width=18).grid(row=1, column=3, sticky='w', padx=4, pady=3)
+        ttk.Label(col_map, text='Attempter email col:').grid(row=2, column=0, sticky='w', padx=6, pady=3)
+        ttk.Entry(col_map, textvariable=self.attempter_email_col_var, width=18).grid(row=2, column=1, sticky='w', padx=4, pady=3)
+        ttk.Label(col_map, text='Reviewer col:').grid(row=2, column=2, sticky='w', padx=(12, 6), pady=3)
+        ttk.Entry(col_map, textvariable=self.reviewer_col_var, width=18).grid(row=2, column=3, sticky='w', padx=4, pady=3)
+        ttk.Label(col_map, text='Reviewer email col:').grid(row=3, column=0, sticky='w', padx=6, pady=3)
+        ttk.Entry(col_map, textvariable=self.reviewer_email_col_var, width=18).grid(row=3, column=1, sticky='w', padx=4, pady=3)
 
         # Mode & detection options
         mode_row = ttk.Frame(tab)
@@ -309,7 +318,7 @@ class DetectorGUI:
                      width=14, state='readonly').pack(side=tk.LEFT, padx=(4, 12))
         ttk.Checkbutton(mode_row, text='Show details', variable=self.show_details_var).pack(side=tk.LEFT, padx=(0, 12))
         ttk.Checkbutton(mode_row, text='Verbose', variable=self.verbose_var).pack(side=tk.LEFT, padx=(0, 12))
-        ttk.Checkbutton(mode_row, text='Skip Layer 3', variable=self.no_layer3_var).pack(side=tk.LEFT)
+        ttk.Checkbutton(mode_row, text='Skip API Continuation', variable=self.no_layer3_var).pack(side=tk.LEFT)
 
         # Perplexity model selector
         ppl_row = ttk.Frame(tab)
@@ -479,17 +488,53 @@ class DetectorGUI:
         btn_row.grid(row=3, column=0, columnspan=5, sticky='w', padx=6, pady=4)
         ttk.Button(btn_row, text='Print Summary', command=lambda: self._run_async(self._memory_summary)).pack(side=tk.LEFT, padx=(0, 6))
 
-        # Confirmations
+        # Confirmations — manual entry
         conf = ttk.LabelFrame(tab, text='Record Ground Truth Confirmation')
         conf.pack(fill=tk.X, pady=(0, 10))
         ttk.Label(conf, text='Task ID').grid(row=0, column=0, sticky='w', padx=6, pady=4)
         ttk.Entry(conf, textvariable=self.confirm_task_var, width=24).grid(row=0, column=1, sticky='w', padx=(0, 6), pady=4)
         ttk.Label(conf, text='Label').grid(row=0, column=2, sticky='w', padx=(12, 6), pady=4)
-        ttk.Combobox(conf, textvariable=self.confirm_label_var, values=['ai', 'human'],
+        ttk.Combobox(conf, textvariable=self.confirm_label_var, values=['ai', 'human', 'unsure'],
                      width=8, state='readonly').grid(row=0, column=3, sticky='w', pady=4)
         ttk.Label(conf, text='Reviewer').grid(row=0, column=4, sticky='w', padx=(12, 6), pady=4)
         ttk.Entry(conf, textvariable=self.confirm_reviewer_var, width=16).grid(row=0, column=5, sticky='w', padx=(0, 6), pady=4)
         ttk.Button(conf, text='Confirm', command=self._record_confirmation).grid(row=0, column=6, sticky='w', padx=6, pady=4)
+
+        # Quick-confirm from recent results
+        recent = ttk.LabelFrame(tab, text='Quick Confirm — Recent Scanned Samples')
+        recent.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(recent, text=(
+            'Select a recently scanned sample below and click Human / AI / Unsure to record the ground-truth label.'
+        ), style='DashboardSubtitle.TLabel').grid(row=0, column=0, columnspan=6, sticky='w', padx=6, pady=(4, 2))
+
+        # Listbox for recent results
+        self._recent_frame = ttk.Frame(recent)
+        self._recent_frame.grid(row=1, column=0, columnspan=6, sticky='nsew', padx=6, pady=4)
+        recent.columnconfigure(0, weight=1)
+
+        lb_scroll = ttk.Scrollbar(self._recent_frame, orient=tk.VERTICAL)
+        lb_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self._recent_listbox = tk.Listbox(
+            self._recent_frame, height=6, font=('Consolas', 9),
+            yscrollcommand=lb_scroll.set, selectmode=tk.SINGLE)
+        self._recent_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        lb_scroll.config(command=self._recent_listbox.yview)
+        self._recent_listbox.bind('<<ListboxSelect>>', self._on_recent_select)
+
+        self._recent_preview = tk.Text(self._recent_frame, height=3, wrap=tk.WORD,
+                                       font=('Consolas', 9), state='disabled')
+        self._recent_preview.pack(fill=tk.X, pady=(4, 0))
+
+        btn_row_confirm = ttk.Frame(recent)
+        btn_row_confirm.grid(row=2, column=0, columnspan=6, sticky='w', padx=6, pady=4)
+        ttk.Button(btn_row_confirm, text='\U0001f9d1  Human',
+                   command=lambda: self._quick_confirm('human')).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(btn_row_confirm, text='\U0001f916  AI',
+                   command=lambda: self._quick_confirm('ai')).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(btn_row_confirm, text='?  Unsure',
+                   command=lambda: self._quick_confirm('unsure')).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_row_confirm, text='Refresh List',
+                   command=self._refresh_recent_samples).pack(side=tk.LEFT, padx=(12, 0))
 
         # Attempter history
         hist = ttk.LabelFrame(tab, text='Attempter History')
@@ -1612,6 +1657,52 @@ class DetectorGUI:
 
     # ── Memory & Learning Actions ─────────────────────────────────────
 
+    def _refresh_recent_samples(self):
+        """Populate the recent-samples listbox from _last_results."""
+        self._recent_listbox.delete(0, tk.END)
+        for r in self._last_results:
+            tid = r.get('task_id', '?')
+            det = r.get('determination', '?')
+            preview = (self._last_text_map.get(tid, '') or '')[:60].replace('\n', ' ')
+            self._recent_listbox.insert(tk.END, f"[{det}] {tid}  — {preview}")
+
+    def _on_recent_select(self, event=None):
+        sel = self._recent_listbox.curselection()
+        if not sel:
+            return
+        idx = sel[0]
+        if idx >= len(self._last_results):
+            return
+        r = self._last_results[idx]
+        tid = r.get('task_id', '?')
+        text = (self._last_text_map.get(tid, '') or '')[:500]
+        self._recent_preview.configure(state='normal')
+        self._recent_preview.delete('1.0', tk.END)
+        self._recent_preview.insert('1.0', text or '(no text available)')
+        self._recent_preview.configure(state='disabled')
+
+    def _quick_confirm(self, label):
+        """Record a ground-truth confirmation for the currently selected recent sample."""
+        sel = self._recent_listbox.curselection()
+        if not sel:
+            messagebox.showinfo('Select sample', 'Select a sample from the list first.')
+            return
+        idx = sel[0]
+        if idx >= len(self._last_results):
+            return
+        reviewer = self.confirm_reviewer_var.get().strip()
+        if not reviewer:
+            messagebox.showinfo('Reviewer required', 'Enter a reviewer name above.')
+            return
+        if not self._ensure_memory():
+            return
+        r = self._last_results[idx]
+        task_id = r.get('task_id', '')
+        self._memory_store.record_confirmation(task_id, label, verified_by=reviewer)
+        self.status_var.set(f'Confirmed: {task_id} = {label} by {reviewer}')
+        # Visual feedback — remove confirmed item from list
+        self._recent_listbox.delete(idx)
+
     def _memory_summary(self):
         if not self._ensure_memory():
             return
@@ -2076,19 +2167,27 @@ class DetectorGUI:
         if streamlit_exe:
             cmd = [streamlit_exe, 'run', dashboard_path]
         else:
-            try:
-                streamlit_spec = importlib.util.find_spec('streamlit')
-                streamlit_main_spec = importlib.util.find_spec('streamlit.__main__')
-                if streamlit_spec is None or streamlit_main_spec is None:
-                    raise ImportError('streamlit module or entry point not found')
-            except ImportError:
-                messagebox.showerror(
-                    'Streamlit Not Found',
-                    'streamlit is not installed in this environment.\n'
-                    'Install it with:\n    pip install "llm-detector[web]"',
-                )
-                return
-            cmd = [sys.executable, '-m', 'streamlit', 'run', dashboard_path]
+            # Auto-install streamlit if missing
+            st_spec = importlib.util.find_spec('streamlit')
+            if st_spec is None:
+                self.status_var.set('Installing Streamlit…')
+                try:
+                    subprocess.check_call(
+                        [sys.executable, '-m', 'pip', 'install', 'streamlit>=1.20'],
+                        stdout=subprocess.DEVNULL,
+                    )
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    messagebox.showerror(
+                        'Streamlit Not Found',
+                        'streamlit could not be installed automatically.\n'
+                        'Install it with:\n    pip install "llm-detector[web]"',
+                    )
+                    return
+            streamlit_exe = shutil.which('streamlit')
+            if streamlit_exe:
+                cmd = [streamlit_exe, 'run', dashboard_path]
+            else:
+                cmd = [sys.executable, '-m', 'streamlit', 'run', dashboard_path]
         kwargs = dict(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
