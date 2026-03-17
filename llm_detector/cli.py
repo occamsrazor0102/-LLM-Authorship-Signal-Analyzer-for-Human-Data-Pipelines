@@ -25,6 +25,9 @@ from llm_detector.similarity import (
 )
 from llm_detector.io import load_xlsx, load_csv, load_pdf
 
+# Minimum streamlit version for the web dashboard.
+_STREAMLIT_MIN_VERSION = 'streamlit>=1.20'
+
 
 def _is_frozen():
     """Check if running as a PyInstaller bundle."""
@@ -1252,7 +1255,7 @@ def _ensure_streamlit():
     print('  Streamlit is not installed — installing automatically…')
     try:
         subprocess.check_call(
-            [sys.executable, '-m', 'pip', 'install', 'streamlit>=1.20'],
+            [sys.executable, '-m', 'pip', 'install', _STREAMLIT_MIN_VERSION],
             stdout=subprocess.DEVNULL,
         )
         print('  ✅ Streamlit installed successfully.')

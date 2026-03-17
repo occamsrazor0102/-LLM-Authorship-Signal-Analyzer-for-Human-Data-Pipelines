@@ -29,6 +29,12 @@ _DET_COLORS = {
 
 _CHANNELS = ['prompt_structure', 'stylometry', 'continuation', 'windowing']
 
+# Ground truth label options used across GUI and dashboard.
+_GROUND_TRUTH_LABELS = ['ai', 'human', 'unsure']
+
+# Minimum streamlit version for the web dashboard.
+_STREAMLIT_MIN_VERSION = 'streamlit>=1.20'
+
 # Maximum number of preamble patterns printed in verbose output to avoid overflow.
 _MAX_PREAMBLE_PATTERNS = 20
 
@@ -641,7 +647,7 @@ class DetectorGUI:
         ttk.Label(conf, text='Task ID').grid(row=0, column=0, sticky='w', padx=6, pady=4)
         ttk.Entry(conf, textvariable=self.confirm_task_var, width=24).grid(row=0, column=1, sticky='w', padx=(0, 6), pady=4)
         ttk.Label(conf, text='Label').grid(row=0, column=2, sticky='w', padx=(12, 6), pady=4)
-        ttk.Combobox(conf, textvariable=self.confirm_label_var, values=['ai', 'human', 'unsure'],
+        ttk.Combobox(conf, textvariable=self.confirm_label_var, values=_GROUND_TRUTH_LABELS,
                      width=8, state='readonly').grid(row=0, column=3, sticky='w', pady=4)
         ttk.Label(conf, text='Reviewer').grid(row=0, column=4, sticky='w', padx=(12, 6), pady=4)
         ttk.Entry(conf, textvariable=self.confirm_reviewer_var, width=16).grid(row=0, column=5, sticky='w', padx=(0, 6), pady=4)
@@ -1163,9 +1169,9 @@ class DetectorGUI:
         rv = self.reviewer_col_var.get().strip()
         if rv:
             kwargs['reviewer_col'] = rv
-        re_ = self.reviewer_email_col_var.get().strip()
-        if re_:
-            kwargs['reviewer_email_col'] = re_
+        rev_email = self.reviewer_email_col_var.get().strip()
+        if rev_email:
+            kwargs['reviewer_email_col'] = rev_email
         return kwargs
 
     def _analyze_file(self):
@@ -2383,7 +2389,7 @@ class DetectorGUI:
                 self.status_var.set('Installing Streamlit…')
                 try:
                     subprocess.check_call(
-                        [sys.executable, '-m', 'pip', 'install', 'streamlit>=1.20'],
+                        [sys.executable, '-m', 'pip', 'install', _STREAMLIT_MIN_VERSION],
                         stdout=subprocess.DEVNULL,
                     )
                 except (subprocess.CalledProcessError, FileNotFoundError):
