@@ -22,7 +22,7 @@ try:
 
     def _cosine(a, b):
         denom = float(np.linalg.norm(a) * np.linalg.norm(b))
-        if abs(denom) < _COSINE_EPS:
+        if denom < _COSINE_EPS:
             return 0.0
         return float(cosine_similarity(
             a.reshape(1, -1),
