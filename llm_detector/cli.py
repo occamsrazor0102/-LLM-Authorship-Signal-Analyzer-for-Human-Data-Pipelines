@@ -960,6 +960,9 @@ def main():
             occ_col=args.occ_col,
             attempter_col=args.attempter_col,
             stage_col=args.stage_col,
+            attempter_email_col=args.attempter_email_col,
+            reviewer_col=args.reviewer_col,
+            reviewer_email_col=args.reviewer_email_col,
         )
     elif ext == '.csv':
         tasks = load_csv(
@@ -969,6 +972,9 @@ def main():
             occ_col=args.occ_col,
             attempter_col=args.attempter_col,
             stage_col=args.stage_col,
+            attempter_email_col=args.attempter_email_col,
+            reviewer_col=args.reviewer_col,
+            reviewer_email_col=args.reviewer_email_col,
         )
     elif ext == '.pdf':
         tasks = load_pdf(args.input)

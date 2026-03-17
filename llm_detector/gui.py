@@ -1150,13 +1150,23 @@ class DetectorGUI:
         Build keyword arguments for loader functions with consistent defaults
         for column names. This avoids duplication between CSV/XLSX branches.
         """
-        return {
+        kwargs = {
             'prompt_col': self.prompt_col_var.get().strip() or 'prompt',
             'id_col': self.id_col_var.get().strip() or 'task_id',
             'occ_col': self.occ_col_var.get().strip() or 'occupation',
             'attempter_col': self.attempter_col_var.get().strip() or 'attempter_name',
             'stage_col': self.stage_col_var.get().strip() or 'pipeline_stage_name',
         }
+        ae = self.attempter_email_col_var.get().strip()
+        if ae:
+            kwargs['attempter_email_col'] = ae
+        rv = self.reviewer_col_var.get().strip()
+        if rv:
+            kwargs['reviewer_col'] = rv
+        re_ = self.reviewer_email_col_var.get().strip()
+        if re_:
+            kwargs['reviewer_email_col'] = re_
+        return kwargs
 
     def _analyze_file(self):
         path = self.file_var.get().strip()
