@@ -139,6 +139,26 @@ def test_result_dict_keys():
               f"missing: {expected_keys - set(result.keys())}")
 
 
+def test_zero_vectors_safe_similarity():
+    print("\n-- SEMANTIC FLOW: zero-vector embeddings fallback --")
+    from llm_detector.analyzers.semantic_flow import run_semantic_flow
+
+    mock_embedder = MagicMock()
+    mock_embedder.encode = MagicMock(return_value=np.zeros((3, 384)))
+
+    sentences = ['s1', 's2', 's3']
+
+    with patch('llm_detector.analyzers.semantic_flow.HAS_SEMANTIC', True):
+        with patch('llm_detector.analyzers.semantic_flow.get_sentences', return_value=sentences):
+            with patch('llm_detector.analyzers.semantic_flow.get_semantic_models', return_value=(mock_embedder, None, None)):
+                result = run_semantic_flow(' '.join(sentences), min_sentences=3)
+                check("Zero vectors handled without NaN", all(s == 0.0 for s in result['flow_similarities']),
+                      f"got {result['flow_similarities']}")
+                check("Variance zero for zero vectors", result['flow_variance'] == 0.0,
+                      f"got variance={result['flow_variance']}")
+                check("Determination remains None", result['determination'] is None)
+
+
 if __name__ == '__main__':
     print("=" * 70)
     print("Semantic Flow Analyzer Tests")
