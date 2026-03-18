@@ -24,6 +24,7 @@ from llm_detector.similarity import (
     apply_similarity_adjustments, save_similarity_store, cross_batch_similarity,
 )
 from llm_detector.io import load_xlsx, load_csv, load_pdf
+from llm_detector._constants import STREAMLIT_MIN_VERSION as _STREAMLIT_MIN_VERSION
 
 
 def _is_frozen():
@@ -638,7 +639,7 @@ def main():
     parser.add_argument('--baselines-csv', metavar='PATH',
                         help='Write baseline percentile tables to CSV (use with --analyze-baselines)')
     parser.add_argument('--no-layer3', action='store_true',
-                        help='Skip Layer 3 entirely (NSSI + DNA-GPT)')
+                        help='Skip API continuation analysis entirely (NSSI + DNA-GPT)')
     parser.add_argument('--disable-channel', metavar='CHANNELS',
                         help='Comma-separated channel names to disable for ablation: '
                              'prompt_structure, stylometry, continuation, windowing')
@@ -722,6 +723,12 @@ def main():
                         help='Column name or letter (A–Z) for attempter/author (default: attempter_name)')
     parser.add_argument('--stage-col', default='pipeline_stage_name', metavar='COL',
                         help='Column name or letter (A–Z) for pipeline stage (default: pipeline_stage_name)')
+    parser.add_argument('--attempter-email-col', default='', metavar='COL',
+                        help='Column name or letter (A–Z) for attempter email (optional)')
+    parser.add_argument('--reviewer-col', default='', metavar='COL',
+                        help='Column name or letter (A–Z) for reviewer name (optional)')
+    parser.add_argument('--reviewer-email-col', default='', metavar='COL',
+                        help='Column name or letter (A–Z) for reviewer email (optional)')
     # Output directory
     parser.add_argument('--run-dir', metavar='DIR',
                         help='Root directory for this analysis run. A timestamped subfolder '
@@ -954,6 +961,9 @@ def main():
             occ_col=args.occ_col,
             attempter_col=args.attempter_col,
             stage_col=args.stage_col,
+            attempter_email_col=args.attempter_email_col,
+            reviewer_col=args.reviewer_col,
+            reviewer_email_col=args.reviewer_email_col,
         )
     elif ext == '.csv':
         tasks = load_csv(
@@ -963,6 +973,9 @@ def main():
             occ_col=args.occ_col,
             attempter_col=args.attempter_col,
             stage_col=args.stage_col,
+            attempter_email_col=args.attempter_email_col,
+            reviewer_col=args.reviewer_col,
+            reviewer_email_col=args.reviewer_email_col,
         )
     elif ext == '.pdf':
         tasks = load_pdf(args.input)
@@ -1229,6 +1242,28 @@ def main_gui():
     launch_gui()
 
 
+def _ensure_streamlit():
+    """Auto-install streamlit if missing, especially for frozen/executable builds."""
+    try:
+        st_spec = importlib.util.find_spec('streamlit')
+        if st_spec is not None:
+            return True
+    except (ImportError, ModuleNotFoundError):
+        pass
+    print('  Streamlit is not installed — installing automatically…')
+    try:
+        subprocess.check_call(
+            [sys.executable, '-m', 'pip', 'install', _STREAMLIT_MIN_VERSION],
+            stdout=subprocess.DEVNULL,
+        )
+        print('  ✅ Streamlit installed successfully.')
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        print(f'  ❌ Auto-install failed: {exc}')
+        print('  Install manually with: pip install "llm-detector[web]"')
+        return False
+
+
 def main_dashboard():
     """Entry point that launches the Streamlit web dashboard."""
     spec = importlib.util.find_spec('llm_detector.dashboard')
@@ -1241,16 +1276,14 @@ def main_dashboard():
     if streamlit_exe:
         cmd = [streamlit_exe, 'run', dashboard_path]
     else:
-        try:
-            streamlit_spec = importlib.util.find_spec('streamlit')
-            streamlit_main_spec = importlib.util.find_spec('streamlit.__main__')
-            if streamlit_spec is None or streamlit_main_spec is None:
-                raise ImportError('streamlit module or entry point not found')
-        except ImportError:
-            print('ERROR: streamlit is not installed.')
-            print('Install it with: pip install "llm-detector[web]"')
+        if not _ensure_streamlit():
             return
-        cmd = [sys.executable, '-m', 'streamlit', 'run', dashboard_path]
+        # Re-check after install
+        streamlit_exe = shutil.which('streamlit')
+        if streamlit_exe:
+            cmd = [streamlit_exe, 'run', dashboard_path]
+        else:
+            cmd = [sys.executable, '-m', 'streamlit', 'run', dashboard_path]
     subprocess.run(cmd, check=False)
 
 

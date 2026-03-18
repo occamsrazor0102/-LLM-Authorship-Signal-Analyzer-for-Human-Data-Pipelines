@@ -12,6 +12,10 @@ from collections import Counter
 from llm_detector.compat import HAS_TK
 from llm_detector.pipeline import analyze_prompt
 from llm_detector.io import load_xlsx, load_csv
+from llm_detector._constants import (
+    GROUND_TRUTH_LABELS as _GROUND_TRUTH_LABELS,
+    STREAMLIT_MIN_VERSION as _STREAMLIT_MIN_VERSION,
+)
 
 if HAS_TK:
     import tkinter as tk
@@ -43,12 +47,143 @@ _DASHBOARD_THEME = {
 
 _TASK_ID_DISPLAY_LEN = 24
 
+# ── Quick Reference content ──────────────────────────────────────────────────
+_QUICK_REFERENCE_TEXT = """\
+═══════════════════════════════════════════════════════════
+  QUICK REFERENCE — Detection Pipeline Analyses & Signals
+═══════════════════════════════════════════════════════════
+
+CHANNELS (fusion combines these into a final determination)
+──────────────────────────────────────────────────────────
+  prompt_structure   Rule-based structural analysis: preamble detection,
+                     fingerprint matching, prompt-signature scoring (CFD,
+                     MFSR, framing), instruction density (IDI), and voice
+                     dissonance (VSD).
+  stylometry         Statistical stylometric features: function-word ratio,
+                     sentence-length dispersion, TTR, avg word length,
+                     short-word ratio, masked topical tokens.
+  continuation       DNA-GPT continuation analysis: generates LLM
+                     continuations and measures B-score, NCD, overlap,
+                     conditional surprisal, repeat-4 rate, TTR. Requires
+                     API key (Anthropic / OpenAI) or local model.
+  windowing          Sliding-window analysis: max/mean window score,
+                     variance, hot-span detection, FW trajectory CV,
+                     comp trajectory, changepoint detection.
+
+INDIVIDUAL ANALYZERS
+──────────────────────────────────────────────────────────
+  Preamble           Detects LLM boilerplate openings (e.g. "Sure, here's",
+                     "Certainly!", "As an AI…"). Score, severity, hit count.
+  Fingerprint        Pattern-matches known LLM output fingerprints.
+  Prompt Signature   Composite metric: CFD (constraint-frame density), MFSR,
+                     distinct frames, framing completeness, conditional
+                     density, meta-design, contractions, must-rate, numbered
+                     criteria.
+  IDI                Instruction Density Index: imperatives, conditionals,
+                     binary specs, missing references, flag count.
+  VSD                Voice Dissonance Score: voice × spec score, casual
+                     markers, misspellings, hedges, CamelCase columns,
+                     calculations, gated voice detection.
+  SSI / NSSI         Self-Similarity Index (Normalised): formulaic density,
+                     power-adj density, demonstrative density, transition
+                     density, scare-quote density, em-dash density,
+                     this/the start rate, section depth, sentence-length CV,
+                     compression ratio, hapax ratio, structural compression
+                     delta.
+  DNA-GPT            Continuation-based analysis: B-score, B-score max,
+                     NCD, internal overlap, conditional surprisal, repeat-4,
+                     TTR, composite, composite variance/stability.
+  Perplexity         Token-level surprisal: mean perplexity, burstiness,
+                     surprisal variance (first/second half), volatility
+                     decay ratio, Binoculars score, compression ratio,
+                     zlib-normalised PPL, comp/PPL ratio.
+  TOCSIN             Token Cohesiveness: cohesiveness score and std.
+  Semantic Resonance AI/human centroid similarity: AI score, human score,
+                     delta, determination, confidence.
+  Semantic Flow      Cross-sentence semantic coherence (cosine similarity).
+  Lexicon Packs      Domain-specific lexicon matching: constraint, exec-spec,
+                     schema scores, active families, prompt boost, IDI boost.
+
+POST-PROCESSING
+──────────────────────────────────────────────────────────
+  Similarity         Within-batch Jaccard similarity to detect near-duplicates.
+  Cross-batch        Persistent similarity store (JSONL) to compare across
+                     analysis sessions.
+  Shadow Model       ML-based classifier trained on confirmed labels;
+                     detects disagreements with rule-based determination.
+  Calibration        Conformal prediction tables for well-calibrated
+                     confidence probabilities.
+  Normalization      Unicode obfuscation detection: invisible chars,
+                     homoglyphs, attack neutralisation.
+  Language Gate      Non-English/non-Latin language support level check.
+"""
+
+
+def _check_dependencies():
+    """Return a list of (status_icon, name, category, notes) tuples."""
+    checks = []
+
+    def _probe(module_name, display, category, required=True, note_ok='', note_miss=''):
+        try:
+            ok = importlib.util.find_spec(module_name) is not None
+        except (ModuleNotFoundError, ValueError):
+            ok = False
+        except (ModuleNotFoundError, ValueError):
+            ok = False
+        if ok:
+            checks.append(('\u2705', display, category, note_ok or 'Available'))
+        elif required:
+            checks.append(('\u274c', display, category, note_miss or 'Missing — required'))
+        else:
+            checks.append(('\u2757', display, category, note_miss or 'Missing — optional'))
+
+    # Core (required)
+    _probe('pandas', 'pandas', 'Core', required=True, note_ok='DataFrame processing')
+    _probe('openpyxl', 'openpyxl', 'Core', required=True, note_ok='Excel I/O')
+
+    # NLP (optional but recommended)
+    _probe('spacy', 'spacy', 'NLP', required=False, note_miss='Optional — sentenciser will use regex fallback')
+    _probe('ftfy', 'ftfy', 'NLP', required=False, note_miss='Optional — text normalisation')
+    _probe('sentence_transformers', 'sentence-transformers', 'NLP', required=False,
+           note_miss='Optional — semantic resonance and flow disabled')
+    _probe('sklearn', 'scikit-learn', 'NLP', required=False,
+           note_miss='Optional — ML fusion and semantic similarity disabled')
+
+    # Perplexity (optional)
+    _probe('transformers', 'transformers (HuggingFace)', 'Perplexity', required=False,
+           note_miss='Optional — perplexity analyser disabled')
+    _probe('torch', 'PyTorch', 'Perplexity', required=False,
+           note_miss='Optional — perplexity analyser disabled')
+
+    # API continuation (optional)
+    _probe('anthropic', 'anthropic SDK', 'API', required=False,
+           note_miss='Optional — Anthropic DNA-GPT continuation disabled')
+    _probe('openai', 'openai SDK', 'API', required=False,
+           note_miss='Optional — OpenAI DNA-GPT continuation disabled')
+
+    # PDF (optional)
+    _probe('pypdf', 'pypdf', 'PDF', required=False, note_miss='Optional — PDF ingestion disabled')
+
+    # Web dashboard (optional)
+    _probe('streamlit', 'streamlit', 'Web', required=False,
+           note_miss='Optional — web dashboard unavailable (auto-install available)')
+
+    # GUI
+    _probe('tkinter', 'tkinter', 'GUI', required=False,
+           note_miss='Optional — desktop GUI unavailable')
+
+    # Build tools (optional)
+    _probe('PyInstaller', 'PyInstaller', 'Build', required=False,
+           note_miss='Optional — needed only for building executables')
+
+    return checks
+
 # Descriptions shown when hovering each notebook tab header.
 _TAB_TOOLTIPS = [
     None,  # Analysis tab — self-explanatory
     (
         'Configuration\n\n'
-        'Set the API key for Layer 3 continuation analysis (DNA-GPT), '
+        'Set the API key for DNA-GPT continuation analysis, '
         'choose the LLM provider, tune similarity detection thresholds, '
         'and configure output paths for CSV and HTML reports.'
     ),
@@ -67,6 +202,19 @@ _TAB_TOOLTIPS = [
         'tune detection thresholds for your specific domain.'
     ),
     None,  # Reports tab — self-explanatory
+    (
+        'Quick Reference\n\n'
+        'Summary of every analysis, channel, and signal that runs in '
+        'the detection pipeline. Use this as a quick lookup.'
+    ),
+    (
+        'Precheck\n\n'
+        'Shows all required and optional Python modules, models, and '
+        'external programs needed by the pipeline. Green checkmarks '
+        'indicate available items; exclamation marks indicate missing '
+        'but non-critical items; red X marks indicate items whose '
+        'absence will break parts of the analysis.'
+    ),
 ]
 
 
@@ -163,6 +311,9 @@ class DetectorGUI:
         self.occ_col_var = tk.StringVar(value='occupation')
         self.attempter_col_var = tk.StringVar(value='attempter_name')
         self.stage_col_var = tk.StringVar(value='pipeline_stage_name')
+        self.attempter_email_col_var = tk.StringVar()
+        self.reviewer_col_var = tk.StringVar()
+        self.reviewer_email_col_var = tk.StringVar()
         self.provider_var = tk.StringVar(value='anthropic')
         self.api_key_var = tk.StringVar()
         self.status_var = tk.StringVar(value='Ready')
@@ -236,7 +387,7 @@ class DetectorGUI:
         notebook = ttk.Notebook(self.root, style='Dashboard.TNotebook')
         notebook.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
 
-        # Tab 1: Analysis
+        # Tab 1: Analysis (primary workflow)
         self._build_analysis_tab(notebook)
         # Tab 2: Configuration
         self._build_config_tab(notebook)
@@ -246,6 +397,10 @@ class DetectorGUI:
         self._build_calibration_tab(notebook)
         # Tab 5: Reports
         self._build_reports_tab(notebook)
+        # Tab 6: Quick Reference
+        self._build_quick_reference_tab(notebook)
+        # Tab 7: Precheck
+        self._build_precheck_tab(notebook)
 
         # Hover tooltips on tab headers
         _NotebookToolTip(notebook, _TAB_TOOLTIPS)
@@ -299,6 +454,12 @@ class DetectorGUI:
         ttk.Entry(col_map, textvariable=self.attempter_col_var, width=18).grid(row=1, column=1, sticky='w', padx=4, pady=3)
         ttk.Label(col_map, text='Stage col:').grid(row=1, column=2, sticky='w', padx=(12, 6), pady=3)
         ttk.Entry(col_map, textvariable=self.stage_col_var, width=18).grid(row=1, column=3, sticky='w', padx=4, pady=3)
+        ttk.Label(col_map, text='Attempter email col:').grid(row=2, column=0, sticky='w', padx=6, pady=3)
+        ttk.Entry(col_map, textvariable=self.attempter_email_col_var, width=18).grid(row=2, column=1, sticky='w', padx=4, pady=3)
+        ttk.Label(col_map, text='Reviewer col:').grid(row=2, column=2, sticky='w', padx=(12, 6), pady=3)
+        ttk.Entry(col_map, textvariable=self.reviewer_col_var, width=18).grid(row=2, column=3, sticky='w', padx=4, pady=3)
+        ttk.Label(col_map, text='Reviewer email col:').grid(row=3, column=0, sticky='w', padx=6, pady=3)
+        ttk.Entry(col_map, textvariable=self.reviewer_email_col_var, width=18).grid(row=3, column=1, sticky='w', padx=4, pady=3)
 
         # Mode & detection options
         mode_row = ttk.Frame(tab)
@@ -309,7 +470,7 @@ class DetectorGUI:
                      width=14, state='readonly').pack(side=tk.LEFT, padx=(4, 12))
         ttk.Checkbutton(mode_row, text='Show details', variable=self.show_details_var).pack(side=tk.LEFT, padx=(0, 12))
         ttk.Checkbutton(mode_row, text='Verbose', variable=self.verbose_var).pack(side=tk.LEFT, padx=(0, 12))
-        ttk.Checkbutton(mode_row, text='Skip Layer 3', variable=self.no_layer3_var).pack(side=tk.LEFT)
+        ttk.Checkbutton(mode_row, text='Skip API Continuation', variable=self.no_layer3_var).pack(side=tk.LEFT)
 
         # Perplexity model selector
         ppl_row = ttk.Frame(tab)
@@ -479,17 +640,53 @@ class DetectorGUI:
         btn_row.grid(row=3, column=0, columnspan=5, sticky='w', padx=6, pady=4)
         ttk.Button(btn_row, text='Print Summary', command=lambda: self._run_async(self._memory_summary)).pack(side=tk.LEFT, padx=(0, 6))
 
-        # Confirmations
+        # Confirmations — manual entry
         conf = ttk.LabelFrame(tab, text='Record Ground Truth Confirmation')
         conf.pack(fill=tk.X, pady=(0, 10))
         ttk.Label(conf, text='Task ID').grid(row=0, column=0, sticky='w', padx=6, pady=4)
         ttk.Entry(conf, textvariable=self.confirm_task_var, width=24).grid(row=0, column=1, sticky='w', padx=(0, 6), pady=4)
         ttk.Label(conf, text='Label').grid(row=0, column=2, sticky='w', padx=(12, 6), pady=4)
-        ttk.Combobox(conf, textvariable=self.confirm_label_var, values=['ai', 'human'],
+        ttk.Combobox(conf, textvariable=self.confirm_label_var, values=_GROUND_TRUTH_LABELS,
                      width=8, state='readonly').grid(row=0, column=3, sticky='w', pady=4)
         ttk.Label(conf, text='Reviewer').grid(row=0, column=4, sticky='w', padx=(12, 6), pady=4)
         ttk.Entry(conf, textvariable=self.confirm_reviewer_var, width=16).grid(row=0, column=5, sticky='w', padx=(0, 6), pady=4)
         ttk.Button(conf, text='Confirm', command=self._record_confirmation).grid(row=0, column=6, sticky='w', padx=6, pady=4)
+
+        # Quick-confirm from recent results
+        recent = ttk.LabelFrame(tab, text='Quick Confirm — Recent Scanned Samples')
+        recent.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(recent, text=(
+            'Select a recently scanned sample below and click Human / AI / Unsure to record the ground-truth label.'
+        ), style='DashboardSubtitle.TLabel').grid(row=0, column=0, columnspan=6, sticky='w', padx=6, pady=(4, 2))
+
+        # Listbox for recent results
+        self._recent_frame = ttk.Frame(recent)
+        self._recent_frame.grid(row=1, column=0, columnspan=6, sticky='nsew', padx=6, pady=4)
+        recent.columnconfigure(0, weight=1)
+
+        lb_scroll = ttk.Scrollbar(self._recent_frame, orient=tk.VERTICAL)
+        lb_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self._recent_listbox = tk.Listbox(
+            self._recent_frame, height=6, font=('Consolas', 9),
+            yscrollcommand=lb_scroll.set, selectmode=tk.SINGLE)
+        self._recent_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        lb_scroll.config(command=self._recent_listbox.yview)
+        self._recent_listbox.bind('<<ListboxSelect>>', self._on_recent_select)
+
+        self._recent_preview = tk.Text(self._recent_frame, height=3, wrap=tk.WORD,
+                                       font=('Consolas', 9), state='disabled')
+        self._recent_preview.pack(fill=tk.X, pady=(4, 0))
+
+        btn_row_confirm = ttk.Frame(recent)
+        btn_row_confirm.grid(row=2, column=0, columnspan=6, sticky='w', padx=6, pady=4)
+        ttk.Button(btn_row_confirm, text='\U0001f9d1  Human',
+                   command=lambda: self._quick_confirm('human')).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(btn_row_confirm, text='\U0001f916  AI',
+                   command=lambda: self._quick_confirm('ai')).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(btn_row_confirm, text='?  Unsure',
+                   command=lambda: self._quick_confirm('unsure')).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_row_confirm, text='Refresh List',
+                   command=self._refresh_recent_samples).pack(side=tk.LEFT, padx=(12, 0))
 
         # Attempter history
         hist = ttk.LabelFrame(tab, text='Attempter History')
@@ -958,13 +1155,23 @@ class DetectorGUI:
         Build keyword arguments for loader functions with consistent defaults
         for column names. This avoids duplication between CSV/XLSX branches.
         """
-        return {
+        kwargs = {
             'prompt_col': self.prompt_col_var.get().strip() or 'prompt',
             'id_col': self.id_col_var.get().strip() or 'task_id',
             'occ_col': self.occ_col_var.get().strip() or 'occupation',
             'attempter_col': self.attempter_col_var.get().strip() or 'attempter_name',
             'stage_col': self.stage_col_var.get().strip() or 'pipeline_stage_name',
         }
+        ae = self.attempter_email_col_var.get().strip()
+        if ae:
+            kwargs['attempter_email_col'] = ae
+        rv = self.reviewer_col_var.get().strip()
+        if rv:
+            kwargs['reviewer_col'] = rv
+        rev_email = self.reviewer_email_col_var.get().strip()
+        if rev_email:
+            kwargs['reviewer_email_col'] = rev_email
+        return kwargs
 
     def _analyze_file(self):
         path = self.file_var.get().strip()
@@ -1612,6 +1819,52 @@ class DetectorGUI:
 
     # ── Memory & Learning Actions ─────────────────────────────────────
 
+    def _refresh_recent_samples(self):
+        """Populate the recent-samples listbox from _last_results."""
+        self._recent_listbox.delete(0, tk.END)
+        for r in self._last_results:
+            tid = r.get('task_id', '?')
+            det = r.get('determination', '?')
+            preview = (self._last_text_map.get(tid, '') or '')[:60].replace('\n', ' ')
+            self._recent_listbox.insert(tk.END, f"[{det}] {tid}  — {preview}")
+
+    def _on_recent_select(self, event=None):
+        sel = self._recent_listbox.curselection()
+        if not sel:
+            return
+        idx = sel[0]
+        if idx >= len(self._last_results):
+            return
+        r = self._last_results[idx]
+        tid = r.get('task_id', '?')
+        text = (self._last_text_map.get(tid, '') or '')[:500]
+        self._recent_preview.configure(state='normal')
+        self._recent_preview.delete('1.0', tk.END)
+        self._recent_preview.insert('1.0', text or '(no text available)')
+        self._recent_preview.configure(state='disabled')
+
+    def _quick_confirm(self, label):
+        """Record a ground-truth confirmation for the currently selected recent sample."""
+        sel = self._recent_listbox.curselection()
+        if not sel:
+            messagebox.showinfo('Select sample', 'Select a sample from the list first.')
+            return
+        idx = sel[0]
+        if idx >= len(self._last_results):
+            return
+        reviewer = self.confirm_reviewer_var.get().strip()
+        if not reviewer:
+            messagebox.showinfo('Reviewer required', 'Enter a reviewer name above.')
+            return
+        if not self._ensure_memory():
+            return
+        r = self._last_results[idx]
+        task_id = r.get('task_id', '')
+        self._memory_store.record_confirmation(task_id, label, verified_by=reviewer)
+        self.status_var.set(f'Confirmed: {task_id} = {label} by {reviewer}')
+        # Visual feedback — remove confirmed item from list
+        self._recent_listbox.delete(idx)
+
     def _memory_summary(self):
         if not self._ensure_memory():
             return
@@ -1926,6 +2179,59 @@ class DetectorGUI:
             self.report_output.insert(tk.END, text),
             self.report_output.see(tk.END)))
 
+    # ── Tab 6: Quick Reference ─────────────────────────────────────────
+
+    def _build_quick_reference_tab(self, notebook):
+        tab = ttk.Frame(notebook, padding=8)
+        notebook.add(tab, text='  Quick Reference  ')
+
+        scrollbar = ttk.Scrollbar(tab, orient=tk.VERTICAL)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        ref_text = tk.Text(tab, wrap=tk.WORD, font=('Consolas', 9),
+                           state='disabled', yscrollcommand=scrollbar.set)
+        ref_text.pack(fill=tk.BOTH, expand=True)
+        scrollbar.config(command=ref_text.yview)
+
+        content = _QUICK_REFERENCE_TEXT
+        ref_text.configure(state='normal')
+        ref_text.insert('1.0', content)
+        ref_text.configure(state='disabled')
+
+    # ── Tab 7: Precheck ────────────────────────────────────────────────
+
+    def _build_precheck_tab(self, notebook):
+        tab = ttk.Frame(notebook, padding=8)
+        notebook.add(tab, text='  Precheck  ')
+
+        ttk.Label(tab, text=(
+            'Required and optional dependencies for the detection pipeline.\n'
+            '\u2705 = available   \u2757 = missing (optional, pipeline still works)   \u274c = missing (may break analysis)'
+        ), style='DashboardSubtitle.TLabel').pack(anchor='w', pady=(0, 8))
+
+        ttk.Button(tab, text='Refresh', command=lambda: self._refresh_precheck(tree)).pack(anchor='w', pady=(0, 6))
+
+        columns = ('Status', 'Component', 'Category', 'Notes')
+        tree = ttk.Treeview(tab, columns=columns, show='headings', height=20)
+        for col in columns:
+            tree.heading(col, text=col)
+        tree.column('Status', width=60, anchor='center')
+        tree.column('Component', width=220)
+        tree.column('Category', width=120)
+        tree.column('Notes', width=400)
+
+        tree_scroll = ttk.Scrollbar(tab, orient=tk.VERTICAL, command=tree.yview)
+        tree.configure(yscrollcommand=tree_scroll.set)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self._refresh_precheck(tree)
+
+    def _refresh_precheck(self, tree):
+        for item in tree.get_children():
+            tree.delete(item)
+        for status, name, category, notes in _check_dependencies():
+            tree.insert('', tk.END, values=(status, name, category, notes))
+
     def _collect_dna_hits(self, results):
         """Return DNA-GPT-positive results where continuation severity is RED/AMBER/YELLOW."""
         hits = []
@@ -2074,21 +2380,47 @@ class DetectorGUI:
         dashboard_path = spec.origin
         streamlit_exe = shutil.which('streamlit')
         if streamlit_exe:
-            cmd = [streamlit_exe, 'run', dashboard_path]
+            self._start_dashboard_process([streamlit_exe, 'run', dashboard_path])
+        elif importlib.util.find_spec('streamlit') is not None:
+            # streamlit installed but not on PATH; use python -m
+            self._start_dashboard_process(
+                [sys.executable, '-m', 'streamlit', 'run', dashboard_path]
+            )
         else:
-            try:
-                streamlit_spec = importlib.util.find_spec('streamlit')
-                streamlit_main_spec = importlib.util.find_spec('streamlit.__main__')
-                if streamlit_spec is None or streamlit_main_spec is None:
-                    raise ImportError('streamlit module or entry point not found')
-            except ImportError:
+            # Auto-install streamlit in a background thread to avoid blocking
+            self.status_var.set('Installing Streamlit…')
+            threading.Thread(
+                target=self._install_and_launch_dashboard,
+                args=(dashboard_path,),
+                daemon=True,
+            ).start()
+
+    def _install_and_launch_dashboard(self, dashboard_path):
+        """Install Streamlit and launch the dashboard (runs in a background thread)."""
+        try:
+            subprocess.check_call(
+                [sys.executable, '-m', 'pip', 'install', _STREAMLIT_MIN_VERSION],
+                stdout=subprocess.DEVNULL,
+            )
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            def _show_error():
+                self.status_var.set('Streamlit installation failed.')
                 messagebox.showerror(
                     'Streamlit Not Found',
-                    'streamlit is not installed in this environment.\n'
+                    'streamlit could not be installed automatically.\n'
                     'Install it with:\n    pip install "llm-detector[web]"',
                 )
-                return
+            self.root.after(0, _show_error)
+            return
+        streamlit_exe = shutil.which('streamlit')
+        if streamlit_exe:
+            cmd = [streamlit_exe, 'run', dashboard_path]
+        else:
             cmd = [sys.executable, '-m', 'streamlit', 'run', dashboard_path]
+        self.root.after(0, lambda: self._start_dashboard_process(cmd))
+
+    def _start_dashboard_process(self, cmd):
+        """Spawn the dashboard subprocess."""
         kwargs = dict(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

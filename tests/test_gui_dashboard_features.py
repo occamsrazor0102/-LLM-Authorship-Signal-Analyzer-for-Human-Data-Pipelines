@@ -583,6 +583,149 @@ def test_dashboard_sort_for_labeling_import():
 
 
 # ---------------------------------------------------------------------------
+# New feature tests
+# ---------------------------------------------------------------------------
+
+def test_gui_new_column_vars():
+    """GUI declares the new column mapping variables for email/reviewer."""
+    print("\n-- GUI: new column mapping vars --")
+    from llm_detector.compat import HAS_TK
+    if not HAS_TK:
+        print("  [SKIP] tkinter not available")
+        return
+
+    import tkinter as tk
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        from llm_detector.gui import DetectorGUI
+        gui = DetectorGUI(root)
+        check("attempter_email_col_var exists", hasattr(gui, 'attempter_email_col_var'))
+        check("reviewer_col_var exists", hasattr(gui, 'reviewer_col_var'))
+        check("reviewer_email_col_var exists", hasattr(gui, 'reviewer_email_col_var'))
+    finally:
+        root.destroy()
+
+
+def test_gui_quick_reference_tab():
+    """GUI builds the Quick Reference tab without error."""
+    print("\n-- GUI: Quick Reference tab --")
+    from llm_detector.compat import HAS_TK
+    if not HAS_TK:
+        print("  [SKIP] tkinter not available")
+        return
+
+    import tkinter as tk
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        from llm_detector.gui import DetectorGUI
+        gui = DetectorGUI(root)
+        # Verify tab exists by checking the notebook has 7 tabs
+        notebook = [w for w in root.winfo_children()
+                    if w.winfo_class() == 'TNotebook']
+        if notebook:
+            tabs = notebook[0].tabs()
+            check("7 tabs present (including Quick Reference and Precheck)",
+                  len(tabs) >= 7)
+        else:
+            check("notebook found", False)
+    finally:
+        root.destroy()
+
+
+def test_gui_precheck_tab():
+    """GUI Precheck tab populates with dependency data."""
+    print("\n-- GUI: Precheck dependencies --")
+    from llm_detector.gui import _check_dependencies
+    deps = _check_dependencies()
+    check("precheck returns list", isinstance(deps, list))
+    check("precheck has entries", len(deps) > 5)
+    # Each entry is (status, name, category, notes)
+    for status, name, cat, notes in deps:
+        check(f"  {name} has status icon",
+              status in ('\u2705', '\u2757', '\u274c'))
+        break  # just check first entry format
+
+
+def test_quick_reference_text():
+    """Quick reference text is non-empty and covers major channels."""
+    print("\n-- Quick reference text content --")
+    from llm_detector.gui import _QUICK_REFERENCE_TEXT
+    check("text is non-empty", len(_QUICK_REFERENCE_TEXT) > 200)
+    check("mentions prompt_structure", 'prompt_structure' in _QUICK_REFERENCE_TEXT)
+    check("mentions stylometry", 'stylometry' in _QUICK_REFERENCE_TEXT)
+    check("mentions continuation", 'continuation' in _QUICK_REFERENCE_TEXT)
+    check("mentions windowing", 'windowing' in _QUICK_REFERENCE_TEXT)
+    check("mentions Perplexity", 'Perplexity' in _QUICK_REFERENCE_TEXT)
+    check("mentions TOCSIN", 'TOCSIN' in _QUICK_REFERENCE_TEXT)
+
+
+def test_layer3_terminology_removed():
+    """Verify Layer 2/3 terminology is removed from UI-facing strings."""
+    print("\n-- Layer 2/3 terminology removal --")
+    import inspect
+    from llm_detector import gui as gui_mod
+    from llm_detector import dashboard as dash_mod
+    from llm_detector import cli as cli_mod
+    # Check source code for Layer 2 / Layer 3 user-facing text
+    gui_src = inspect.getsource(gui_mod)
+    dash_src = inspect.getsource(dash_mod)
+    cli_src = inspect.getsource(cli_mod)
+    # We allow it in internal comments but not in user-facing strings
+    # Just check that key UI text patterns are gone
+    check("GUI no 'Skip Layer 3' text",
+          'Skip Layer 3' not in gui_src)
+    check("Dashboard no 'Skip Layer 3' text",
+          'Skip Layer 3' not in dash_src)
+    check("CLI no 'Skip Layer 3' text",
+          'Skip Layer 3' not in cli_src)
+
+
+def test_ensure_streamlit_function():
+    """_ensure_streamlit function exists in CLI module."""
+    print("\n-- CLI: _ensure_streamlit --")
+    from llm_detector.cli import _ensure_streamlit
+    check("_ensure_streamlit callable", callable(_ensure_streamlit))
+
+
+def test_io_new_columns():
+    """load_csv and load_xlsx accept new column kwargs without error."""
+    print("\n-- io: new column kwargs --")
+    import inspect
+    from llm_detector.io import load_csv, load_xlsx
+    csv_sig = inspect.signature(load_csv)
+    xlsx_sig = inspect.signature(load_xlsx)
+    check("load_csv has attempter_email_col", 'attempter_email_col' in csv_sig.parameters)
+    check("load_csv has reviewer_col", 'reviewer_col' in csv_sig.parameters)
+    check("load_csv has reviewer_email_col", 'reviewer_email_col' in csv_sig.parameters)
+    check("load_xlsx has attempter_email_col", 'attempter_email_col' in xlsx_sig.parameters)
+    check("load_xlsx has reviewer_col", 'reviewer_col' in xlsx_sig.parameters)
+    check("load_xlsx has reviewer_email_col", 'reviewer_email_col' in xlsx_sig.parameters)
+
+
+def test_gui_quick_confirm_methods():
+    """GUI has quick-confirm methods for recent samples."""
+    print("\n-- GUI: quick-confirm methods --")
+    from llm_detector.compat import HAS_TK
+    if not HAS_TK:
+        print("  [SKIP] tkinter not available")
+        return
+
+    import tkinter as tk
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        from llm_detector.gui import DetectorGUI
+        gui = DetectorGUI(root)
+        check("_refresh_recent_samples method", callable(getattr(gui, '_refresh_recent_samples', None)))
+        check("_quick_confirm method", callable(getattr(gui, '_quick_confirm', None)))
+        check("_on_recent_select method", callable(getattr(gui, '_on_recent_select', None)))
+    finally:
+        root.destroy()
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

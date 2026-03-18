@@ -4,6 +4,7 @@ import sys
 import os
 import csv
 import shutil
+import subprocess
 import tempfile
 import types
 import importlib.util
@@ -275,7 +276,7 @@ def test_dashboard_prefers_cli_when_available(monkeypatch):
 
 
 def test_dashboard_reports_missing_streamlit(monkeypatch, capsys):
-    """main_dashboard should emit a helpful error when streamlit is absent."""
+    """main_dashboard should try to auto-install streamlit when absent."""
     from llm_detector import cli
     original_streamlit_modules = {k: v for k, v in sys.modules.items() if k.startswith('streamlit')}
     monkeypatch.setattr('llm_detector.cli.shutil.which', lambda _: None)
@@ -289,15 +290,21 @@ def test_dashboard_reports_missing_streamlit(monkeypatch, capsys):
 
     monkeypatch.setattr('importlib.util.find_spec', fake_find_spec)
 
+    # Make pip install fail so it prints the fallback error
+    def fake_check_call(*args, **kwargs):
+        raise subprocess.CalledProcessError(1, 'pip')
+
+    monkeypatch.setattr('llm_detector.cli.subprocess.check_call', fake_check_call)
+
     def fake_run(*args, **kwargs):
-        raise AssertionError("subprocess.run should not be called when streamlit is missing")
+        raise AssertionError("subprocess.run should not be called when auto-install fails")
 
     monkeypatch.setattr('llm_detector.cli.subprocess.run', fake_run)
     try:
         cli.main_dashboard()
         out = capsys.readouterr().out
-        check("Reports missing streamlit",
-              "ERROR: streamlit is not installed." in out)
+        check("Auto-install failed message",
+              "Auto-install failed" in out or "Install manually" in out)
     finally:
         for key in list(sys.modules):
             if key.startswith('streamlit'):

@@ -171,7 +171,7 @@ def run_perplexity(text, model_id=None):
         conf = 0.0
         reason = f"Normal perplexity ({ppl:.1f}): consistent with human text"
 
-    # Layer 2: DivEye + Volatility compound upgrade (Basani & Chen; Sun et al.)
+    # DivEye + Volatility compound upgrade (Basani & Chen; Sun et al.)
     diveye_signal = surprisal_variance < 2.0 and n_tokens >= 30
     volatility_signal = volatility_decay_ratio > 1.5 and n_tokens >= 40
 
