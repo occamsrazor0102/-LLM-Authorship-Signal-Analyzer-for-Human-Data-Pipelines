@@ -519,6 +519,9 @@ def _page_analysis():
                         occ_col=occ_col_input.strip() or "occupation",
                         attempter_col=attempter_col_input.strip() or "attempter_name",
                         stage_col=stage_col_input.strip() or "pipeline_stage_name",
+                        attempter_email_col=attempter_email_col_input.strip(),
+                        reviewer_col=reviewer_col_input.strip(),
+                        reviewer_email_col=reviewer_email_col_input.strip(),
                     )
                 else:
                     tasks = load_csv(
@@ -528,6 +531,9 @@ def _page_analysis():
                         occ_col=occ_col_input.strip() or "occupation",
                         attempter_col=attempter_col_input.strip() or "attempter_name",
                         stage_col=stage_col_input.strip() or "pipeline_stage_name",
+                        attempter_email_col=attempter_email_col_input.strip(),
+                        reviewer_col=reviewer_col_input.strip(),
+                        reviewer_email_col=reviewer_email_col_input.strip(),
                     )
             finally:
                 os.unlink(tmp_path)
@@ -1300,13 +1306,13 @@ def _page_memory():
         if not results:
             st.info("Run an analysis first to see recent samples here.")
         else:
+            import html as _html
             qc_reviewer = st.text_input("Reviewer name", key="qc_reviewer")
             for idx, r in enumerate(results):
                 tid = r.get("task_id", f"#{idx+1}")
                 det = r.get("determination", "?")
                 emoji = _DET_EMOJI.get(det, "")
                 preview = (text_map.get(tid, "") or "")[:120].replace("\n", " ")
-                import html as _html
                 safe_tid = _html.escape(str(tid))
                 safe_det = _html.escape(str(det))
                 safe_preview = _html.escape(preview)
@@ -1316,6 +1322,7 @@ def _page_memory():
                     f"<small style='color:#6b7280'>{safe_preview}{ellipsis}</small>",
                     unsafe_allow_html=True,
                 )
+                bc1, bc2, bc3 = st.columns(3)
                 with bc1:
                     if st.button("\U0001f9d1 Human", key=f"qc_human_{idx}"):
                         mem = st.session_state.get("memory_store")

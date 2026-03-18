@@ -12,6 +12,10 @@ from collections import Counter
 from llm_detector.compat import HAS_TK
 from llm_detector.pipeline import analyze_prompt
 from llm_detector.io import load_xlsx, load_csv
+from llm_detector._constants import (
+    GROUND_TRUTH_LABELS as _GROUND_TRUTH_LABELS,
+    STREAMLIT_MIN_VERSION as _STREAMLIT_MIN_VERSION,
+)
 
 if HAS_TK:
     import tkinter as tk
@@ -28,12 +32,6 @@ _DET_COLORS = {
 }
 
 _CHANNELS = ['prompt_structure', 'stylometry', 'continuation', 'windowing']
-
-# Ground truth label options used across GUI and dashboard.
-_GROUND_TRUTH_LABELS = ['ai', 'human', 'unsure']
-
-# Minimum streamlit version for the web dashboard.
-_STREAMLIT_MIN_VERSION = 'streamlit>=1.20'
 
 # Maximum number of preamble patterns printed in verbose output to avoid overflow.
 _MAX_PREAMBLE_PATTERNS = 20
@@ -2382,29 +2380,44 @@ class DetectorGUI:
         dashboard_path = spec.origin
         streamlit_exe = shutil.which('streamlit')
         if streamlit_exe:
+            self._start_dashboard_process([streamlit_exe, 'run', dashboard_path])
+        elif importlib.util.find_spec('streamlit') is not None:
+            # streamlit installed but not on PATH; use python -m
+            self._start_dashboard_process(
+                [sys.executable, '-m', 'streamlit', 'run', dashboard_path]
+            )
+        else:
+            # Auto-install streamlit in a background thread to avoid blocking
+            self.status_var.set('Installing Streamlit…')
+            threading.Thread(
+                target=self._install_and_launch_dashboard,
+                args=(dashboard_path,),
+                daemon=True,
+            ).start()
+
+    def _install_and_launch_dashboard(self, dashboard_path):
+        """Install Streamlit and launch the dashboard (runs in a background thread)."""
+        try:
+            subprocess.check_call(
+                [sys.executable, '-m', 'pip', 'install', _STREAMLIT_MIN_VERSION],
+                stdout=subprocess.DEVNULL,
+            )
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            self.root.after(0, lambda: messagebox.showerror(
+                'Streamlit Not Found',
+                'streamlit could not be installed automatically.\n'
+                'Install it with:\n    pip install "llm-detector[web]"',
+            ))
+            return
+        streamlit_exe = shutil.which('streamlit')
+        if streamlit_exe:
             cmd = [streamlit_exe, 'run', dashboard_path]
         else:
-            # Auto-install streamlit if missing
-            st_spec = importlib.util.find_spec('streamlit')
-            if st_spec is None:
-                self.status_var.set('Installing Streamlit…')
-                try:
-                    subprocess.check_call(
-                        [sys.executable, '-m', 'pip', 'install', _STREAMLIT_MIN_VERSION],
-                        stdout=subprocess.DEVNULL,
-                    )
-                except (subprocess.CalledProcessError, FileNotFoundError):
-                    messagebox.showerror(
-                        'Streamlit Not Found',
-                        'streamlit could not be installed automatically.\n'
-                        'Install it with:\n    pip install "llm-detector[web]"',
-                    )
-                    return
-            streamlit_exe = shutil.which('streamlit')
-            if streamlit_exe:
-                cmd = [streamlit_exe, 'run', dashboard_path]
-            else:
-                cmd = [sys.executable, '-m', 'streamlit', 'run', dashboard_path]
+            cmd = [sys.executable, '-m', 'streamlit', 'run', dashboard_path]
+        self.root.after(0, lambda: self._start_dashboard_process(cmd))
+
+    def _start_dashboard_process(self, cmd):
+        """Spawn the dashboard subprocess."""
         kwargs = dict(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

@@ -24,9 +24,7 @@ from llm_detector.similarity import (
     apply_similarity_adjustments, save_similarity_store, cross_batch_similarity,
 )
 from llm_detector.io import load_xlsx, load_csv, load_pdf
-
-# Minimum streamlit version for the web dashboard.
-_STREAMLIT_MIN_VERSION = 'streamlit>=1.20'
+from llm_detector._constants import STREAMLIT_MIN_VERSION as _STREAMLIT_MIN_VERSION
 
 
 def _is_frozen():
