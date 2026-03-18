@@ -1306,12 +1306,16 @@ def _page_memory():
                 det = r.get("determination", "?")
                 emoji = _DET_EMOJI.get(det, "")
                 preview = (text_map.get(tid, "") or "")[:120].replace("\n", " ")
+                import html as _html
+                safe_tid = _html.escape(str(tid))
+                safe_det = _html.escape(str(det))
+                safe_preview = _html.escape(preview)
+                ellipsis = "…" if len(text_map.get(tid, "") or "") > 120 else ""
                 st.markdown(
-                    f"**{emoji} [{det}] {tid}**  \n"
-                    f"<small style='color:#6b7280'>{preview}{'…' if len(text_map.get(tid, '') or '') > 120 else ''}</small>",
+                    f"**{emoji} [{safe_det}] {safe_tid}**  \n"
+                    f"<small style='color:#6b7280'>{safe_preview}{ellipsis}</small>",
                     unsafe_allow_html=True,
                 )
-                bc1, bc2, bc3 = st.columns(3)
                 with bc1:
                     if st.button("\U0001f9d1 Human", key=f"qc_human_{idx}"):
                         mem = st.session_state.get("memory_store")
