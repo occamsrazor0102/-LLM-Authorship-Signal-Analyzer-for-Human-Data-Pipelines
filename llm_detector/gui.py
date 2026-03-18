@@ -178,6 +178,22 @@ def _check_dependencies():
 
     return checks
 
+
+# Map display names from _check_dependencies() to pip install specifiers.
+_PIP_INSTALL_MAP = {
+    'spacy': 'llm-detector[nlp]',
+    'ftfy': 'llm-detector[nlp]',
+    'sentence-transformers': 'llm-detector[nlp]',
+    'scikit-learn': 'llm-detector[nlp]',
+    'transformers (HuggingFace)': 'llm-detector[perplexity]',
+    'PyTorch': 'llm-detector[perplexity]',
+    'anthropic SDK': 'llm-detector[api]',
+    'openai SDK': 'llm-detector[api]',
+    'pypdf': 'llm-detector[pdf]',
+    'streamlit': 'llm-detector[web]',
+    'PyInstaller': 'pyinstaller>=6.0',
+}
+
 # Descriptions shown when hovering each notebook tab header.
 _TAB_TOOLTIPS = [
     None,  # Analysis tab — self-explanatory
@@ -2208,10 +2224,16 @@ class DetectorGUI:
             '\u2705 = available   \u2757 = missing (optional, pipeline still works)   \u274c = missing (may break analysis)'
         ), style='DashboardSubtitle.TLabel').pack(anchor='w', pady=(0, 8))
 
-        ttk.Button(tab, text='Refresh', command=lambda: self._refresh_precheck(tree)).pack(anchor='w', pady=(0, 6))
+        btn_frame = ttk.Frame(tab)
+        btn_frame.pack(anchor='w', pady=(0, 6))
+        ttk.Button(btn_frame, text='Refresh',
+                   command=lambda: self._refresh_precheck(tree)).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(btn_frame, text='Install Selected',
+                   command=lambda: self._install_selected_deps(tree)).pack(side=tk.LEFT)
 
         columns = ('Status', 'Component', 'Category', 'Notes')
-        tree = ttk.Treeview(tab, columns=columns, show='headings', height=20)
+        tree = ttk.Treeview(tab, columns=columns, show='headings', height=20,
+                            selectmode='extended')
         for col in columns:
             tree.heading(col, text=col)
         tree.column('Status', width=60, anchor='center')
@@ -2231,6 +2253,56 @@ class DetectorGUI:
             tree.delete(item)
         for status, name, category, notes in _check_dependencies():
             tree.insert('', tk.END, values=(status, name, category, notes))
+
+    def _install_selected_deps(self, tree):
+        """Install selected missing optional dependencies via pip."""
+        selected = tree.selection()
+        if not selected:
+            messagebox.showinfo('Install', 'Select one or more missing (\u2757) dependencies to install.')
+            return
+
+        packages = []
+        for item_id in selected:
+            values = tree.item(item_id, 'values')
+            status, name = values[0], values[1]
+            if status != '\u2757':
+                continue
+            spec = _PIP_INSTALL_MAP.get(name)
+            if spec:
+                packages.append(spec)
+
+        if not packages:
+            messagebox.showinfo('Install', 'No installable missing dependencies selected.\n'
+                                'Select rows marked with \u2757 to install them.')
+            return
+
+        # Deduplicate (e.g. multiple nlp deps map to same extra)
+        packages = sorted(set(packages))
+        self.status_var.set(f'Installing {", ".join(packages)}\u2026')
+
+        def _do_install():
+            try:
+                subprocess.check_call(
+                    [sys.executable, '-m', 'pip', 'install'] + packages,
+                    stdout=subprocess.DEVNULL,
+                )
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                self.root.after(0, lambda: (
+                    self.status_var.set('Installation failed.'),
+                    messagebox.showerror(
+                        'Install Failed',
+                        'pip install failed. Try manually:\n    pip install '
+                        + ' '.join(packages),
+                    ),
+                ))
+                return
+            self.root.after(0, lambda: (
+                self.status_var.set('Installation complete.'),
+                self._refresh_precheck(tree),
+                messagebox.showinfo('Install', 'Dependencies installed successfully.'),
+            ))
+
+        threading.Thread(target=_do_install, daemon=True).start()
 
     def _collect_dna_hits(self, results):
         """Return DNA-GPT-positive results where continuation severity is RED/AMBER/YELLOW."""

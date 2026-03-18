@@ -8,6 +8,7 @@ Launch with:
 
 import os
 import io
+import subprocess
 import sys
 import json
 import html as _html
@@ -2048,6 +2049,21 @@ def _check_dependencies_st():
     return checks
 
 
+_PIP_INSTALL_MAP_ST = {
+    'spacy': 'llm-detector[nlp]',
+    'ftfy': 'llm-detector[nlp]',
+    'sentence-transformers': 'llm-detector[nlp]',
+    'scikit-learn': 'llm-detector[nlp]',
+    'transformers (HuggingFace)': 'llm-detector[perplexity]',
+    'PyTorch': 'llm-detector[perplexity]',
+    'anthropic SDK': 'llm-detector[api]',
+    'openai SDK': 'llm-detector[api]',
+    'pypdf': 'llm-detector[pdf]',
+    'streamlit': 'llm-detector[web]',
+    'PyInstaller': 'pyinstaller>=6.0',
+}
+
+
 def _page_precheck():
     st.markdown("### \u2705 Precheck")
     st.caption(
@@ -2069,6 +2085,28 @@ def _page_precheck():
         st.metric("Optional Missing", warn_count)
     with c3:
         st.metric("Required Missing", err_count)
+
+    # Install missing optional dependencies
+    missing = [r[1] for r in rows if r[0] == "\u2757" and r[1] in _PIP_INSTALL_MAP_ST]
+    if missing:
+        st.markdown("---")
+        st.markdown("**Install missing optional dependencies**")
+        selected = st.multiselect("Select dependencies to install:", missing, default=[])
+        if st.button("Install Selected", disabled=not selected):
+            packages = sorted({_PIP_INSTALL_MAP_ST[name] for name in selected})
+            with st.spinner(f"Installing {', '.join(packages)}\u2026"):
+                try:
+                    subprocess.check_call(
+                        [sys.executable, '-m', 'pip', 'install'] + packages,
+                        stdout=subprocess.DEVNULL,
+                    )
+                    st.success("Installation complete. Refresh the page to update the precheck.")
+                    st.rerun()
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    st.error(
+                        "Installation failed. Try manually:\n\n"
+                        f"```\npip install {' '.join(packages)}\n```"
+                    )
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
