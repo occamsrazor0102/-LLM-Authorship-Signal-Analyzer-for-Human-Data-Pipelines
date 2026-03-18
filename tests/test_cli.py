@@ -398,7 +398,8 @@ if __name__ == '__main__':
     test_io_load_csv_numeric_positional()
     test_disable_channel_names_match_fusion()
     test_version_consistency()
-    test_dashboard_path_validation()
+    # test_dashboard_path_validation requires pytest fixtures and cannot be
+    # invoked directly; run it via: pytest tests/test_cli.py
 
     print(f"\n{'=' * 70}")
     print(f"RESULTS: {PASSED} passed, {FAILED} failed")
