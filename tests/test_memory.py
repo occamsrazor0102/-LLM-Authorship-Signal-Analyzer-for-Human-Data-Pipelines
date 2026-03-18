@@ -499,6 +499,17 @@ def test_load_attempter_profiles_non_dict_json():
         shutil.rmtree(tmpdir)
 
 
+def test_minhash_imported_from_similarity():
+    """Verify memory.py uses consolidated MinHash from similarity.py."""
+    print("\n-- MEMORY: MinHash imported from similarity --")
+    from llm_detector import memory
+    from llm_detector import similarity
+    check("_shingle_fingerprint is from similarity",
+          memory._shingle_fingerprint is similarity._shingle_fingerprint)
+    check("_minhash_similarity is from similarity",
+          memory._minhash_similarity is similarity._minhash_similarity)
+
+
 if __name__ == '__main__':
     print("=" * 70)
     print("  BEET MEMORY STORE TESTS")
@@ -522,6 +533,7 @@ if __name__ == '__main__':
     test_shadow_model_attempter_tracking()
     test_load_helpers()
     test_load_attempter_profiles_non_dict_json()
+    test_minhash_imported_from_similarity()
 
     print(f"\n{'=' * 70}")
     print(f"  RESULTS: {PASSED} passed, {FAILED} failed")

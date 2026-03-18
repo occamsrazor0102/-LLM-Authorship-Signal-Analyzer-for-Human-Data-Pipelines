@@ -360,6 +360,30 @@ def test_version_consistency():
           f"got {llm_detector.__version__}, expected {expected_version}")
 
 
+def test_dashboard_path_validation(monkeypatch, capsys):
+    """main_dashboard rejects dashboard_path outside llm_detector package."""
+    print("\n-- DASHBOARD: path validation --")
+    from llm_detector import cli
+    from types import SimpleNamespace
+
+    # Mock find_spec to return a spec with origin outside the package
+    fake_spec = SimpleNamespace(origin='/tmp/evil/dashboard.py')
+    monkeypatch.setattr('importlib.util.find_spec', lambda name, *a, **kw: fake_spec)
+
+    captured = {}
+
+    def fake_run(cmd, check=False):
+        captured['ran'] = True
+
+    monkeypatch.setattr('llm_detector.cli.subprocess.run', fake_run)
+    cli.main_dashboard()
+    out = capsys.readouterr().out
+    check("subprocess not invoked for outside path", 'ran' not in captured,
+          f"subprocess was called: {captured}")
+    check("error message about outside path", 'outside' in out.lower(),
+          f"got: {out!r}")
+
+
 if __name__ == '__main__':
     print("=" * 70)
     print("CLI Tests")
@@ -374,6 +398,7 @@ if __name__ == '__main__':
     test_io_load_csv_numeric_positional()
     test_disable_channel_names_match_fusion()
     test_version_consistency()
+    test_dashboard_path_validation()
 
     print(f"\n{'=' * 70}")
     print(f"RESULTS: {PASSED} passed, {FAILED} failed")

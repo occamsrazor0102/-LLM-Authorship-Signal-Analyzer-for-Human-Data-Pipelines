@@ -159,6 +159,41 @@ def test_zero_vectors_safe_similarity():
                 check("Determination remains None", result['determination'] is None)
 
 
+def test_similarities_are_native_float():
+    """Verify that similarities list contains native Python floats (not numpy scalars).
+
+    The statistics module on Python 3.9/3.10 calls _exact_ratio which accesses
+    .numerator — an attribute absent on numpy.float64.  Wrapping _cosine output
+    in float() prevents this.
+    """
+    print("\n-- SEMANTIC FLOW: similarities are native Python float --")
+    import statistics as _stat
+    from llm_detector.analyzers.semantic_flow import run_semantic_flow
+
+    mock_embedder = MagicMock()
+    base = np.random.RandomState(42).randn(384)
+    base = base / np.linalg.norm(base)
+
+    def mock_encode(sentences):
+        rng = np.random.RandomState(0)
+        return np.array([base + rng.randn(384) * 0.05 for _ in sentences])
+
+    mock_embedder.encode = mock_encode
+
+    sentences = ['A.', 'B.', 'C.', 'D.', 'E.']
+
+    with patch('llm_detector.analyzers.semantic_flow.HAS_SEMANTIC', True):
+        with patch('llm_detector.analyzers.semantic_flow.get_sentences', return_value=sentences):
+            with patch('llm_detector.analyzers.semantic_flow.get_semantic_models', return_value=(mock_embedder, None, None)):
+                result = run_semantic_flow(' '.join(sentences))
+                for s in result['flow_similarities']:
+                    check("similarity is native float", type(s) is float,
+                          f"got {type(s).__name__}")
+                # Verify statistics.mean works without AttributeError
+                _stat.mean(result['flow_similarities'])
+                check("statistics.mean works on similarities", True)
+
+
 if __name__ == '__main__':
     print("=" * 70)
     print("Semantic Flow Analyzer Tests")
@@ -170,6 +205,7 @@ if __name__ == '__main__':
     test_varied_text_high_variance()
     test_result_dict_keys()
     test_zero_vectors_safe_similarity()
+    test_similarities_are_native_float()
 
     print(f"\n{'=' * 70}")
     print(f"RESULTS: {PASSED} passed, {FAILED} failed")
