@@ -22,6 +22,21 @@ if HAS_TK:
     from tkinter import ttk, filedialog, messagebox
     from tkinter import font as tkfont
 
+def _real_python():
+    """Return the real Python interpreter, even inside a frozen PyInstaller bundle."""
+    if getattr(sys, 'frozen', False):
+        # Frozen exe — find the system Python instead
+        for name in ('python3', 'python'):
+            path = shutil.which(name)
+            if path:
+                return path
+        # Last resort: common locations
+        for candidate in ('/usr/bin/python3', '/usr/local/bin/python3'):
+            if os.path.isfile(candidate):
+                return candidate
+    return sys.executable
+
+
 _DET_COLORS = {
     'RED': '#d32f2f',
     'AMBER': '#f57c00',
@@ -2283,7 +2298,7 @@ class DetectorGUI:
         def _do_install():
             try:
                 subprocess.check_call(
-                    [sys.executable, '-m', 'pip', 'install'] + packages,
+                    [_real_python(), '-m', 'pip', 'install'] + packages,
                     stdout=subprocess.DEVNULL,
                 )
             except (subprocess.CalledProcessError, FileNotFoundError):
@@ -2456,7 +2471,7 @@ class DetectorGUI:
         elif importlib.util.find_spec('streamlit') is not None:
             # streamlit installed but not on PATH; use python -m
             self._start_dashboard_process(
-                [sys.executable, '-m', 'streamlit', 'run', dashboard_path]
+                [_real_python(), '-m', 'streamlit', 'run', dashboard_path]
             )
         else:
             # Auto-install streamlit in a background thread to avoid blocking
@@ -2471,7 +2486,7 @@ class DetectorGUI:
         """Install Streamlit and launch the dashboard (runs in a background thread)."""
         try:
             subprocess.check_call(
-                [sys.executable, '-m', 'pip', 'install', _STREAMLIT_MIN_VERSION],
+                [_real_python(), '-m', 'pip', 'install', _STREAMLIT_MIN_VERSION],
                 stdout=subprocess.DEVNULL,
             )
         except (subprocess.CalledProcessError, FileNotFoundError):
@@ -2488,7 +2503,7 @@ class DetectorGUI:
         if streamlit_exe:
             cmd = [streamlit_exe, 'run', dashboard_path]
         else:
-            cmd = [sys.executable, '-m', 'streamlit', 'run', dashboard_path]
+            cmd = [_real_python(), '-m', 'streamlit', 'run', dashboard_path]
         self.root.after(0, lambda: self._start_dashboard_process(cmd))
 
     def _start_dashboard_process(self, cmd):
@@ -2510,7 +2525,7 @@ class DetectorGUI:
 
     def _launch_desktop_gui(self):
         """Spawn another instance of the desktop GUI."""
-        python = sys.executable
+        python = _real_python()
         # Quiet stdout to avoid duplicate console chatter; keep stderr for debugging startup failures.
         kwargs = {'stdout': subprocess.DEVNULL, 'stderr': sys.stderr}
         if sys.platform == 'win32':
