@@ -2,12 +2,15 @@
 
 import os
 import json
+import logging
 import threading
 import subprocess
 import importlib.util
 import shutil
 import sys
 from collections import Counter
+
+logger = logging.getLogger(__name__)
 
 from llm_detector.compat import HAS_TK
 from llm_detector.pipeline import analyze_prompt
@@ -1058,7 +1061,8 @@ class DetectorGUI:
         counts = Counter(determinations)
         top_det = 'N/A'
         if counts:
-            top_det = counts.most_common(1)[0][0]
+            mc = counts.most_common(1)
+            top_det = mc[0][0] if mc else 'N/A'
         avg_conf = 0.0
         if n_results > 0:
             avg_conf = sum(float(r.get('confidence') or 0) for r in results) / n_results
@@ -1407,8 +1411,8 @@ class DetectorGUI:
                     for p in profiles[:5]:
                         self._append(f"  {p['attempter'][:20]:20s} submissions={p['n_submissions']} "
                                      f"flag_rate={p['flag_rate']:.0f}%\n")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Attempter profiling display failed: %s", exc)
 
             try:
                 import io, sys
@@ -1422,8 +1426,8 @@ class DetectorGUI:
                 summary_text = buf.getvalue()
                 if summary_text.strip():
                     self._append(f"\n{summary_text}", 'DIM')
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Channel pattern summary display failed: %s", exc)
 
         # Financial impact
         if len(results) >= 10:
@@ -1432,8 +1436,8 @@ class DetectorGUI:
                 impact = financial_impact(results, cost_per_prompt=self._get_cost())
                 self._append(f"\nFinancial impact: waste={impact['waste_estimate']:.0f} "
                              f"projected_annual={impact.get('projected_annual_waste', 0):.0f}\n", 'HEADER')
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Financial impact display failed: %s", exc)
 
         # Collect baselines
         collect_path = self.collect_var.get().strip()
@@ -1472,8 +1476,8 @@ class DetectorGUI:
                 if cross_flags:
                     self._append(f"  Cross-batch similarity: {len(cross_flags)} matches\n", 'DIM')
                 save_similarity_store(results, text_map, sim_store)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Similarity analysis failed: %s", exc)
 
     def _save_results_csv(self):
         if not self._last_results:
@@ -2390,8 +2394,8 @@ class DetectorGUI:
                             f"n={p['n_submissions']:>3} "
                             f"flag={p['flag_rate']:.0f}% "
                             f"conf={p.get('mean_confidence', 0):.2f}\n")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Report attempter profiling failed: %s", exc)
 
         # Channel pattern summary
         flagged = [r for r in results
@@ -2446,8 +2450,8 @@ class DetectorGUI:
                     f"  Waste estimate:        ${impact['waste_estimate']:,.0f}\n")
                 self._report_append(
                     f"  Projected annual:      ${impact.get('projected_annual_waste', 0):,.0f}\n")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Report financial impact failed: %s", exc)
 
     def _export_baselines(self):
         if not self._last_results:
@@ -2475,7 +2479,14 @@ class DetectorGUI:
                 'Ensure the package is properly installed.',
             )
             return
-        dashboard_path = spec.origin
+        dashboard_path = os.path.realpath(spec.origin)
+        pkg_dir = os.path.realpath(os.path.dirname(__file__))
+        if not dashboard_path.startswith(pkg_dir + os.sep):
+            messagebox.showerror(
+                'Security Error',
+                'Dashboard path is outside the llm_detector package.',
+            )
+            return
         streamlit_exe = shutil.which('streamlit')
         if streamlit_exe:
             self._start_dashboard_process([streamlit_exe, 'run', dashboard_path])

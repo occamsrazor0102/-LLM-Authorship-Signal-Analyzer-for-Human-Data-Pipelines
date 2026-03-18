@@ -244,7 +244,8 @@ def _page_analysis():
     if n_results > 0:
         dets = [r.get("determination", "") for r in results]
         counts = Counter(dets)
-        top_det = counts.most_common(1)[0][0] if counts else "N/A"
+        mc = counts.most_common(1) if counts else []
+        top_det = mc[0][0] if mc else "N/A"
         avg_conf = sum(float(r.get("confidence", 0)) for r in results) / n_results
     else:
         top_det = "N/A"

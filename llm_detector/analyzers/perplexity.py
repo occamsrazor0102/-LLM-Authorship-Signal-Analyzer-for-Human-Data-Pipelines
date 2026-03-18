@@ -8,11 +8,14 @@ Surprisal diversity features based on:
 - "When AI Settles Down" (volatility decay across text halves)
 """
 
+import logging
 import statistics as _statistics
 import zlib
 
 from llm_detector.compat import HAS_PERPLEXITY, get_perplexity_model, HAS_BINOCULARS, get_binoculars_model
 from llm_detector.text_utils import get_sentences
+
+logger = logging.getLogger(__name__)
 
 if HAS_PERPLEXITY:
     import torch as _torch
@@ -81,8 +84,8 @@ def run_perplexity(text, model_id=None):
                     binoculars_det = 'AMBER'
                 elif binoculars_score < 0.85:
                     binoculars_det = 'YELLOW'
-        except Exception:
-            pass  # Binoculars is supplementary; don't fail the analyzer
+        except Exception as exc:
+            logger.debug("Binoculars scoring failed (supplementary): %s", exc)
 
     # ── FEAT 7: Compression-perplexity divergence ──
     text_bytes = text.encode('utf-8')
@@ -118,8 +121,8 @@ def run_perplexity(text, model_id=None):
             first_half_var = float(losses[:mid].var()) if mid > 1 else surprisal_variance
             second_half_var = float(losses[mid:].var()) if (n_tokens - mid) > 1 else surprisal_variance
             volatility_decay_ratio = (first_half_var / second_half_var) if second_half_var > 1e-6 else 1.0
-    except Exception:
-        pass  # Variance features are supplementary
+    except Exception as exc:
+        logger.debug("Surprisal variance features failed (supplementary): %s", exc)
 
     # ── Perplexity burstiness: per-sentence PPL variance ──
     # Humans write in bursts — complex sentences followed by simple ones.
@@ -155,8 +158,8 @@ def run_perplexity(text, model_id=None):
                 if len(sentence_mean_losses) >= 3:
                     ppl_burstiness = _statistics.variance(sentence_mean_losses)
                     sentence_ppl_count = len(sentence_mean_losses)
-        except Exception:
-            pass  # Burstiness is supplementary; don't fail the analyzer
+        except Exception as exc:
+            logger.debug("Perplexity burstiness failed (supplementary): %s", exc)
 
     if ppl <= 15.0:
         det = 'AMBER'

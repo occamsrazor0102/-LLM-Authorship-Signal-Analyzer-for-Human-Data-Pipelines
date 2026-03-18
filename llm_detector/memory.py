@@ -12,41 +12,20 @@ Usage:
 """
 
 import os
+import csv
 import json
-import struct
-import hashlib
+import logging
 import statistics
 from datetime import datetime
 from collections import defaultdict, Counter
 from pathlib import Path
 
 from llm_detector.baselines import _BASELINE_FIELDS
-from llm_detector.similarity import _word_shingles, _STRUCT_FEATURES
+from llm_detector.similarity import (
+    _word_shingles, _STRUCT_FEATURES, _shingle_fingerprint, _minhash_similarity,
+)
 
-
-# ── MinHash utilities (local copies to avoid circular imports) ────────────
-
-def _shingle_fingerprint(shingle_set, n_hashes=128):
-    """MinHash fingerprint from shingle set."""
-    if not shingle_set:
-        return [0] * n_hashes
-    minhashes = [float('inf')] * n_hashes
-    _pack = struct.pack
-    _md5 = hashlib.md5
-    for shingle in shingle_set:
-        shingle_bytes = ' '.join(shingle).encode('utf-8')
-        for i in range(n_hashes):
-            h = int.from_bytes(_md5(_pack('>I', i) + shingle_bytes).digest()[:4], 'big')
-            if h < minhashes[i]:
-                minhashes[i] = h
-    return minhashes
-
-
-def _minhash_similarity(fp_a, fp_b):
-    """Estimate Jaccard similarity from MinHash fingerprints."""
-    if not fp_a or not fp_b or len(fp_a) != len(fp_b):
-        return 0.0
-    return sum(1 for a, b in zip(fp_a, fp_b) if a == b) / len(fp_a)
+logger = logging.getLogger(__name__)
 
 
 class MemoryStore:
@@ -186,8 +165,8 @@ class MemoryStore:
                     raw_embeds = embedder.encode(texts)
                     for tid, emb in zip(tids, raw_embeds):
                         embeddings[tid] = [round(float(v), 5) for v in emb[:64]]
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Semantic embedding for fingerprints failed: %s", exc)
 
         with open(self.fingerprints_path, 'a') as f:
             for r in results:
@@ -292,7 +271,9 @@ class MemoryStore:
                         if info.get('severity') in ('RED', 'AMBER'):
                             channel_counts[ch] += 1
             if channel_counts:
-                p['primary_detection_channel'] = channel_counts.most_common(1)[0][0]
+                mc = channel_counts.most_common(1)
+                if mc:
+                    p['primary_detection_channel'] = mc[0][0]
 
             # Track shadow model disagreements (sophisticated cheater pattern)
             model_flags = sum(1 for r in submissions
@@ -330,7 +311,7 @@ class MemoryStore:
                         try:
                             p = json.loads(line)
                             profiles[p['attempter']] = p
-                        except (json.JSONDecodeError, KeyError):
+                        except (json.JSONDecodeError, KeyError, TypeError):
                             continue
         return profiles
 
@@ -548,7 +529,8 @@ class MemoryStore:
                     'n_samples': pkg.get('n_samples', 0),
                     'algorithm': pkg.get('algorithm', 'unknown'),
                 }
-            except Exception:
+            except Exception as exc:
+                logger.debug("Failed to load fusion model info: %s", exc)
                 result['model_info'] = None
         else:
             result['model_info'] = None

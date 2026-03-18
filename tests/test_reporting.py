@@ -126,6 +126,20 @@ def test_financial_impact_empty():
     check("no exception raised", True)
 
 
+def test_profile_no_flagged_channels():
+    """profile_attempters handles an attempter with no flagged channels."""
+    print("\n-- PROFILE: no flagged channels --")
+    results = [
+        _make_result('alice', 'GREEN'),
+        _make_result('alice', 'GREEN'),
+    ]
+    profiles = profile_attempters(results, min_submissions=1)
+    check("one profile returned", len(profiles) == 1, f"got {len(profiles)}")
+    check("primary_channel is None",
+    check("primary_detection_channel is None",
+          profiles[0].get('primary_detection_channel') is None,
+          f"got {profiles[0].get('primary_detection_channel')}")
+
 if __name__ == '__main__':
     print("=" * 70)
     print("  REPORTING MODULE TESTS")
@@ -137,6 +151,7 @@ if __name__ == '__main__':
     test_channel_pattern_summary()
     test_financial_impact_arithmetic()
     test_financial_impact_empty()
+    test_profile_no_flagged_channels()
 
     print(f"\n{'=' * 70}")
     print(f"  RESULTS: {PASSED} passed, {FAILED} failed")
