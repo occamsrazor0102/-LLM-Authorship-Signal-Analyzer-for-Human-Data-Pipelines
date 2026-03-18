@@ -127,8 +127,9 @@ def _check_dependencies():
 
     def _probe(module_name, display, category, required=True, note_ok='', note_miss=''):
         try:
-            importlib.util.find_spec(module_name)
             ok = importlib.util.find_spec(module_name) is not None
+        except (ModuleNotFoundError, ValueError):
+            ok = False
         except (ModuleNotFoundError, ValueError):
             ok = False
         if ok:
