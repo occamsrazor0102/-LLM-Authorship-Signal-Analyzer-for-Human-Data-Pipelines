@@ -374,6 +374,7 @@ class DetectorGUI:
         self.confirm_task_var = tk.StringVar()
         self.confirm_label_var = tk.StringVar(value='ai')
         self.confirm_reviewer_var = tk.StringVar()
+        self.quick_reviewer_var = tk.StringVar()
         self.attempter_history_var = tk.StringVar()
         self.run_dir_var = tk.StringVar()
         self.cal_report_jsonl_var = tk.StringVar()
@@ -710,6 +711,8 @@ class DetectorGUI:
 
         btn_row_confirm = ttk.Frame(recent)
         btn_row_confirm.grid(row=2, column=0, columnspan=6, sticky='w', padx=6, pady=4)
+        ttk.Label(btn_row_confirm, text='Reviewer').pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Entry(btn_row_confirm, textvariable=self.quick_reviewer_var, width=16).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(btn_row_confirm, text='\U0001f9d1  Human',
                    command=lambda: self._quick_confirm('human')).pack(side=tk.LEFT, padx=(0, 4))
         ttk.Button(btn_row_confirm, text='\U0001f916  AI',
@@ -1883,9 +1886,9 @@ class DetectorGUI:
         idx = sel[0]
         if idx >= len(self._last_results):
             return
-        reviewer = self.confirm_reviewer_var.get().strip()
+        reviewer = self.quick_reviewer_var.get().strip()
         if not reviewer:
-            messagebox.showinfo('Reviewer required', 'Enter a reviewer name above.')
+            messagebox.showinfo('Reviewer required', 'Enter a reviewer name in the Quick Confirm section.')
             return
         if not self._ensure_memory():
             return
@@ -1895,6 +1898,8 @@ class DetectorGUI:
         self.status_var.set(f'Confirmed: {task_id} = {label} by {reviewer}')
         # Visual feedback — remove confirmed item from list
         self._recent_listbox.delete(idx)
+        # Refresh fusion readiness display
+        self.root.after(0, self._refresh_fusion_readiness)
 
     def _memory_summary(self):
         if not self._ensure_memory():
@@ -1920,7 +1925,13 @@ class DetectorGUI:
             messagebox.showinfo('Missing fields', 'Task ID and Reviewer are required.')
             return
         self._memory_store.record_confirmation(task_id, label, verified_by=reviewer)
-        self.status_var.set(f'Confirmed: {task_id} = {label} by {reviewer}')
+        msg = f'Confirmed: {task_id} = {label} by {reviewer}'
+        self.status_var.set(msg)
+        self._append(f'{msg}\n', 'HEADER')
+        # Clear task ID field for next entry
+        self.confirm_task_var.set('')
+        # Refresh fusion readiness display
+        self.root.after(0, self._refresh_fusion_readiness)
 
     def _show_attempter_history(self):
         if not self._ensure_memory():

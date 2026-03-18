@@ -305,18 +305,18 @@ def run_continuation_local(text, gamma=0.5, K=32, order=5):
 
     if composite >= 0.60 and (ncd_signal >= 0.4 or overlap_signal >= 0.5):
         det = 'RED'
-        conf = min(0.80, 0.50 + composite * 0.30)
+        conf = min(0.95, 0.55 + composite * 0.40)
         reason = (f"DNA-GPT-Local: high self-consistency "
                   f"(composite={composite:.2f}, NCD={ncd:.3f}, "
                   f"overlap={internal_overlap:.3f})")
     elif composite >= 0.40:
         det = 'AMBER'
-        conf = min(0.60, 0.30 + composite * 0.30)
+        conf = min(0.70, 0.35 + composite * 0.40)
         reason = (f"DNA-GPT-Local: elevated predictability "
                   f"(composite={composite:.2f}, NCD={ncd:.3f})")
     elif composite >= 0.25:
         det = 'YELLOW'
-        conf = min(0.35, 0.15 + composite * 0.20)
+        conf = min(0.40, 0.15 + composite * 0.35)
         reason = (f"DNA-GPT-Local: moderate self-consistency "
                   f"(composite={composite:.2f})")
     else:
