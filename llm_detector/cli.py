@@ -32,6 +32,19 @@ def _is_frozen():
     return getattr(sys, 'frozen', False)
 
 
+def _real_python():
+    """Return the real Python interpreter, even inside a frozen PyInstaller bundle."""
+    if _is_frozen():
+        for name in ('python3', 'python'):
+            path = shutil.which(name)
+            if path:
+                return path
+        for candidate in ('/usr/bin/python3', '/usr/local/bin/python3'):
+            if os.path.isfile(candidate):
+                return candidate
+    return sys.executable
+
+
 def print_result(r, verbose=False):
     """Pretty-print a single result."""
     icons = {'RED': '\U0001f534', 'AMBER': '\U0001f7e0', 'YELLOW': '\U0001f7e1',
@@ -1253,7 +1266,7 @@ def _ensure_streamlit():
     print('  Streamlit is not installed — installing automatically…')
     try:
         subprocess.check_call(
-            [sys.executable, '-m', 'pip', 'install', _STREAMLIT_MIN_VERSION],
+            [_real_python(), '-m', 'pip', 'install', _STREAMLIT_MIN_VERSION],
             stdout=subprocess.DEVNULL,
         )
         print('  ✅ Streamlit installed successfully.')
@@ -1283,7 +1296,7 @@ def main_dashboard():
         if streamlit_exe:
             cmd = [streamlit_exe, 'run', dashboard_path]
         else:
-            cmd = [sys.executable, '-m', 'streamlit', 'run', dashboard_path]
+            cmd = [_real_python(), '-m', 'streamlit', 'run', dashboard_path]
     subprocess.run(cmd, check=False)
 
 

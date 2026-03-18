@@ -26,15 +26,15 @@ def score_continuation(cont_result):
             label = 'API'
 
         if dna_det == 'RED':
-            score = min(0.90, cont_result.get('confidence', 0.80))
+            score = min(0.95, cont_result.get('confidence', 0.65))
             severity = 'RED'
             parts.append(f"BScore={bscore:.3f}({label},RED)")
         elif dna_det == 'AMBER':
-            score = min(0.70, cont_result.get('confidence', 0.60))
+            score = min(0.70, cont_result.get('confidence', 0.50))
             severity = 'AMBER'
             parts.append(f"BScore={bscore:.3f}({label},AMBER)")
         elif dna_det == 'YELLOW':
-            score = min(0.40, cont_result.get('confidence', 0.30))
+            score = min(0.40, cont_result.get('confidence', 0.25))
             severity = 'YELLOW'
             parts.append(f"BScore={bscore:.3f}({label},YELLOW)")
 
