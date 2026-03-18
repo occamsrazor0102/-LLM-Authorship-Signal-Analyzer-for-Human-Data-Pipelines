@@ -2403,11 +2403,14 @@ class DetectorGUI:
                 stdout=subprocess.DEVNULL,
             )
         except (subprocess.CalledProcessError, FileNotFoundError):
-            self.root.after(0, lambda: messagebox.showerror(
-                'Streamlit Not Found',
-                'streamlit could not be installed automatically.\n'
-                'Install it with:\n    pip install "llm-detector[web]"',
-            ))
+            def _show_error():
+                self.status_var.set('Streamlit installation failed.')
+                messagebox.showerror(
+                    'Streamlit Not Found',
+                    'streamlit could not be installed automatically.\n'
+                    'Install it with:\n    pip install "llm-detector[web]"',
+                )
+            self.root.after(0, _show_error)
             return
         streamlit_exe = shutil.which('streamlit')
         if streamlit_exe:

@@ -10,6 +10,7 @@ import os
 import io
 import sys
 import json
+import html as _html
 import tempfile
 from collections import Counter
 from datetime import datetime
@@ -1306,7 +1307,6 @@ def _page_memory():
         if not results:
             st.info("Run an analysis first to see recent samples here.")
         else:
-            import html as _html
             qc_reviewer = st.text_input("Reviewer name", key="qc_reviewer")
             for idx, r in enumerate(results):
                 tid = r.get("task_id", f"#{idx+1}")
