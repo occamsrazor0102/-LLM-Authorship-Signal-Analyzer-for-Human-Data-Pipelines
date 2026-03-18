@@ -1194,10 +1194,14 @@ class MemoryStore:
 
         labeled = []
         for tid, conf in latest_by_tid.items():
-            if tid in submissions:
+            if tid in submissions and 'ground_truth' in conf:
                 record = submissions[tid].copy()
                 record['ground_truth'] = conf['ground_truth']
                 labeled.append(record)
+
+        if not labeled:
+            print("  Shadow model: no confirmed labels found")
+            return None
 
         try:
             import pandas as pd
