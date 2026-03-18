@@ -14,8 +14,6 @@ Usage:
 import os
 import csv
 import json
-import struct
-import hashlib
 import logging
 import statistics
 from datetime import datetime
@@ -23,34 +21,11 @@ from collections import defaultdict, Counter
 from pathlib import Path
 
 from llm_detector.baselines import _BASELINE_FIELDS
-from llm_detector.similarity import _word_shingles, _STRUCT_FEATURES
+from llm_detector.similarity import (
+    _word_shingles, _STRUCT_FEATURES, _shingle_fingerprint, _minhash_similarity,
+)
 
 logger = logging.getLogger(__name__)
-
-
-# ── MinHash utilities (local copies to avoid circular imports) ────────────
-
-def _shingle_fingerprint(shingle_set, n_hashes=128):
-    """MinHash fingerprint from shingle set."""
-    if not shingle_set:
-        return [0] * n_hashes
-    minhashes = [float('inf')] * n_hashes
-    _pack = struct.pack
-    _md5 = hashlib.md5
-    for shingle in shingle_set:
-        shingle_bytes = ' '.join(shingle).encode('utf-8')
-        for i in range(n_hashes):
-            h = int.from_bytes(_md5(_pack('>I', i) + shingle_bytes).digest()[:4], 'big')
-            if h < minhashes[i]:
-                minhashes[i] = h
-    return minhashes
-
-
-def _minhash_similarity(fp_a, fp_b):
-    """Estimate Jaccard similarity from MinHash fingerprints."""
-    if not fp_a or not fp_b or len(fp_a) != len(fp_b):
-        return 0.0
-    return sum(1 for a, b in zip(fp_a, fp_b) if a == b) / len(fp_a)
 
 
 class MemoryStore:
@@ -296,7 +271,9 @@ class MemoryStore:
                         if info.get('severity') in ('RED', 'AMBER'):
                             channel_counts[ch] += 1
             if channel_counts:
-                p['primary_detection_channel'] = channel_counts.most_common(1)[0][0]
+                mc = channel_counts.most_common(1)
+                if mc:
+                    p['primary_detection_channel'] = mc[0][0]
 
             # Track shadow model disagreements (sophisticated cheater pattern)
             model_flags = sum(1 for r in submissions

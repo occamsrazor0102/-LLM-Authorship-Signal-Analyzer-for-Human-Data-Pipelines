@@ -78,7 +78,7 @@ def run_semantic_flow(text, min_sentences=5):
     # Compute consecutive cosine similarities
     similarities = []
     for i in range(len(embeddings) - 1):
-        sim = _cosine(embeddings[i], embeddings[i + 1])
+        sim = float(_cosine(embeddings[i], embeddings[i + 1]))
         similarities.append(sim)
 
     if len(similarities) < 2:

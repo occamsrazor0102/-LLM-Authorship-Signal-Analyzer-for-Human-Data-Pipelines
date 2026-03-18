@@ -1040,7 +1040,8 @@ class DetectorGUI:
         counts = Counter(determinations)
         top_det = 'N/A'
         if counts:
-            top_det = counts.most_common(1)[0][0]
+            mc = counts.most_common(1)
+            top_det = mc[0][0] if mc else 'N/A'
         avg_conf = 0.0
         if n_results > 0:
             avg_conf = sum(float(r.get('confidence') or 0) for r in results) / n_results
@@ -2449,7 +2450,14 @@ class DetectorGUI:
                 'Ensure the package is properly installed.',
             )
             return
-        dashboard_path = spec.origin
+        dashboard_path = os.path.realpath(spec.origin)
+        pkg_dir = os.path.realpath(os.path.dirname(__file__))
+        if not dashboard_path.startswith(pkg_dir + os.sep):
+            messagebox.showerror(
+                'Security Error',
+                'Dashboard path is outside the llm_detector package.',
+            )
+            return
         streamlit_exe = shutil.which('streamlit')
         if streamlit_exe:
             self._start_dashboard_process([streamlit_exe, 'run', dashboard_path])

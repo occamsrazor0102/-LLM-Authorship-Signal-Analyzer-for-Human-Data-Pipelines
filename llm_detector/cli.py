@@ -1271,7 +1271,12 @@ def main_dashboard():
         print('ERROR: llm_detector.dashboard module not found.')
         print('Ensure the llm_detector package is properly installed.')
         return
-    dashboard_path = spec.origin
+    dashboard_path = os.path.realpath(spec.origin)
+    # Validate the resolved path points to a file within the llm_detector package
+    pkg_dir = os.path.realpath(os.path.dirname(__file__))
+    if not dashboard_path.startswith(pkg_dir + os.sep):
+        print('ERROR: dashboard path is outside the llm_detector package.')
+        return
     streamlit_exe = shutil.which('streamlit')
     if streamlit_exe:
         cmd = [streamlit_exe, 'run', dashboard_path]
