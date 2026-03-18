@@ -186,11 +186,13 @@ def get_perplexity_model(model_id=None):
         model_id = PPL_DEFAULT_MODEL
     if (_PPL_MODEL is None or _PPL_MODEL_ID != model_id) and HAS_PERPLEXITY:
         from transformers import AutoModelForCausalLM, AutoTokenizer
+        import torch
         logger.info("Loading perplexity model: %s", model_id)
         _PPL_MODEL_ID = model_id
         hf_token = _get_hf_token()
         _PPL_MODEL = AutoModelForCausalLM.from_pretrained(
-            model_id, trust_remote_code=True, token=hf_token
+            model_id, trust_remote_code=True, token=hf_token,
+            torch_dtype=torch.float32,
         )
         _PPL_TOKENIZER = AutoTokenizer.from_pretrained(
             model_id, trust_remote_code=True, token=hf_token
@@ -209,9 +211,12 @@ def get_binoculars_model():
     global _BINO_MODEL, _BINO_TOKENIZER
     if _BINO_MODEL is None and HAS_BINOCULARS:
         from transformers import AutoModelForCausalLM, AutoTokenizer
+        import torch
         # Use distilgpt2 as observer — small and different enough for contrastive signal
         hf_token = _get_hf_token()
-        _BINO_MODEL = AutoModelForCausalLM.from_pretrained('distilgpt2', token=hf_token)
+        _BINO_MODEL = AutoModelForCausalLM.from_pretrained(
+            'distilgpt2', token=hf_token, torch_dtype=torch.float32,
+        )
         _BINO_TOKENIZER = AutoTokenizer.from_pretrained('distilgpt2', token=hf_token)
         _BINO_MODEL.eval()
     return _BINO_MODEL, _BINO_TOKENIZER
