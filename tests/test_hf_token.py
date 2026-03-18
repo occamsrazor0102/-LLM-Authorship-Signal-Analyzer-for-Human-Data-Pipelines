@@ -74,10 +74,98 @@ def test_perplexity_loader_passes_token(monkeypatch):
     dummy_mod.AutoTokenizer = DummyAutoTokenizer
     monkeypatch.setitem(sys.modules, "transformers", dummy_mod)
 
+    # Ensure torch module is available (may not be installed in test env)
+    if "torch" not in sys.modules:
+        dummy_torch = types.ModuleType("torch")
+        dummy_torch.float32 = "float32"
+        monkeypatch.setitem(sys.modules, "torch", dummy_torch)
+
     compat.get_perplexity_model("dummy-model")
 
     assert DummyAutoModel.last_kwargs.get("token") == "abc123"
     assert DummyAutoTokenizer.last_kwargs.get("token") == "abc123"
+
+
+def test_perplexity_loader_passes_float32_dtype(monkeypatch):
+    """get_perplexity_model passes torch_dtype=torch.float32 to prevent BFloat16 mismatch."""
+    print("\n-- PPL LOADER DTYPE --")
+    monkeypatch.setattr(compat, "HAS_PERPLEXITY", True)
+
+    class DummyAutoModel:
+        last_kwargs = None
+
+        @classmethod
+        def from_pretrained(cls, model_id, **kwargs):
+            cls.last_kwargs = kwargs
+            return cls()
+
+        def eval(self):
+            return None
+
+    class DummyAutoTokenizer:
+        last_kwargs = None
+
+        @classmethod
+        def from_pretrained(cls, model_id, **kwargs):
+            cls.last_kwargs = kwargs
+            return cls()
+
+    dummy_mod = types.ModuleType("transformers")
+    dummy_mod.AutoModelForCausalLM = DummyAutoModel
+    dummy_mod.AutoTokenizer = DummyAutoTokenizer
+    monkeypatch.setitem(sys.modules, "transformers", dummy_mod)
+
+    # Ensure torch module is available with float32
+    if "torch" not in sys.modules:
+        dummy_torch = types.ModuleType("torch")
+        dummy_torch.float32 = "float32_sentinel"
+        monkeypatch.setitem(sys.modules, "torch", dummy_torch)
+
+    torch_mod = sys.modules["torch"]
+    compat.get_perplexity_model("dummy-model")
+    assert "torch_dtype" in DummyAutoModel.last_kwargs, "torch_dtype not passed to from_pretrained"
+    assert DummyAutoModel.last_kwargs["torch_dtype"] == torch_mod.float32
+
+
+def test_binoculars_loader_passes_float32_dtype(monkeypatch):
+    """get_binoculars_model passes torch_dtype=torch.float32 to prevent BFloat16 mismatch."""
+    print("\n-- BINOCULARS LOADER DTYPE --")
+    monkeypatch.setattr(compat, "HAS_BINOCULARS", True)
+
+    class DummyAutoModel:
+        last_kwargs = None
+
+        @classmethod
+        def from_pretrained(cls, model_id, **kwargs):
+            cls.last_kwargs = kwargs
+            return cls()
+
+        def eval(self):
+            return None
+
+    class DummyAutoTokenizer:
+        last_kwargs = None
+
+        @classmethod
+        def from_pretrained(cls, model_id, **kwargs):
+            cls.last_kwargs = kwargs
+            return cls()
+
+    dummy_mod = types.ModuleType("transformers")
+    dummy_mod.AutoModelForCausalLM = DummyAutoModel
+    dummy_mod.AutoTokenizer = DummyAutoTokenizer
+    monkeypatch.setitem(sys.modules, "transformers", dummy_mod)
+
+    # Ensure torch module is available with float32
+    if "torch" not in sys.modules:
+        dummy_torch = types.ModuleType("torch")
+        dummy_torch.float32 = "float32_sentinel"
+        monkeypatch.setitem(sys.modules, "torch", dummy_torch)
+
+    torch_mod = sys.modules["torch"]
+    compat.get_binoculars_model()
+    assert "torch_dtype" in DummyAutoModel.last_kwargs, "torch_dtype not passed to from_pretrained"
+    assert DummyAutoModel.last_kwargs["torch_dtype"] == torch_mod.float32
 
 
 def test_binoculars_loader_passes_token(monkeypatch):
@@ -108,6 +196,12 @@ def test_binoculars_loader_passes_token(monkeypatch):
     dummy_mod.AutoModelForCausalLM = DummyAutoModel
     dummy_mod.AutoTokenizer = DummyAutoTokenizer
     monkeypatch.setitem(sys.modules, "transformers", dummy_mod)
+
+    # Ensure torch module is available (may not be installed in test env)
+    if "torch" not in sys.modules:
+        dummy_torch = types.ModuleType("torch")
+        dummy_torch.float32 = "float32"
+        monkeypatch.setitem(sys.modules, "torch", dummy_torch)
 
     compat.get_binoculars_model()
 

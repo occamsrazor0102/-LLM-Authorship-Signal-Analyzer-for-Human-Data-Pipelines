@@ -23,7 +23,9 @@ def _col_letter_to_index(spec):
 
 
 def load_xlsx(filepath, sheet=None, prompt_col='prompt', id_col='task_id',
-              occ_col='occupation', attempter_col='attempter_name', stage_col='pipeline_stage_name'):
+              occ_col='occupation', attempter_col='attempter_name',
+              stage_col='pipeline_stage_name',
+              attempter_email_col='', reviewer_col='', reviewer_email_col=''):
     """Load tasks from an xlsx file. Returns list of dicts.
 
     Column parameters accept either a column header name (matched case-insensitively
@@ -81,6 +83,9 @@ def load_xlsx(filepath, sheet=None, prompt_col='prompt', id_col='task_id',
     att_idx = find_col([attempter_col, 'attempter', 'claimed_by', 'claimed by',
                         'fellow name', 'fellow_name', 'author', 'name'])
     stage_idx = find_col([stage_col, 'stage', 'pipeline_stage'])
+    att_email_idx = find_col([attempter_email_col]) if attempter_email_col else None
+    rev_idx = find_col([reviewer_col]) if reviewer_col else None
+    rev_email_idx = find_col([reviewer_email_col]) if reviewer_email_col else None
 
     if prompt_idx is None:
         print(f"ERROR: Could not find prompt column. Headers: {headers}")
@@ -94,20 +99,28 @@ def load_xlsx(filepath, sheet=None, prompt_col='prompt', id_col='task_id',
         if len(prompt) < 50:
             continue
 
-        tasks.append({
+        task = {
             'prompt': prompt,
             'task_id': str(row[id_idx])[:20] if id_idx is not None and row[id_idx] else '',
             'occupation': str(row[occ_idx]) if occ_idx is not None and row[occ_idx] else '',
             'attempter': str(row[att_idx]) if att_idx is not None and row[att_idx] else '',
             'stage': str(row[stage_idx]) if stage_idx is not None and row[stage_idx] else '',
-        })
+        }
+        if att_email_idx is not None and att_email_idx < len(row):
+            task['attempter_email'] = str(row[att_email_idx]) if row[att_email_idx] else ''
+        if rev_idx is not None and rev_idx < len(row):
+            task['reviewer'] = str(row[rev_idx]) if row[rev_idx] else ''
+        if rev_email_idx is not None and rev_email_idx < len(row):
+            task['reviewer_email'] = str(row[rev_email_idx]) if row[rev_email_idx] else ''
+        tasks.append(task)
 
     return tasks
 
 
 def load_csv(filepath, prompt_col='prompt', id_col='task_id',
              occ_col='occupation', attempter_col='attempter_name',
-             stage_col='pipeline_stage_name'):
+             stage_col='pipeline_stage_name',
+             attempter_email_col='', reviewer_col='', reviewer_email_col=''):
     """Load tasks from CSV.
 
     Column parameters accept either a column header name (matched
@@ -147,6 +160,9 @@ def load_csv(filepath, prompt_col='prompt', id_col='task_id',
     att_actual = resolve_col(attempter_col, 'attempter_name', 'attempter', 'claimed_by',
                              'fellow name', 'fellow_name', 'author', 'name')
     stage_actual = resolve_col(stage_col, 'pipeline_stage_name', 'stage')
+    att_email_actual = resolve_col(attempter_email_col) if attempter_email_col else None
+    rev_actual = resolve_col(reviewer_col) if reviewer_col else None
+    rev_email_actual = resolve_col(reviewer_email_col) if reviewer_email_col else None
 
     if prompt_actual is None:
         print(f"ERROR: Could not find prompt column. Columns: {list(df.columns)}")
@@ -157,13 +173,20 @@ def load_csv(filepath, prompt_col='prompt', id_col='task_id',
         prompt = str(row.get(prompt_actual, ''))
         if len(prompt) < 50:
             continue
-        tasks.append({
+        task = {
             'prompt': prompt,
             'task_id': str(row.get(id_actual, ''))[:20] if id_actual else '',
             'occupation': str(row.get(occ_actual, '')) if occ_actual else '',
             'attempter': str(row.get(att_actual, '')) if att_actual else '',
             'stage': str(row.get(stage_actual, '')) if stage_actual else '',
-        })
+        }
+        if att_email_actual:
+            task['attempter_email'] = str(row.get(att_email_actual, ''))
+        if rev_actual:
+            task['reviewer'] = str(row.get(rev_actual, ''))
+        if rev_email_actual:
+            task['reviewer_email'] = str(row.get(rev_email_actual, ''))
+        tasks.append(task)
     return tasks
 
 

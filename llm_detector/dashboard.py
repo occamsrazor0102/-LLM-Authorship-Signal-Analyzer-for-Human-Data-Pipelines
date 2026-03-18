@@ -8,8 +8,10 @@ Launch with:
 
 import os
 import io
+import subprocess
 import sys
 import json
+import html as _html
 import tempfile
 from collections import Counter
 from datetime import datetime
@@ -172,10 +174,12 @@ def _render_sidebar():
                 "\U0001f9e0  Memory & Learning",
                 "\u2696\ufe0f  Calibration",
                 "\U0001f4ca  Reports",
+                "\U0001f4d6  Quick Reference",
+                "\u2705  Precheck",
             ],
             label_visibility="collapsed",
             help=(
-                "\u2699\ufe0f Configuration — Set API keys for Layer 3 continuation "
+                "\u2699\ufe0f Configuration — Set API keys for DNA-GPT continuation "
                 "analysis, tune similarity thresholds, and choose output paths.\n\n"
                 "\U0001f9e0 Memory & Learning — Load the BEET memory store that "
                 "persists analysis history across sessions. Record ground-truth labels "
@@ -310,6 +314,22 @@ def _page_analysis():
                     "Stage column", value="pipeline_stage_name",
                     help="Column for pipeline stage (optional). Use a name or a letter, e.g. E",
                 )
+            c8, c9, c10 = st.columns(3)
+            with c8:
+                attempter_email_col_input = st.text_input(
+                    "Attempter email col (optional)", value="",
+                    help="Column for attempter email address",
+                )
+            with c9:
+                reviewer_col_input = st.text_input(
+                    "Reviewer col (optional)", value="",
+                    help="Column for reviewer name",
+                )
+            with c10:
+                reviewer_email_col_input = st.text_input(
+                    "Reviewer email col (optional)", value="",
+                    help="Column for reviewer email address",
+                )
             analyze_file_btn = st.button(
                 "\U0001f4c1 Analyze File", type="primary", key="analyze_file"
             )
@@ -340,7 +360,7 @@ def _page_analysis():
         with c2:
             verbose = st.checkbox("Verbose", value=False)
         with c3:
-            no_layer3 = st.checkbox("Skip Layer 3", value=False)
+            no_layer3 = st.checkbox("Skip API Continuation", value=False)
 
         st.markdown("**Channel Ablation**")
         abl_cols = st.columns(len(_CHANNELS))
@@ -501,6 +521,9 @@ def _page_analysis():
                         occ_col=occ_col_input.strip() or "occupation",
                         attempter_col=attempter_col_input.strip() or "attempter_name",
                         stage_col=stage_col_input.strip() or "pipeline_stage_name",
+                        attempter_email_col=attempter_email_col_input.strip(),
+                        reviewer_col=reviewer_col_input.strip(),
+                        reviewer_email_col=reviewer_email_col_input.strip(),
                     )
                 else:
                     tasks = load_csv(
@@ -510,6 +533,9 @@ def _page_analysis():
                         occ_col=occ_col_input.strip() or "occupation",
                         attempter_col=attempter_col_input.strip() or "attempter_name",
                         stage_col=stage_col_input.strip() or "pipeline_stage_name",
+                        attempter_email_col=attempter_email_col_input.strip(),
+                        reviewer_col=reviewer_col_input.strip(),
+                        reviewer_email_col=reviewer_email_col_input.strip(),
                     )
             finally:
                 os.unlink(tmp_path)
@@ -562,6 +588,12 @@ def _page_analysis():
                         )
                         run_folder.mkdir(parents=True, exist_ok=True)
 
+                        # Auto-set sim_store and other paths
+                        if not st.session_state.get("sim_store", "").strip():
+                            st.session_state["sim_store"] = str(
+                                run_folder / "similarity.jsonl"
+                            )
+
                         # Save results CSV
                         flat = []
                         for r in all_results:
@@ -587,6 +619,10 @@ def _page_analysis():
                             generate_batch_html_report(
                                 flagged, text_map, str(html_path)
                             )
+
+                        # Save labels JSONL placeholder
+                        labels_path = run_folder / "labels.jsonl"
+                        labels_path.touch(exist_ok=True)
 
                         # Auto-create memory store in the run folder if not
                         # already configured
@@ -1045,8 +1081,8 @@ def _page_configuration():
     # Continuation Analysis
     with st.expander("\U0001f9ec Continuation Analysis (DNA-GPT)", expanded=True):
         st.caption(
-            "Optional: provide an API key to enable DNA-GPT continuation analysis "
-            "(Layer 3). Leave blank to skip Layer 3 and run faster."
+            "Optional: provide an API key to enable DNA-GPT continuation analysis. "
+            "Leave blank to skip API continuation and run faster."
         )
         c1, c2 = st.columns(2)
         with c1:
@@ -1058,13 +1094,13 @@ def _page_configuration():
         with c2:
             api_key = st.text_input(
                 "API Key", type="password", key="api_key",
-                placeholder="sk-... or leave blank to skip Layer 3",
+                placeholder="sk-... or leave blank to skip API continuation",
             )
         # Show whether a key is configured (without revealing it)
         if st.session_state.get("api_key", "").strip():
-            st.success("\u2705 API key set — Layer 3 continuation analysis enabled")
+            st.success("\u2705 API key set — DNA-GPT continuation analysis enabled")
         else:
-            st.info("\u2139\ufe0f No API key — Layer 3 will be skipped (faster, less accurate)")
+            st.info("\u2139\ufe0f No API key — API continuation will be skipped (faster, less accurate)")
 
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -1243,7 +1279,7 @@ def _page_memory():
             confirm_task = st.text_input("Task ID", key="confirm_task")
         with c2:
             confirm_label = st.selectbox(
-                "Label", ["ai", "human"], key="confirm_label"
+                "Label", ["ai", "human", "unsure"], key="confirm_label"
             )
         with c3:
             confirm_reviewer = st.text_input(
@@ -1264,6 +1300,61 @@ def _page_memory():
                     f"Confirmed: {confirm_task} = {confirm_label} "
                     f"by {confirm_reviewer}"
                 )
+
+    # Quick-confirm from recent results
+    with st.expander("\U0001f50d Quick Confirm — Recent Scanned Samples", expanded=False):
+        results = st.session_state.get("results", [])
+        text_map = st.session_state.get("text_map", {})
+        if not results:
+            st.info("Run an analysis first to see recent samples here.")
+        else:
+            qc_reviewer = st.text_input("Reviewer name", key="qc_reviewer")
+            for idx, r in enumerate(results):
+                tid = r.get("task_id", f"#{idx+1}")
+                det = r.get("determination", "?")
+                emoji = _DET_EMOJI.get(det, "")
+                preview = (text_map.get(tid, "") or "")[:120].replace("\n", " ")
+                safe_tid = _html.escape(str(tid))
+                safe_det = _html.escape(str(det))
+                safe_preview = _html.escape(preview)
+                ellipsis = "…" if len(text_map.get(tid, "") or "") > 120 else ""
+                st.markdown(
+                    f"**{emoji} [{safe_det}] {safe_tid}**  \n"
+                    f"<small style='color:#6b7280'>{safe_preview}{ellipsis}</small>",
+                    unsafe_allow_html=True,
+                )
+                bc1, bc2, bc3 = st.columns(3)
+                with bc1:
+                    if st.button("\U0001f9d1 Human", key=f"qc_human_{idx}"):
+                        mem = st.session_state.get("memory_store")
+                        if not mem:
+                            st.warning("Load a memory store first.")
+                        elif not qc_reviewer.strip():
+                            st.warning("Enter a reviewer name above.")
+                        else:
+                            mem.record_confirmation(tid, "human", verified_by=qc_reviewer.strip())
+                            st.success(f"Confirmed: {tid} = human")
+                with bc2:
+                    if st.button("\U0001f916 AI", key=f"qc_ai_{idx}"):
+                        mem = st.session_state.get("memory_store")
+                        if not mem:
+                            st.warning("Load a memory store first.")
+                        elif not qc_reviewer.strip():
+                            st.warning("Enter a reviewer name above.")
+                        else:
+                            mem.record_confirmation(tid, "ai", verified_by=qc_reviewer.strip())
+                            st.success(f"Confirmed: {tid} = ai")
+                with bc3:
+                    if st.button("? Unsure", key=f"qc_unsure_{idx}"):
+                        mem = st.session_state.get("memory_store")
+                        if not mem:
+                            st.warning("Load a memory store first.")
+                        elif not qc_reviewer.strip():
+                            st.warning("Enter a reviewer name above.")
+                        else:
+                            mem.record_confirmation(tid, "unsure", verified_by=qc_reviewer.strip())
+                            st.success(f"Confirmed: {tid} = unsure")
+                st.divider()
 
     # Attempter History
     with st.expander("\U0001f464 Attempter History", expanded=False):
@@ -1862,6 +1953,162 @@ def _page_reports():
             st.error(str(e))
 
 
+# ── Page: Quick Reference ────────────────────────────────────────────────────
+
+_QUICK_REFERENCE_TEXT = """\
+CHANNELS (fusion combines these into a final determination)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• **prompt_structure** — Rule-based structural analysis: preamble detection, \
+fingerprint matching, prompt-signature scoring (CFD, MFSR, framing), \
+instruction density (IDI), and voice dissonance (VSD).
+• **stylometry** — Statistical stylometric features: function-word ratio, \
+sentence-length dispersion, TTR, avg word length, short-word ratio, masked \
+topical tokens.
+• **continuation** — DNA-GPT continuation analysis: generates LLM \
+continuations and measures B-score, NCD, overlap, conditional surprisal, \
+repeat-4 rate, TTR.  Requires API key (Anthropic / OpenAI) or local model.
+• **windowing** — Sliding-window analysis: max/mean window score, variance, \
+hot-span detection, FW trajectory CV, comp trajectory, changepoint detection.
+
+INDIVIDUAL ANALYZERS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+| Analyzer | Key Signals |
+|---|---|
+| **Preamble** | Detects LLM boilerplate openings. Score, severity, hit count. |
+| **Fingerprint** | Pattern-matches known LLM output fingerprints. |
+| **Prompt Signature** | CFD, MFSR, distinct frames, framing completeness, conditional density, meta-design, contractions, must-rate, numbered criteria. |
+| **IDI** | Instruction Density Index: imperatives, conditionals, binary specs, missing references, flag count. |
+| **VSD** | Voice Dissonance Score: voice × spec, casual markers, misspellings, hedges, CamelCase columns, calculations. |
+| **SSI / NSSI** | Self-Similarity (Normalised): formulaic density, transition density, scare-quote/em-dash density, compression ratio, hapax ratio. |
+| **DNA-GPT** | Continuation B-score, NCD, internal overlap, conditional surprisal, repeat-4, TTR, composite stability. |
+| **Perplexity** | Mean PPL, burstiness, surprisal variance, volatility decay, Binoculars score, zlib-normalised PPL. |
+| **TOCSIN** | Token Cohesiveness: cohesiveness score and std. |
+| **Semantic Resonance** | AI/human centroid similarity: AI score, human score, delta. |
+| **Semantic Flow** | Cross-sentence semantic coherence (cosine similarity). |
+| **Lexicon Packs** | Domain-specific lexicon: constraint, exec-spec, schema scores. |
+
+POST-PROCESSING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• **Similarity** — Within-batch Jaccard similarity for near-duplicate detection.
+• **Cross-batch** — Persistent similarity store (JSONL) across sessions.
+• **Shadow Model** — ML classifier trained on confirmed labels; detects disagreements.
+• **Calibration** — Conformal prediction tables for well-calibrated probabilities.
+• **Normalization** — Unicode obfuscation detection: invisible chars, homoglyphs.
+• **Language Gate** — Non-English/non-Latin language support level check.
+"""
+
+
+def _page_quick_reference():
+    st.markdown("### \U0001f4d6 Quick Reference")
+    st.caption("Summary of every analysis, channel, and signal in the detection pipeline")
+    st.markdown(_QUICK_REFERENCE_TEXT)
+
+
+# ── Page: Precheck ───────────────────────────────────────────────────────────
+
+def _check_dependencies_st():
+    """Return list of (status, name, category, notes) for dependency checks."""
+    import importlib.util as iu
+    checks = []
+
+    def _probe(mod, display, cat, required=True, note_ok="", note_miss=""):
+        try:
+            ok = iu.find_spec(mod) is not None
+        except (ModuleNotFoundError, ValueError):
+            ok = False
+        if ok:
+            checks.append(("\u2705", display, cat, note_ok or "Available"))
+        elif required:
+            checks.append(("\u274c", display, cat, note_miss or "Missing — required"))
+        else:
+            checks.append(("\u2757", display, cat, note_miss or "Missing — optional"))
+
+    _probe("pandas", "pandas", "Core", True, "DataFrame processing")
+    _probe("openpyxl", "openpyxl", "Core", True, "Excel I/O")
+    _probe("spacy", "spacy", "NLP", False, note_miss="Optional — regex fallback used")
+    _probe("ftfy", "ftfy", "NLP", False, note_miss="Optional — text normalisation")
+    _probe("sentence_transformers", "sentence-transformers", "NLP", False,
+           note_miss="Optional — semantic resonance disabled")
+    _probe("sklearn", "scikit-learn", "NLP", False,
+           note_miss="Optional — ML fusion disabled")
+    _probe("transformers", "transformers (HuggingFace)", "Perplexity", False,
+           note_miss="Optional — perplexity analyser disabled")
+    _probe("torch", "PyTorch", "Perplexity", False,
+           note_miss="Optional — perplexity analyser disabled")
+    _probe("anthropic", "anthropic SDK", "API", False,
+           note_miss="Optional — Anthropic continuation disabled")
+    _probe("openai", "openai SDK", "API", False,
+           note_miss="Optional — OpenAI continuation disabled")
+    _probe("pypdf", "pypdf", "PDF", False, note_miss="Optional — PDF ingestion disabled")
+    _probe("streamlit", "streamlit", "Web", False,
+           note_miss="Optional — auto-install available")
+    _probe("tkinter", "tkinter", "GUI", False,
+           note_miss="Optional — desktop GUI unavailable")
+    _probe("PyInstaller", "PyInstaller", "Build", False,
+           note_miss="Optional — executable building only")
+    return checks
+
+
+_PIP_INSTALL_MAP_ST = {
+    'spacy': 'llm-detector[nlp]',
+    'ftfy': 'llm-detector[nlp]',
+    'sentence-transformers': 'llm-detector[nlp]',
+    'scikit-learn': 'llm-detector[nlp]',
+    'transformers (HuggingFace)': 'llm-detector[perplexity]',
+    'PyTorch': 'llm-detector[perplexity]',
+    'anthropic SDK': 'llm-detector[api]',
+    'openai SDK': 'llm-detector[api]',
+    'pypdf': 'llm-detector[pdf]',
+    'streamlit': 'llm-detector[web]',
+    'PyInstaller': 'pyinstaller>=6.0',
+}
+
+
+def _page_precheck():
+    st.markdown("### \u2705 Precheck")
+    st.caption(
+        "Required and optional Python modules, models, and external programs. "
+        "\u2705 = available   \u2757 = missing (optional)   \u274c = missing (breaks analysis)"
+    )
+    rows = _check_dependencies_st()
+    df = pd.DataFrame(rows, columns=["Status", "Component", "Category", "Notes"])
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+    # Summary counts
+    ok_count = sum(1 for r in rows if r[0] == "\u2705")
+    warn_count = sum(1 for r in rows if r[0] == "\u2757")
+    err_count = sum(1 for r in rows if r[0] == "\u274c")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("Available", ok_count)
+    with c2:
+        st.metric("Optional Missing", warn_count)
+    with c3:
+        st.metric("Required Missing", err_count)
+
+    # Install missing optional dependencies
+    missing = [r[1] for r in rows if r[0] == "\u2757" and r[1] in _PIP_INSTALL_MAP_ST]
+    if missing:
+        st.markdown("---")
+        st.markdown("**Install missing optional dependencies**")
+        selected = st.multiselect("Select dependencies to install:", missing, default=[])
+        if st.button("Install Selected", disabled=not selected):
+            packages = sorted({_PIP_INSTALL_MAP_ST[name] for name in selected})
+            with st.spinner(f"Installing {', '.join(packages)}\u2026"):
+                try:
+                    subprocess.check_call(
+                        [sys.executable, '-m', 'pip', 'install'] + packages,
+                        stdout=subprocess.DEVNULL,
+                    )
+                    st.success("Installation complete. Refresh the page to update the precheck.")
+                    st.rerun()
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    st.error(
+                        "Installation failed. Try manually:\n\n"
+                        f"```\npip install {' '.join(packages)}\n```"
+                    )
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -1880,6 +2127,10 @@ def main():
         _page_calibration()
     elif page.endswith("Reports"):
         _page_reports()
+    elif page.endswith("Quick Reference"):
+        _page_quick_reference()
+    elif page.endswith("Precheck"):
+        _page_precheck()
 
 
 if __name__ == "__main__":

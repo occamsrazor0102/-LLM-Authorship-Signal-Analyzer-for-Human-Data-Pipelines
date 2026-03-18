@@ -10,8 +10,30 @@ structural rhythm rather than surface-level token patterns.
 
 import statistics
 
+import numpy as np
+
 from llm_detector.compat import HAS_SEMANTIC, get_semantic_models
 from llm_detector.text_utils import get_sentences
+
+_COSINE_EPS = 1e-12
+
+try:
+    from sklearn.metrics.pairwise import cosine_similarity
+
+    def _cosine(a, b):
+        denom = float(np.linalg.norm(a) * np.linalg.norm(b))
+        if denom < _COSINE_EPS:
+            return 0.0
+        return float(cosine_similarity(
+            a.reshape(1, -1),
+            b.reshape(1, -1),
+        )[0][0])
+except ImportError:
+    def _cosine(a, b):
+        denom = float(np.linalg.norm(a) * np.linalg.norm(b))
+        if abs(denom) < _COSINE_EPS:
+            return 0.0
+        return float(np.dot(a, b) / denom)
 
 _FLOW_EMPTY = {
     'flow_similarities': [],
@@ -49,7 +71,6 @@ def run_semantic_flow(text, min_sentences=5):
                 'reason': f'Semantic flow: too few sentences ({len(sentences)})'}
 
     embedder, _, _ = get_semantic_models()
-    from sklearn.metrics.pairwise import cosine_similarity
 
     # Encode all sentences in one batch for efficiency
     embeddings = embedder.encode(sentences)
@@ -57,11 +78,8 @@ def run_semantic_flow(text, min_sentences=5):
     # Compute consecutive cosine similarities
     similarities = []
     for i in range(len(embeddings) - 1):
-        sim = cosine_similarity(
-            embeddings[i].reshape(1, -1),
-            embeddings[i + 1].reshape(1, -1),
-        )[0][0]
-        similarities.append(float(sim))
+        sim = _cosine(embeddings[i], embeddings[i + 1])
+        similarities.append(sim)
 
     if len(similarities) < 2:
         return {**_FLOW_EMPTY, 'n_sentences': len(sentences),

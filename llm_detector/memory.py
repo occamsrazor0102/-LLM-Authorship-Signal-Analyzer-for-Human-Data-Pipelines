@@ -489,22 +489,23 @@ class MemoryStore:
             f.write(json.dumps(record) + '\n')
 
         # Update attempter profile
-        if original and original.get('attempter'):
+        if original and original.get('attempter') and ground_truth in ('ai', 'human'):
             profiles = self._load_attempter_profiles()
             att = original['attempter'].strip()
             if att in profiles:
                 if ground_truth == 'ai':
                     profiles[att]['confirmed_ai'] = profiles[att].get(
                         'confirmed_ai', 0) + 1
-                else:
+                elif ground_truth == 'human':
                     profiles[att]['confirmed_human'] = profiles[att].get(
                         'confirmed_human', 0) + 1
                 profiles[att]['risk_tier'] = self._compute_risk_tier(profiles[att])
                 self._save_attempter_profiles(profiles)
 
-        self._config['total_confirmed'] = self._config.get(
-            'total_confirmed', 0) + 1
-        self._save_config()
+        if ground_truth in ('ai', 'human'):
+            self._config['total_confirmed'] = self._config.get(
+                'total_confirmed', 0) + 1
+            self._save_config()
 
         print(f"  Confirmed: {task_id} = {ground_truth} (by {verified_by})")
 
@@ -711,11 +712,11 @@ class MemoryStore:
                 record['ground_truth'] = conf['ground_truth']
                 labeled.append(record)
 
-        if len(labeled) < 200:
-            print(f"  Shadow model: need >= 200 labeled examples, have {len(labeled)}")
-            return None
-
         df = pd.DataFrame(labeled)
+        df = df[df['ground_truth'].isin(['ai', 'human'])]
+        if len(df) < 200:
+            print(f"  Shadow model: need >= 200 labeled examples, have {len(df)}")
+            return None
         ai_count = (df['ground_truth'] == 'ai').sum()
         human_count = (df['ground_truth'] == 'human').sum()
 
@@ -1193,13 +1194,13 @@ class MemoryStore:
 
         labeled = []
         for tid, conf in latest_by_tid.items():
-            if tid in submissions:
+            if tid in submissions and 'ground_truth' in conf:
                 record = submissions[tid].copy()
                 record['ground_truth'] = conf['ground_truth']
                 labeled.append(record)
 
-        if len(labeled) < 200:
-            print(f"  Shadow model: need >= 200 labeled examples, have {len(labeled)}")
+        if not labeled:
+            print("  Shadow model: no confirmed labels found")
             return None
 
         try:
@@ -1214,6 +1215,10 @@ class MemoryStore:
             return None
 
         df = pd.DataFrame(labeled)
+        df = df[df['ground_truth'].isin(['ai', 'human'])]
+        if len(df) < 200:
+            print(f"  Shadow model: need >= 200 labeled examples, have {len(df)}")
+            return None
         ai_count = (df['ground_truth'] == 'ai').sum()
         human_count = (df['ground_truth'] == 'human').sum()
 
