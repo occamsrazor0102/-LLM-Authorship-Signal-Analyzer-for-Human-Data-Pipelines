@@ -477,6 +477,28 @@ def test_load_helpers():
         shutil.rmtree(tmpdir)
 
 
+def test_load_attempter_profiles_non_dict_json():
+    """Verify _load_attempter_profiles handles non-dict JSON lines gracefully."""
+    print("\n-- MEMORY: load attempter profiles with non-dict JSON --")
+    tmpdir = tempfile.mkdtemp()
+    try:
+        store = MemoryStore(store_dir=tmpdir)
+        # Write mixed JSONL: valid profile, non-dict list, bare string, number
+        with open(store.attempters_path, 'w') as f:
+            f.write(json.dumps({"attempter": "alice", "flag_rate": 0.5}) + "\n")
+            f.write(json.dumps([1, 2, 3]) + "\n")         # list, not dict
+            f.write(json.dumps("just a string") + "\n")    # string, not dict
+            f.write(json.dumps(42) + "\n")                 # int, not dict
+            f.write(json.dumps({"attempter": "bob", "flag_rate": 0.3}) + "\n")
+        profiles = store._load_attempter_profiles()
+        check("Two valid profiles loaded", len(profiles) == 2,
+              f"got {len(profiles)}")
+        check("alice in profiles", "alice" in profiles)
+        check("bob in profiles", "bob" in profiles)
+    finally:
+        shutil.rmtree(tmpdir)
+
+
 if __name__ == '__main__':
     print("=" * 70)
     print("  BEET MEMORY STORE TESTS")
@@ -499,6 +521,7 @@ if __name__ == '__main__':
     test_lexicon_discovery_with_data()
     test_shadow_model_attempter_tracking()
     test_load_helpers()
+    test_load_attempter_profiles_non_dict_json()
 
     print(f"\n{'=' * 70}")
     print(f"  RESULTS: {PASSED} passed, {FAILED} failed")

@@ -12,9 +12,11 @@ Usage:
 """
 
 import os
+import csv
 import json
 import struct
 import hashlib
+import logging
 import statistics
 from datetime import datetime
 from collections import defaultdict, Counter
@@ -22,6 +24,8 @@ from pathlib import Path
 
 from llm_detector.baselines import _BASELINE_FIELDS
 from llm_detector.similarity import _word_shingles, _STRUCT_FEATURES
+
+logger = logging.getLogger(__name__)
 
 
 # ── MinHash utilities (local copies to avoid circular imports) ────────────
@@ -186,8 +190,8 @@ class MemoryStore:
                     raw_embeds = embedder.encode(texts)
                     for tid, emb in zip(tids, raw_embeds):
                         embeddings[tid] = [round(float(v), 5) for v in emb[:64]]
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Semantic embedding for fingerprints failed: %s", exc)
 
         with open(self.fingerprints_path, 'a') as f:
             for r in results:
@@ -330,7 +334,7 @@ class MemoryStore:
                         try:
                             p = json.loads(line)
                             profiles[p['attempter']] = p
-                        except (json.JSONDecodeError, KeyError):
+                        except (json.JSONDecodeError, KeyError, TypeError):
                             continue
         return profiles
 
@@ -548,7 +552,8 @@ class MemoryStore:
                     'n_samples': pkg.get('n_samples', 0),
                     'algorithm': pkg.get('algorithm', 'unknown'),
                 }
-            except Exception:
+            except Exception as exc:
+                logger.debug("Failed to load fusion model info: %s", exc)
                 result['model_info'] = None
         else:
             result['model_info'] = None
