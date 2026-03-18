@@ -1,10 +1,14 @@
 """Evidence fusion -- combines channel results into final determination."""
 
+import logging
+
 from llm_detector.channels import ChannelResult
 from llm_detector.channels.prompt_structure import score_prompt_structure
 from llm_detector.channels.stylometric import score_stylometric
 from llm_detector.channels.continuation import score_continuation
 from llm_detector.channels.windowed import score_windowed
+
+logger = logging.getLogger(__name__)
 
 
 def _detect_mode(prompt_sig, instr_density, self_sim, word_count):
@@ -90,8 +94,8 @@ def determine(preamble_score, preamble_severity, prompt_sig, voice_dis,
                     'explanation': ml_explanation,
                 }
                 return ml_det, ml_explanation, ml_conf, channel_details
-        except Exception:
-            pass  # Fall through to heuristic rules
+        except Exception as exc:
+            logger.debug("ML fusion unavailable, falling back to heuristic rules: %s", exc)
 
     # Channel ablation: remove disabled channels from fusion
     if _disabled:

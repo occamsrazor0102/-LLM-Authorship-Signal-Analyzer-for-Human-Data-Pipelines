@@ -37,7 +37,8 @@ def profile_attempters(results, min_submissions=2):
                     if ch_info.get('severity') in ('RED', 'AMBER'):
                         flagged_channels[ch_name] += 1
 
-        primary_channel = flagged_channels.most_common(1)[0][0] if flagged_channels else None
+        mc = flagged_channels.most_common(1) if flagged_channels else []
+        primary_channel = mc[0][0] if mc else None
 
         # Mean confidence across flagged submissions
         flagged_confs = [r['confidence'] for r in submissions

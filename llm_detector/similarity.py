@@ -14,9 +14,12 @@ import json
 import math
 import struct
 import hashlib
+import logging
 import statistics
 from collections import defaultdict
 from llm_detector.compat import HAS_SEMANTIC
+
+logger = logging.getLogger(__name__)
 
 
 def _word_shingles(text, k=3):
@@ -145,7 +148,8 @@ def analyze_similarity(results, text_map, jaccard_threshold=0.40,
                 if all(t for t in group_texts):
                     group_embeddings = embedder.encode(group_texts)
                     sem_matrix = cos_sim(group_embeddings)
-            except Exception:
+            except Exception as exc:
+                logger.debug("Semantic embedding failed for similarity analysis: %s", exc)
                 sem_matrix = None
 
         # Pre-compute attempter names once per group member to avoid

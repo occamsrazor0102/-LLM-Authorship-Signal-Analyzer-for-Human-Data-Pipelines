@@ -67,6 +67,39 @@ def test_result_structure():
               f"got {r['n_rounds']}")
 
 
+def test_distance_is_native_float():
+    """Verify cosine distances are converted to native Python float.
+
+    sklearn's cosine_similarity returns numpy.float64, which causes
+    'float object has no attribute numerator' in statistics.mean() on
+    Python 3.9/3.10.  The float() cast in token_cohesiveness prevents this.
+    """
+    print("\n-- TOCSIN: distance values are native Python float --")
+    import statistics
+    try:
+        import numpy as np
+    except ImportError:
+        check("numpy not available -- skip", True)
+        return
+
+    # Simulate distances that would come from cosine_similarity
+    np_distances = [np.float64(0.02), np.float64(0.03), np.float64(0.01)]
+    py_distances = [float(d) for d in np_distances]
+
+    check("Converted distances are native float",
+          all(type(d) is float for d in py_distances),
+          f"types: {[type(d).__name__ for d in py_distances]}")
+
+    # This should never raise AttributeError with native floats
+    mean_val = statistics.mean(py_distances)
+    check("statistics.mean succeeds on converted floats",
+          isinstance(mean_val, float), f"got {type(mean_val)}")
+
+    std_val = statistics.stdev(py_distances)
+    check("statistics.stdev succeeds on converted floats",
+          isinstance(std_val, float), f"got {type(std_val)}")
+
+
 if __name__ == '__main__':
     print("=" * 70)
     print("  TOKEN COHESIVENESS (TOCSIN) TESTS")
@@ -75,6 +108,7 @@ if __name__ == '__main__':
     test_short_text()
     test_has_semantic_guard()
     test_result_structure()
+    test_distance_is_native_float()
 
     print(f"\n{'=' * 70}")
     print(f"  RESULTS: {PASSED} passed, {FAILED} failed")

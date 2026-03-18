@@ -64,7 +64,7 @@ def run_token_cohesiveness(text, n_copies=10, deletion_rate=0.015, seed=42):
 
         reduced_embedding = embedder.encode([reduced])
         sim = cosine_similarity(orig_embedding, reduced_embedding)[0][0]
-        distance = 1.0 - sim
+        distance = float(1.0 - sim)
         distances.append(distance)
 
     if not distances:
