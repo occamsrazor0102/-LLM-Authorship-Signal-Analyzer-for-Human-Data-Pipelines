@@ -627,6 +627,23 @@ python tests/test_stylometric_channel.py
 
 **ML tools advise, never decide.** The shadow model, lexicon discovery, and centroid rebuilder produce artifacts for human review. They never modify the primary rule engine automatically — the human reviewer remains the decision-maker in the feedback loop.
 
+## Documentation
+
+Detailed step-by-step documentation for every component is available in the [`docs/`](docs/) directory:
+
+| Document | Description |
+|----------|-------------|
+| [Architecture Overview](docs/architecture.md) | System design, data flow diagrams, module dependency graph |
+| [Pipeline Orchestration](docs/pipeline.md) | Step-by-step walkthrough of `analyze_prompt()` |
+| [Detection Analyzers](docs/analyzers.md) | All 13+ analyzers with signals, thresholds, and academic references |
+| [Scoring Channels](docs/channels.md) | How analyzers are aggregated into 4 independent channels |
+| [Evidence Fusion](docs/fusion.md) | Priority logic, convergence rules, and ML fusion |
+| [Lexicon Pack System](docs/lexicon.md) | 16 vocabulary families and integration layer |
+| [Infrastructure Components](docs/infrastructure.md) | I/O, calibration, baselines, similarity, memory, normalization |
+| [User Interfaces](docs/interfaces.md) | CLI, GUI, and Dashboard usage guide |
+| [Configuration & Dependencies](docs/configuration.md) | Feature flags, optional dependencies, settings |
+| [Testing Guide](docs/testing.md) | Test conventions, running tests, and coverage |
+
 ## Release Roadmap
 
 | Version | Focus |
