@@ -226,7 +226,7 @@ def _render_sidebar():
         else:
             st.warning("\U0001f9e0 Memory store not loaded")
 
-        st.caption("v0.67.0")
+        st.caption("v0.68.0")
 
     return page
 
