@@ -1,0 +1,619 @@
+{
+  "task_id": "uc_audit_prompt",
+  "occupation": "nurse_practitioner",
+  "attempter": "",
+  "stage": "",
+  "word_count": 732,
+  "word_count_raw": 732,
+  "determination": "AMBER",
+  "reason": "Prompt-structure: prompt_sig=0.30(YELLOW), IDI=8(AMBER), SSI=9(AMBER) + Stylometry: PPL=22(YELLOW), Bino=0.32(AMBER) + Continuation: BScore=0.000(Local,YELLOW)",
+  "confidence": 0.7,
+  "calibrated_confidence": 0.7,
+  "conformity_level": null,
+  "calibration_stratum": "uncalibrated",
+  "mode": "task_prompt",
+  "channel_details": {
+    "mode": "task_prompt",
+    "disabled_channels": [],
+    "channels": {
+      "prompt_structure": {
+        "score": 0.7,
+        "severity": "AMBER",
+        "explanation": "Prompt-structure: prompt_sig=0.30(YELLOW), IDI=8(AMBER), SSI=9(AMBER)",
+        "mode_eligible": true,
+        "data_sufficient": true,
+        "disabled": false,
+        "role": "primary"
+      },
+      "stylometry": {
+        "score": 0.278291130065918,
+        "severity": "AMBER",
+        "explanation": "Stylometry: PPL=22(YELLOW), Bino=0.32(AMBER)",
+        "mode_eligible": false,
+        "data_sufficient": true,
+        "disabled": false,
+        "role": "supporting"
+      },
+      "continuation": {
+        "score": 0.289,
+        "severity": "YELLOW",
+        "explanation": "Continuation: BScore=0.000(Local,YELLOW)",
+        "mode_eligible": true,
+        "data_sufficient": true,
+        "disabled": false,
+        "role": "primary"
+      },
+      "windowing": {
+        "score": 0.0,
+        "severity": "GREEN",
+        "explanation": "Windowing: no signals",
+        "mode_eligible": false,
+        "data_sufficient": true,
+        "disabled": false,
+        "role": "supporting"
+      }
+    },
+    "active_channels": 3,
+    "short_text_adjustment": false,
+    "fusion_counts": {
+      "n_primary_red": 0,
+      "n_primary_amber": 1,
+      "n_primary_yellow_plus": 2,
+      "n_yellow_plus": 3,
+      "n_red": 0,
+      "n_amber_plus": 2
+    },
+    "triggering_rule": "primary_amber_single_channel"
+  },
+  "audit_trail": {
+    "pipeline_version": "v0.68",
+    "mode_resolved": "task_prompt",
+    "channels": {
+      "prompt_structure": {
+        "score": 0.7,
+        "severity": "AMBER",
+        "explanation": "Prompt-structure: prompt_sig=0.30(YELLOW), IDI=8(AMBER), SSI=9(AMBER)",
+        "mode_eligible": true,
+        "data_sufficient": true,
+        "disabled": false,
+        "role": "primary"
+      },
+      "stylometry": {
+        "score": 0.278291130065918,
+        "severity": "AMBER",
+        "explanation": "Stylometry: PPL=22(YELLOW), Bino=0.32(AMBER)",
+        "mode_eligible": false,
+        "data_sufficient": true,
+        "disabled": false,
+        "role": "supporting"
+      },
+      "continuation": {
+        "score": 0.289,
+        "severity": "YELLOW",
+        "explanation": "Continuation: BScore=0.000(Local,YELLOW)",
+        "mode_eligible": true,
+        "data_sufficient": true,
+        "disabled": false,
+        "role": "primary"
+      },
+      "windowing": {
+        "score": 0.0,
+        "severity": "GREEN",
+        "explanation": "Windowing: no signals",
+        "mode_eligible": false,
+        "data_sufficient": true,
+        "disabled": false,
+        "role": "supporting"
+      }
+    },
+    "fairness_gate": {
+      "support_level": "SUPPORTED",
+      "fw_coverage": 0.2705
+    },
+    "normalization": {
+      "obfuscation_delta": 0.0,
+      "invisible_chars": 0,
+      "homoglyphs": 0,
+      "ftfy_applied": false
+    },
+    "calibration": {
+      "raw_confidence": 0.7,
+      "calibrated_confidence": 0.7,
+      "conformity_level": null,
+      "stratum_used": "uncalibrated"
+    },
+    "semantic_available": true,
+    "perplexity_available": true
+  },
+  "pipeline_version": "v0.68",
+  "detection_spans": [
+    {
+      "start": 967,
+      "end": 974,
+      "text": "exactly",
+      "pack": "cardinality",
+      "weight": 0.0,
+      "type": "keyword"
+    },
+    {
+      "start": 1214,
+      "end": 1223,
+      "text": "only when",
+      "pack": "cardinality",
+      "weight": 0.8
+    },
+    {
+      "start": 1661,
+      "end": 1665,
+      "text": "must",
+      "pack": "obligation",
+      "weight": 0.0,
+      "type": "keyword"
+    },
+    {
+      "start": 1995,
+      "end": 2005,
+      "text": "Label each",
+      "pack": "task_verbs",
+      "weight": 1.0
+    },
+    {
+      "start": 1995,
+      "end": 2000,
+      "text": "Label",
+      "pack": "task_verbs",
+      "weight": 0.0,
+      "type": "keyword"
+    },
+    {
+      "start": 2149,
+      "end": 2158,
+      "text": "exactly 6",
+      "pack": "cardinality",
+      "weight": 1.5
+    },
+    {
+      "start": 2149,
+      "end": 2156,
+      "text": "exactly",
+      "pack": "cardinality",
+      "weight": 0.0,
+      "type": "keyword"
+    },
+    {
+      "start": 2189,
+      "end": 2193,
+      "text": "must",
+      "pack": "obligation",
+      "weight": 0.0,
+      "type": "keyword"
+    },
+    {
+      "start": 2214,
+      "end": 2218,
+      "text": "must",
+      "pack": "obligation",
+      "weight": 0.0,
+      "type": "keyword"
+    },
+    {
+      "start": 2240,
+      "end": 2254,
+      "text": "Do not include",
+      "pack": "prohibition",
+      "weight": 1.2
+    },
+    {
+      "start": 2347,
+      "end": 2353,
+      "text": "unless",
+      "pack": "conditional",
+      "weight": 0.0,
+      "type": "keyword"
+    },
+    {
+      "start": 2499,
+      "end": 2506,
+      "text": "exactly",
+      "pack": "cardinality",
+      "weight": 0.0,
+      "type": "keyword"
+    },
+    {
+      "start": 2641,
+      "end": 2650,
+      "text": "exactly 3",
+      "pack": "cardinality",
+      "weight": 1.5
+    },
+    {
+      "start": 2641,
+      "end": 2648,
+      "text": "exactly",
+      "pack": "cardinality",
+      "weight": 0.0,
+      "type": "keyword"
+    },
+    {
+      "start": 2681,
+      "end": 2685,
+      "text": "must",
+      "pack": "obligation",
+      "weight": 0.0,
+      "type": "keyword"
+    },
+    {
+      "start": 2776,
+      "end": 2787,
+      "text": "each of the",
+      "pack": "cardinality",
+      "weight": 1.0
+    },
+    {
+      "start": 2960,
+      "end": 2964,
+      "text": "must",
+      "pack": "obligation",
+      "weight": 0.0,
+      "type": "keyword"
+    },
+    {
+      "start": 3014,
+      "end": 3026,
+      "text": "must contain",
+      "pack": "obligation",
+      "weight": 1.5
+    },
+    {
+      "start": 3014,
+      "end": 3018,
+      "text": "must",
+      "pack": "obligation",
+      "weight": 0.0,
+      "type": "keyword"
+    },
+    {
+      "start": 3027,
+      "end": 3034,
+      "text": "exactly",
+      "pack": "cardinality",
+      "weight": 0.0,
+      "type": "keyword"
+    },
+    {
+      "start": 3111,
+      "end": 3115,
+      "text": "must",
+      "pack": "obligation",
+      "weight": 0.0,
+      "type": "keyword"
+    },
+    {
+      "start": 3234,
+      "end": 3238,
+      "text": "must",
+      "pack": "obligation",
+      "weight": 0.0,
+      "type": "keyword"
+    },
+    {
+      "start": 3405,
+      "end": 3415,
+      "text": "exactly 10",
+      "pack": "cardinality",
+      "weight": 1.5
+    },
+    {
+      "start": 3405,
+      "end": 3412,
+      "text": "exactly",
+      "pack": "cardinality",
+      "weight": 0.0,
+      "type": "keyword"
+    },
+    {
+      "start": 3505,
+      "end": 3515,
+      "text": "at least 2",
+      "pack": "cardinality",
+      "weight": 1.2
+    },
+    {
+      "start": 3742,
+      "end": 3749,
+      "text": "Missing",
+      "pack": "value_domain",
+      "weight": 2.0
+    },
+    {
+      "start": 3832,
+      "end": 3836,
+      "text": "must",
+      "pack": "obligation",
+      "weight": 0.0,
+      "type": "keyword"
+    },
+    {
+      "start": 3984,
+      "end": 3988,
+      "text": "must",
+      "pack": "obligation",
+      "weight": 0.0,
+      "type": "keyword"
+    },
+    {
+      "start": 3992,
+      "end": 4001,
+      "text": "exactly 6",
+      "pack": "cardinality",
+      "weight": 1.5
+    },
+    {
+      "start": 3992,
+      "end": 3999,
+      "text": "exactly",
+      "pack": "cardinality",
+      "weight": 0.0,
+      "type": "keyword"
+    },
+    {
+      "start": 4026,
+      "end": 4030,
+      "text": "must",
+      "pack": "obligation",
+      "weight": 0.0,
+      "type": "keyword"
+    },
+    {
+      "start": 4094,
+      "end": 4098,
+      "text": "must",
+      "pack": "obligation",
+      "weight": 0.0,
+      "type": "keyword"
+    },
+    {
+      "start": 4099,
+      "end": 4105,
+      "text": "map to",
+      "pack": "task_verbs",
+      "weight": 0.8
+    },
+    {
+      "start": 4099,
+      "end": 4102,
+      "text": "map",
+      "pack": "task_verbs",
+      "weight": 0.0,
+      "type": "keyword"
+    },
+    {
+      "start": 4106,
+      "end": 4113,
+      "text": "exactly",
+      "pack": "cardinality",
+      "weight": 0.0,
+      "type": "keyword"
+    },
+    {
+      "start": 4152,
+      "end": 4156,
+      "text": "must",
+      "pack": "obligation",
+      "weight": 0.0,
+      "type": "keyword"
+    },
+    {
+      "start": 4174,
+      "end": 4183,
+      "text": "every row",
+      "pack": "cardinality",
+      "weight": 1.0
+    },
+    {
+      "start": 4245,
+      "end": 4249,
+      "text": "must",
+      "pack": "obligation",
+      "weight": 0.0,
+      "type": "keyword"
+    },
+    {
+      "start": 4253,
+      "end": 4255,
+      "text": "No",
+      "pack": "value_domain",
+      "weight": 0.5
+    },
+    {
+      "start": 4313,
+      "end": 4323,
+      "text": "at least 8",
+      "pack": "cardinality",
+      "weight": 1.2
+    },
+    {
+      "start": 4352,
+      "end": 4356,
+      "text": "must",
+      "pack": "obligation",
+      "weight": 0.0,
+      "type": "keyword"
+    },
+    {
+      "start": 4399,
+      "end": 4406,
+      "text": "Missing",
+      "pack": "value_domain",
+      "weight": 2.0
+    },
+    {
+      "start": 4678,
+      "end": 4684,
+      "text": "format",
+      "pack": "task_verbs",
+      "weight": 0.0,
+      "type": "keyword"
+    },
+    {
+      "start": 4718,
+      "end": 4735,
+      "text": "If a statement is",
+      "pack": "conditional",
+      "weight": 1.2
+    },
+    {
+      "start": 4779,
+      "end": 4786,
+      "text": "exactly",
+      "pack": "cardinality",
+      "weight": 0.0,
+      "type": "keyword"
+    },
+    {
+      "start": 4919,
+      "end": 4926,
+      "text": "exactly",
+      "pack": "cardinality",
+      "weight": 0.0,
+      "type": "keyword"
+    }
+  ],
+  "norm_obfuscation_delta": 0.0,
+  "norm_invisible_chars": 0,
+  "norm_homoglyphs": 0,
+  "norm_attack_types": [],
+  "lang_support_level": "SUPPORTED",
+  "lang_fw_coverage": 0.2705,
+  "lang_non_latin_ratio": 0.0,
+  "preamble_score": 0.0,
+  "preamble_severity": "NONE",
+  "preamble_hits": 0,
+  "preamble_details": [],
+  "fingerprint_score": 0.0,
+  "fingerprint_hits": 0,
+  "prompt_signature_composite": 0.30000000000000004,
+  "prompt_signature_cfd": 0.225,
+  "prompt_signature_distinct_frames": 2,
+  "prompt_signature_mfsr": 0.0,
+  "prompt_signature_framing": 0,
+  "prompt_signature_conditional_density": 0.2,
+  "prompt_signature_meta_design": 0,
+  "prompt_signature_contractions": 1,
+  "prompt_signature_must_rate": 0.375,
+  "prompt_signature_numbered_criteria": 0,
+  "instruction_density_idi": 8.0,
+  "instruction_density_imperatives": 30,
+  "instruction_density_conditionals": 8,
+  "instruction_density_binary_specs": 1,
+  "instruction_density_missing_refs": 0,
+  "instruction_density_flag_count": 0,
+  "voice_dissonance_voice_score": 0.34153005464480873,
+  "voice_dissonance_spec_score": 8.95,
+  "voice_dissonance_vsd": 3.1,
+  "voice_dissonance_voice_gated": false,
+  "voice_dissonance_casual_markers": 0,
+  "voice_dissonance_misspellings": 0,
+  "voice_dissonance_camel_cols": 29,
+  "voice_dissonance_calcs": 0,
+  "voice_dissonance_hedges": 0,
+  "ssi_triggered": true,
+  "ground_truth": null,
+  "language": null,
+  "domain": null,
+  "window_max_score": 0.15,
+  "window_mean_score": 0.025,
+  "window_variance": 0.0033,
+  "window_hot_span": 0,
+  "window_n_windows": 18,
+  "window_mixed_signal": false,
+  "window_fw_trajectory_cv": 0.2732,
+  "window_comp_trajectory_mean": 0.5966,
+  "window_comp_trajectory_cv": 0.0503,
+  "window_changepoint": null,
+  "pack_constraint_score": 0.361,
+  "pack_exec_spec_score": 0.0,
+  "pack_schema_score": 0.0,
+  "pack_active_families": 4,
+  "pack_prompt_boost": 0.2,
+  "pack_idi_boost": 1.48,
+  "stylo_fw_ratio": 0.2668,
+  "stylo_sent_dispersion": 0.548,
+  "stylo_ttr": 0.4252,
+  "stylo_avg_word_len": 5.44,
+  "stylo_short_word_ratio": 0.3351,
+  "stylo_mask_count": 25,
+  "stylo_mattr": 0.819,
+  "semantic_resonance_ai_score": 0.2271,
+  "semantic_resonance_human_score": 0.0753,
+  "semantic_resonance_ai_mean": 0.2108,
+  "semantic_resonance_human_mean": 0.0396,
+  "semantic_resonance_delta": 0.1712,
+  "semantic_resonance_determination": null,
+  "semantic_resonance_confidence": 0.0,
+  "perplexity_value": 21.65,
+  "perplexity_determination": "YELLOW",
+  "perplexity_confidence": 0.278291130065918,
+  "surprisal_variance": 9.6275,
+  "surprisal_first_half_var": 10.7245,
+  "surprisal_second_half_var": 8.2864,
+  "volatility_decay_ratio": 1.2942,
+  "binoculars_score": 0.3196,
+  "binoculars_determination": "AMBER",
+  "self_similarity_nssi_score": 0.2456,
+  "self_similarity_nssi_signals": 2,
+  "self_similarity_determination": null,
+  "self_similarity_confidence": 0.0,
+  "self_similarity_formulaic_density": 0.0,
+  "self_similarity_power_adj_density": 0.0263,
+  "self_similarity_demonstrative_density": 0.0,
+  "self_similarity_transition_density": 0.0,
+  "self_similarity_scare_quote_density": 0.0263,
+  "self_similarity_emdash_density": 0.0,
+  "self_similarity_this_the_start_rate": 0.1053,
+  "self_similarity_section_depth": 0,
+  "self_similarity_sent_length_cv": 0.6163,
+  "self_similarity_comp_ratio": 0.4269,
+  "self_similarity_hapax_ratio": 0.5802,
+  "self_similarity_hapax_count": 188,
+  "self_similarity_unique_words": 324,
+  "self_similarity_shuffled_comp_ratio": 0.4253,
+  "self_similarity_structural_compression_delta": -0.0015,
+  "continuation_bscore": 0.0,
+  "continuation_bscore_max": 0.0,
+  "continuation_determination": "YELLOW",
+  "continuation_confidence": 0.289,
+  "continuation_n_samples": 1,
+  "continuation_mode": "local",
+  "continuation_ncd": 0.8248,
+  "continuation_internal_overlap": 0.0227,
+  "continuation_cond_surprisal": 5.2306,
+  "continuation_repeat4": 0.0471,
+  "continuation_ttr": 0.3957,
+  "continuation_composite": 0.4971,
+  "continuation_composite_variance": 0.003109,
+  "continuation_composite_stability": 0.9611,
+  "continuation_improvement_rate": -0.0001,
+  "continuation_ncd_matrix_mean": 0.8399,
+  "continuation_ncd_matrix_variance": 0.001297,
+  "continuation_ncd_matrix_min": 0.77,
+  "tocsin_cohesiveness": 0.009958,
+  "tocsin_cohesiveness_std": 0.009153,
+  "tocsin_determination": null,
+  "tocsin_confidence": 0.0,
+  "perplexity_comp_ratio": 0.4269,
+  "perplexity_zlib_normalized_ppl": 9.24,
+  "perplexity_comp_ppl_ratio": 1.9715,
+  "semantic_flow_variance": 0.039964,
+  "semantic_flow_mean": 0.324,
+  "semantic_flow_std": 0.1999,
+  "semantic_flow_determination": null,
+  "semantic_flow_confidence": 0.0,
+  "ppl_burstiness": 1.7716,
+  "sentence_ppl_count": 36,
+  "surprisal_trajectory_cv": 0.2254,
+  "surprisal_var_of_var": 0.1364,
+  "surprisal_stationarity": 0.669,
+  "shadow_disagreement": null,
+  "shadow_ai_prob": null
+}
