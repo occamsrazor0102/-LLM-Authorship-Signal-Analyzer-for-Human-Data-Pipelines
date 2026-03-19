@@ -135,7 +135,6 @@ def test_profile_no_flagged_channels():
     ]
     profiles = profile_attempters(results, min_submissions=1)
     check("one profile returned", len(profiles) == 1, f"got {len(profiles)}")
-    check("primary_channel is None",
     check("primary_detection_channel is None",
           profiles[0].get('primary_detection_channel') is None,
           f"got {profiles[0].get('primary_detection_channel')}")
