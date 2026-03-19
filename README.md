@@ -62,6 +62,8 @@ The pipeline analyzes text across multiple independent layers, each targeting a 
 | **Perplexity** | `analyzers/perplexity.py` | distilgpt2-based perplexity scoring |
 | **Token Cohesiveness** | `analyzers/token_cohesiveness.py` | TOCSIN: semantic fragility under random word deletion |
 | **Windowing** | `analyzers/windowing.py` | Sentence-window analysis with FW trajectory, compression profile, and CUSUM changepoint detection |
+| **Semantic Flow** | `analyzers/semantic_flow.py` | Inter-sentence embedding similarity variance — LLMs produce uniformly smooth transitions (low variance); human writing jumps erratically (high variance) |
+| **Stylometry** | `analyzers/stylometry.py` | Topic-scrubbed stylometric features: MATTR, function-word ratio, sentence-length dispersion, lexical richness — computed after masking topical content to reduce domain leakage |
 
 ### Scoring Channels
 
@@ -70,7 +72,7 @@ Signals are organized into four independent scoring channels:
 | Channel | Module | Primary Layers |
 |---------|--------|----------------|
 | **Prompt Structure** | `channels/prompt_structure.py` | Preamble, Prompt Signature, Voice Dissonance, Instruction Density |
-| **Stylometric** | `channels/stylometric.py` | Self-Similarity, Semantic Resonance, Perplexity, Fingerprint, TOCSIN |
+| **Stylometric** | `channels/stylometric.py` | Self-Similarity, Semantic Resonance, Perplexity, Fingerprint, TOCSIN, Semantic Flow |
 | **Continuation** | `channels/continuation.py` | Continuation API or Local (multi-truncation, NCD matrix) |
 | **Windowed** | `channels/windowed.py` | Sentence-window scoring (FW trajectory, compression profile, changepoint) |
 
@@ -165,9 +167,6 @@ python -m llm_detector --memory .beet/ --confirm task_002 human reviewer_B
 
 # Check an attempter's history
 python -m llm_detector --memory .beet/ --attempter-history worker_42
-
-# View attempter risk report
-python -m llm_detector --memory .beet/ --risk-report
 
 # View memory summary
 python -m llm_detector --memory .beet/ --memory-summary
@@ -327,6 +326,7 @@ llm_detector/                  # Main package
         continuation_local.py
         perplexity.py
         stylometry.py
+        semantic_flow.py
         windowing.py
         token_cohesiveness.py
 
@@ -425,7 +425,7 @@ python -m llm_detector --web
 streamlit run llm_detector/dashboard.py
 ```
 
-The web dashboard opens in your browser and provides the same five pages as the desktop GUI (Analysis, Configuration, Memory & Learning, Calibration, Reports), without requiring a local display.
+The web dashboard opens in your browser and provides the same seven pages as the desktop GUI (Analysis, Configuration, Memory & Learning, Calibration, Reports, Quick Reference, Precheck), without requiring a local display.
 
 ### File Mode (XLSX/CSV/PDF)
 
@@ -449,28 +449,51 @@ python -m llm_detector document.pdf
 | `--attempter` | Filter by attempter name (substring match) |
 | `--no-similarity` | Skip cross-submission similarity analysis |
 | `--similarity-threshold` | Jaccard threshold for similarity flagging (default: 0.40) |
+| `--similarity-store JSONL` | Path to persistent similarity store JSONL |
 | `--no-layer3` | Skip continuation analysis entirely |
 | `--disable-channel CHANNELS` | Comma-separated channel names to disable for ablation (`prompt_structure`, `stylometric`, `continuation`, `windowed`) |
 | `--api-key` | API key for DNA-GPT continuation analysis |
 | `--provider` | LLM provider: `anthropic` or `openai` (default: anthropic) |
+| `--dna-model MODEL` | Override the DNA-GPT model name |
+| `--ppl-model MODEL` | Override the perplexity model name |
+| `--dna-samples N` | Number of continuation samples per truncation (default: 3) |
+| `--workers N` | Number of parallel worker threads for batch processing (default: 1) |
+| `--batch` | Enable batch processing mode (parallelizes file-level runs) |
 | `--mode` | Detection mode: `task_prompt`, `generic_aigt`, or `auto` (default: auto) |
 | `--collect PATH` | Append scored results to JSONL for baseline accumulation |
 | `--analyze-baselines JSONL` | Compute percentile distributions from accumulated data |
+| `--baselines-csv PATH` | Export baseline analysis to CSV |
 | `--calibrate JSONL` | Build calibration table from labeled baselines |
 | `--cal-table JSON` | Path to calibration table JSON |
-| `--html-report DIR` | Generate HTML report to directory |
+| `--cost-per-prompt N` | Estimated cost per prompt in base units for reporting (default: 400.0) |
+| `--html-report FILE` | Generate HTML report to file path |
 | `--instructions FILE` | Path to custom grading instructions file |
+| `--run-dir DIR` | Root directory for this run; creates a timestamped subfolder and sets default paths for output, report, memory, and similarity store |
 | `--memory DIR` | Enable BEET memory store at given directory |
 | `--memory-summary` | Print memory store summary |
 | `--confirm TASK_ID LABEL REVIEWER` | Record ground truth confirmation |
 | `--attempter-history NAME` | Show historical profile for an attempter |
-| `--risk-report` | Show attempter risk rankings |
 | `--rebuild-calibration` | Rebuild calibration table from confirmed labels |
 | `--rebuild-shadow` | Rebuild shadow model from confirmed labels |
 | `--discover-lexicon` | Run log-odds lexicon discovery on confirmed labels |
 | `--rebuild-centroids` | Rebuild semantic centroids from confirmed labels |
 | `--rebuild-all` | Rebuild all learned artifacts at once |
 | `--labeled-corpus JSONL` | Path to JSONL with raw text (for lexicon/centroid tools) |
+| `--label` | Interactive labeling mode: review results and assign ground truth labels |
+| `--label-output JSONL` | JSONL path for labeled records |
+| `--label-reviewer NAME` | Reviewer name/ID for labeling session |
+| `--label-skip-green` | Skip GREEN determinations during labeling (assume correct) |
+| `--label-skip-red` | Skip RED determinations during labeling (assume correct) |
+| `--label-max N` | Maximum number of items to label per session |
+| `--calibration-report JSONL` | Generate calibration diagnostics report from labeled JSONL |
+| `--calibration-report-csv PATH` | Export labeled data to CSV (use with `--calibration-report`) |
+| `--id-col COL` | Column name or letter (A–Z) for task ID (default: task_id) |
+| `--occ-col COL` | Column name or letter (A–Z) for occupation/area (default: occupation) |
+| `--attempter-col COL` | Column name or letter (A–Z) for attempter/author (default: attempter_name) |
+| `--stage-col COL` | Column name or letter (A–Z) for pipeline stage (default: pipeline_stage_name) |
+| `--attempter-email-col COL` | Column name or letter (A–Z) for attempter email (optional) |
+| `--reviewer-col COL` | Column name or letter (A–Z) for reviewer name (optional) |
+| `--reviewer-email-col COL` | Column name or letter (A–Z) for reviewer email (optional) |
 
 ### Memory System (BEET)
 
@@ -481,11 +504,8 @@ See the [Memory System (BEET)](#memory-system-beet) section above for full docum
 python -m llm_detector input.xlsx --memory .beet/
 
 # Confirm ground-truth labels after human review
-python -m llm_detector --memory .beet/ --confirm task_001 ai
-python -m llm_detector --memory .beet/ --confirm task_002 human
-
-# View attempter risk report
-python -m llm_detector --memory .beet/ --risk-report
+python -m llm_detector --memory .beet/ --confirm task_001 ai reviewer_A
+python -m llm_detector --memory .beet/ --confirm task_002 human reviewer_B
 
 # Rebuild all learned artifacts from confirmed labels
 python -m llm_detector --memory .beet/ --rebuild-all --labeled-corpus texts.jsonl
@@ -569,6 +589,7 @@ python tests/test_continuation_local.py
 python tests/test_windowed.py
 python tests/test_token_cohesiveness.py
 python tests/test_fusion.py
+python tests/test_fusion_edge_cases.py
 python tests/test_normalize.py
 python tests/test_similarity.py
 python tests/test_reporting.py
@@ -578,6 +599,18 @@ python tests/test_lexicon.py
 python tests/test_preamble_cot.py
 python tests/test_xray_spans.py
 python tests/test_cli.py
+python tests/test_baselines_collection.py
+python tests/test_channels_prompt_structure.py
+python tests/test_channels_stylometric.py
+python tests/test_dna_truncation.py
+python tests/test_gui_dashboard_features.py
+python tests/test_io_loaders.py
+python tests/test_mattr_burstiness.py
+python tests/test_ml_fusion.py
+python tests/test_ml_mocked.py
+python tests/test_prompt_structure_channel.py
+python tests/test_semantic_flow.py
+python tests/test_stylometric_channel.py
 ```
 
 ## Design Principles
@@ -605,7 +638,8 @@ python tests/test_cli.py
 | v0.65a | Continuation/windowed/compressibility features |
 | v0.65b | Enhanced similarity (adaptive, semantic, cross-batch) |
 | v0.66 | Span annotation, attempter profiling, reporting, HTML |
-| **v0.67** ✓ | **Memory system + ML tools (shadow model, lexicon discovery, centroids)** |
+| v0.67 ✓ | Memory system + ML tools (shadow model, lexicon discovery, centroids) |
+| **v0.68** ✓ | **Semantic flow analysis, topic-scrubbed stylometry, interactive labeling, run-directory management, expanded column mapping** |
 
 ## License
 
