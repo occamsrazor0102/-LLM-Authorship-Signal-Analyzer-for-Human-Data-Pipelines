@@ -23,13 +23,31 @@ onefile = os.environ.get('ONEFILE', '0') == '1'
 hiddenimports = collect_submodules('llm_detector')
 datas = []
 
+# Submodules that reference uninstalled optional packages or trigger
+# deprecation warnings — exclude them from collection to keep the build
+# log clean and the bundle lean.
+_exclude_prefixes = [
+    'sklearn.externals.array_api_compat.dask',      # requires dask
+    'torch.utils.tensorboard',                       # requires tensorboard
+    'torch.distributed._sharding_spec',              # deprecated alias
+    'torch.distributed._sharded_tensor',             # deprecated alias
+    'torch.distributed._shard.checkpoint',           # deprecated alias
+    'streamlit.external.langchain',                   # requires langchain
+    'catalogue._importlib_metadata',                  # requires zipp
+]
+
+def _filter_excludes(imports):
+    """Remove hiddenimports that match any excluded prefix."""
+    return [m for m in imports
+            if not any(m == p or m.startswith(p + '.') for p in _exclude_prefixes)]
+
 # Optional deps — include if installed, skip gracefully if not
 for mod in ['anthropic', 'openai', 'pypdf', 'spacy', 'ftfy',
             'sentence_transformers', 'sklearn', 'transformers', 'torch',
             'streamlit']:
     try:
         __import__(mod)
-        hiddenimports += collect_submodules(mod)
+        hiddenimports += _filter_excludes(collect_submodules(mod))
         datas += collect_data_files(mod)
     except ImportError:
         pass
@@ -40,7 +58,7 @@ for mod in ['thinc', 'blis', 'cymem', 'preshed', 'murmurhash',
             'langcodes', 'language_data']:
     try:
         __import__(mod)
-        hiddenimports += collect_submodules(mod)
+        hiddenimports += _filter_excludes(collect_submodules(mod))
         datas += collect_data_files(mod)
     except ImportError:
         pass
@@ -54,7 +72,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=_exclude_prefixes,
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
