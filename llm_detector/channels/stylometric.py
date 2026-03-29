@@ -5,6 +5,34 @@ Combines NSSI, semantic resonance, perplexity, and fingerprints.
 
 from llm_detector.channels import ChannelResult
 
+_SEV = ChannelResult.SEV_ORDER
+
+
+def _apply_supporting(det, confidence, label, score, severity, parts,
+                      amber_conf=0.55, yellow_conf=0.30, yellow_promote=True):
+    """Apply the common supporting-signal boost/promote pattern.
+
+    When severity is already AMBER+, boost score by 0.10/0.05.
+    Otherwise, promote severity to match the sub-signal's determination.
+    """
+    if det == 'AMBER':
+        if _SEV.get(severity, 0) >= 2:  # already AMBER or RED
+            score = min(score + 0.10, 1.0)
+            parts.append(f"{label}(AMBER,boost)")
+        else:
+            score = max(score, confidence or amber_conf)
+            severity = max(severity, 'AMBER', key=lambda s: _SEV.get(s, 0))
+            parts.append(f"{label}(AMBER)")
+    elif det == 'YELLOW':
+        if severity != 'GREEN':
+            score = min(score + 0.05, 1.0)
+            parts.append(f"{label}(YELLOW,supporting)")
+        elif yellow_promote:
+            score = max(score, confidence or yellow_conf)
+            severity = 'YELLOW'
+            parts.append(f"{label}(YELLOW)")
+    return score, severity
+
 
 def score_stylometric(fingerprint_score, self_sim, voice_dis=None, semantic=None, ppl=None, tocsin=None, semantic_flow=None):
     """Score stylometric channel. Returns ChannelResult."""
@@ -13,7 +41,6 @@ def score_stylometric(fingerprint_score, self_sim, voice_dis=None, semantic=None
     severity = 'GREEN'
     parts = []
 
-    # Fingerprints: supporting-only
     if fingerprint_score > 0:
         sub['fingerprints'] = fingerprint_score
 
@@ -38,57 +65,23 @@ def score_stylometric(fingerprint_score, self_sim, voice_dis=None, semantic=None
             severity = 'YELLOW'
             parts.append(f"NSSI={nssi_score:.2f}/{nssi_signals}sig(YELLOW)")
 
-    # Semantic resonance: supporting signal
+    # Supporting signals
     if semantic and semantic.get('determination'):
-        sem_det = semantic['determination']
         sem_delta = semantic.get('semantic_delta', 0)
         sub['semantic_ai_score'] = semantic.get('semantic_ai_mean', 0)
         sub['semantic_delta'] = sem_delta
+        score, severity = _apply_supporting(
+            semantic['determination'], semantic.get('confidence'),
+            f"Sem=delta={sem_delta:.2f}", score, severity, parts)
 
-        if sem_det == 'AMBER':
-            if severity in ('RED', 'AMBER'):
-                score = min(score + 0.10, 1.0)
-                parts.append(f"Sem=AMBER(delta={sem_delta:.2f},boost)")
-            else:
-                score = max(score, semantic.get('confidence', 0.55))
-                severity = max(severity, 'AMBER',
-                               key=lambda s: ChannelResult.SEV_ORDER.get(s, 0))
-                parts.append(f"Sem=AMBER(delta={sem_delta:.2f})")
-        elif sem_det == 'YELLOW':
-            if severity != 'GREEN':
-                score = min(score + 0.05, 1.0)
-                parts.append(f"Sem=YELLOW(delta={sem_delta:.2f},supporting)")
-            else:
-                score = max(score, semantic.get('confidence', 0.30))
-                severity = 'YELLOW'
-                parts.append(f"Sem=YELLOW(delta={sem_delta:.2f})")
-
-    # Perplexity: supporting signal
     if ppl and ppl.get('determination'):
-        ppl_det = ppl['determination']
         ppl_val = ppl.get('perplexity', 0)
         sub['perplexity'] = ppl_val
+        score, severity = _apply_supporting(
+            ppl['determination'], ppl.get('confidence'),
+            f"PPL={ppl_val:.0f}", score, severity, parts)
 
-        if ppl_det == 'AMBER':
-            if severity in ('RED', 'AMBER'):
-                score = min(score + 0.10, 1.0)
-                parts.append(f"PPL={ppl_val:.0f}(AMBER,boost)")
-            else:
-                score = max(score, ppl.get('confidence', 0.55))
-                severity = max(severity, 'AMBER',
-                               key=lambda s: ChannelResult.SEV_ORDER.get(s, 0))
-                parts.append(f"PPL={ppl_val:.0f}(AMBER)")
-        elif ppl_det == 'YELLOW':
-            if severity != 'GREEN':
-                score = min(score + 0.05, 1.0)
-                parts.append(f"PPL={ppl_val:.0f}(YELLOW,supporting)")
-            else:
-                score = max(score, ppl.get('confidence', 0.30))
-                severity = 'YELLOW'
-                parts.append(f"PPL={ppl_val:.0f}(YELLOW)")
-
-    # Surprisal variance & volatility decay: supporting signal
-    # Low variance + high decay ratio signals AI-generated uniformity
+    # Surprisal variance & volatility decay
     if ppl:
         s_var = ppl.get('surprisal_variance', 0.0)
         v_decay = ppl.get('volatility_decay_ratio', 1.0)
@@ -103,66 +96,28 @@ def score_stylometric(fingerprint_score, self_sim, voice_dis=None, semantic=None
                     score = min(score + 0.04, 1.0)
                     parts.append(f"SurpVar={s_var:.2f}/Decay={v_decay:.2f}(mild)")
 
-    # Token cohesiveness (TOCSIN): supporting signal
     if tocsin and tocsin.get('determination'):
-        tocsin_det = tocsin['determination']
         sub['cohesiveness'] = tocsin.get('cohesiveness', 0)
+        score, severity = _apply_supporting(
+            tocsin['determination'], tocsin.get('confidence'),
+            f"TOCSIN=coh={tocsin.get('cohesiveness', 0):.4f}", score, severity, parts,
+            yellow_promote=False)
 
-        if tocsin_det == 'AMBER':
-            if severity in ('RED', 'AMBER'):
-                score = min(score + 0.10, 1.0)
-                parts.append(f"TOCSIN=AMBER(coh={tocsin['cohesiveness']:.4f},boost)")
-            else:
-                score = max(score, tocsin.get('confidence', 0.50))
-                severity = max(severity, 'AMBER',
-                               key=lambda s: ChannelResult.SEV_ORDER.get(s, 0))
-                parts.append(f"TOCSIN=AMBER(coh={tocsin['cohesiveness']:.4f})")
-        elif tocsin_det == 'YELLOW' and severity != 'GREEN':
-            score = min(score + 0.05, 1.0)
-            parts.append(f"TOCSIN=YELLOW(supporting)")
-
-    # Binoculars contrastive LM ratio: supporting signal
     if ppl and ppl.get('binoculars_determination'):
-        bino_det = ppl['binoculars_determination']
-        bino_score = ppl.get('binoculars_score', 0)
-        sub['binoculars_score'] = bino_score
+        bino_score_val = ppl.get('binoculars_score', 0)
+        sub['binoculars_score'] = bino_score_val
+        score, severity = _apply_supporting(
+            ppl['binoculars_determination'], ppl.get('confidence'),
+            f"Bino={bino_score_val:.2f}", score, severity, parts,
+            yellow_promote=False)
 
-        if bino_det == 'AMBER':
-            if severity in ('RED', 'AMBER'):
-                score = min(score + 0.10, 1.0)
-                parts.append(f"Bino={bino_score:.2f}(AMBER,boost)")
-            else:
-                score = max(score, ppl.get('confidence', 0.55))
-                severity = max(severity, 'AMBER',
-                               key=lambda s: ChannelResult.SEV_ORDER.get(s, 0))
-                parts.append(f"Bino={bino_score:.2f}(AMBER)")
-        elif bino_det == 'YELLOW' and severity != 'GREEN':
-            score = min(score + 0.05, 1.0)
-            parts.append(f"Bino={bino_score:.2f}(YELLOW,supporting)")
-
-    # Semantic flow: inter-sentence smoothness signal
     if semantic_flow and semantic_flow.get('determination'):
-        flow_det = semantic_flow['determination']
         flow_var = semantic_flow.get('flow_variance', 0)
         sub['flow_variance'] = flow_var
-
-        if flow_det == 'AMBER':
-            if severity in ('RED', 'AMBER'):
-                score = min(score + 0.10, 1.0)
-                parts.append(f"Flow=AMBER(var={flow_var:.4f},boost)")
-            else:
-                score = max(score, semantic_flow.get('confidence', 0.50))
-                severity = max(severity, 'AMBER',
-                               key=lambda s: ChannelResult.SEV_ORDER.get(s, 0))
-                parts.append(f"Flow=AMBER(var={flow_var:.4f})")
-        elif flow_det == 'YELLOW':
-            if severity != 'GREEN':
-                score = min(score + 0.05, 1.0)
-                parts.append(f"Flow=YELLOW(var={flow_var:.4f},supporting)")
-            else:
-                score = max(score, semantic_flow.get('confidence', 0.25))
-                severity = 'YELLOW'
-                parts.append(f"Flow=YELLOW(var={flow_var:.4f})")
+        score, severity = _apply_supporting(
+            semantic_flow['determination'], semantic_flow.get('confidence'),
+            f"Flow=var={flow_var:.4f}", score, severity, parts,
+            yellow_conf=0.25)
 
     # Perplexity burstiness: low burstiness = AI uniform rhythm
     if ppl and ppl.get('ppl_burstiness', 0) > 0 and ppl.get('sentence_ppl_count', 0) >= 3:

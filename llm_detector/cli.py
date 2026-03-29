@@ -24,7 +24,11 @@ from llm_detector.similarity import (
     apply_similarity_adjustments, save_similarity_store, cross_batch_similarity,
 )
 from llm_detector.io import load_xlsx, load_csv, load_pdf
-from llm_detector._constants import STREAMLIT_MIN_VERSION as _STREAMLIT_MIN_VERSION
+from llm_detector._constants import (
+    STREAMLIT_MIN_VERSION as _STREAMLIT_MIN_VERSION,
+    PIPELINE_VERSION, DETERMINATION_ICONS, FLAGGED_DETERMINATIONS,
+    get_length_bin,
+)
 
 
 def _is_frozen():
@@ -47,9 +51,7 @@ def _real_python():
 
 def print_result(r, verbose=False):
     """Pretty-print a single result."""
-    icons = {'RED': '\U0001f534', 'AMBER': '\U0001f7e0', 'YELLOW': '\U0001f7e1',
-             'GREEN': '\U0001f7e2', 'MIXED': '\U0001f535', 'REVIEW': '\u26aa'}
-    icon = icons.get(r['determination'], '?')
+    icon = DETERMINATION_ICONS.get(r['determination'], '?')
 
     print(f"\n  {icon} [{r['determination']}] {r['task_id'][:20]}  |  {r['occupation'][:45]}")
     print(f"     Attempter: {r['attempter'] or '(unknown)'} | Stage: {r['stage']} | Words: {r['word_count']} | Mode: {r.get('mode', '?')}")
@@ -149,9 +151,7 @@ def _sort_for_labeling(results):
 
 def _format_labeling_display(r, text_map=None, show_text_chars=300):
     """Format a single result for the labeling interface."""
-    icons = {'RED': '\U0001f534', 'AMBER': '\U0001f7e0', 'YELLOW': '\U0001f7e1',
-             'GREEN': '\U0001f7e2', 'MIXED': '\U0001f535', 'REVIEW': '\u26aa'}
-    icon = icons.get(r['determination'], '?')
+    icon = DETERMINATION_ICONS.get(r['determination'], '?')
 
     lines = []
     lines.append(f"\n{'='*80}")
@@ -306,7 +306,7 @@ def interactive_label(results, text_map=None, output_path=None, reviewer='',
             continue
 
         # Confusion matrix tracking
-        pipeline_flagged = r.get('determination') in ('RED', 'AMBER', 'MIXED')
+        pipeline_flagged = r.get('determination') in FLAGGED_DETERMINATIONS
         if ground_truth == 'ai' and pipeline_flagged:
             stats['true_positives'] += 1
         elif ground_truth == 'human' and pipeline_flagged:
@@ -327,7 +327,7 @@ def interactive_label(results, text_map=None, output_path=None, reviewer='',
             'reviewer': reviewer,
             'notes': notes,
             'timestamp': datetime.now().isoformat(),
-            'pipeline_version': 'v0.66',
+            'pipeline_version': PIPELINE_VERSION,
             # Carry forward all scores for calibration
             'confidence': r.get('confidence', 0),
             'word_count': r.get('word_count', 0),
@@ -336,15 +336,7 @@ def interactive_label(results, text_map=None, output_path=None, reviewer='',
         }
 
         # Length bin for stratified calibration
-        wc = r.get('word_count', 0)
-        if wc < 100:
-            record['length_bin'] = 'short'
-        elif wc < 300:
-            record['length_bin'] = 'medium'
-        elif wc < 800:
-            record['length_bin'] = 'long'
-        else:
-            record['length_bin'] = 'very_long'
+        record['length_bin'] = get_length_bin(r.get('word_count', 0))
 
         labeled_records.append(record)
 
@@ -631,7 +623,7 @@ def calibration_report(jsonl_path, cal_table=None, output_csv=None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='LLM Detection Pipeline v0.66')
+    parser = argparse.ArgumentParser(description=f'LLM Detection Pipeline {PIPELINE_VERSION}')
     parser.add_argument('input', nargs='?', help='Input file (.xlsx, .csv, or .pdf)')
     parser.add_argument('--gui', action='store_true', help='Launch desktop GUI mode')
     parser.add_argument('--web', action='store_true', help='Launch Streamlit web dashboard')
@@ -1007,7 +999,7 @@ def main():
     layer3_label = " + L3" if run_l3 else ""
     use_batch = getattr(args, 'batch', False) and args.api_key and args.provider == 'anthropic'
     dna_label = " + DNA-GPT (batch)" if use_batch else (" + DNA-GPT" if args.api_key else "")
-    print(f"Processing {len(tasks)} tasks through pipeline v0.66{layer3_label}{dna_label}...")
+    print(f"Processing {len(tasks)} tasks through pipeline {PIPELINE_VERSION}{layer3_label}{dna_label}...")
 
     results = []
     text_map = {}
@@ -1082,20 +1074,16 @@ def main():
 
     det_counts = Counter(r['determination'] for r in results)
     print(f"\n{'='*90}")
-    print(f"  PIPELINE v0.66 RESULTS (n={len(results)})")
+    print(f"  PIPELINE {PIPELINE_VERSION} RESULTS (n={len(results)})")
     print(f"{'='*90}")
     all_dets = ['RED', 'AMBER', 'MIXED', 'YELLOW', 'REVIEW', 'GREEN']
-    icons = {
-        'RED': '\U0001f534', 'AMBER': '\U0001f7e0', 'YELLOW': '\U0001f7e1',
-        'GREEN': '\U0001f7e2', 'MIXED': '\U0001f535', 'REVIEW': '\u26aa',
-    }
     for det in all_dets:
         ct = det_counts.get(det, 0)
         if ct > 0 or det in ('RED', 'AMBER', 'YELLOW', 'GREEN'):
             pct = ct / len(results) * 100
-            print(f"  {icons[det]} {det:>8}: {ct:>4} ({pct:.1f}%)")
+            print(f"  {DETERMINATION_ICONS[det]} {det:>8}: {ct:>4} ({pct:.1f}%)")
 
-    flagged = [r for r in results if r['determination'] in ('RED', 'AMBER', 'MIXED')]
+    flagged = [r for r in results if r['determination'] in FLAGGED_DETERMINATIONS]
     if flagged:
         print(f"\n{'='*90}")
         print(f"  FLAGGED SUBMISSIONS: {len(flagged)}")
@@ -1150,15 +1138,9 @@ def main():
                       f"(MH={cf['minhash_similarity']:.2f}, batch={cf['historical_batch'][:10]})")
         save_similarity_store(results, text_map, args.similarity_store)
 
-    # Shadow model disagreement check (if memory store has a trained model)
+    # Report shadow model disagreements (already computed in pipeline)
     if store:
-        shadow_count = 0
-        for r in results:
-            disagreement = store.check_shadow_disagreement(r)
-            r['shadow_disagreement'] = disagreement
-            r['shadow_ai_prob'] = (disagreement or {}).get('shadow_ai_prob')
-            if disagreement:
-                shadow_count += 1
+        shadow_count = sum(1 for r in results if r.get('shadow_disagreement'))
         if shadow_count:
             print(f"\n  SHADOW MODEL: {shadow_count} disagreements with rule engine")
 
@@ -1195,7 +1177,7 @@ def main():
                     cal_out = label_path.replace('.jsonl', '_calibration.json')
                     save_calibration(cal, cal_out)
 
-    default_name = os.path.basename(args.input).rsplit('.', 1)[0] + '_pipeline_v066.csv'
+    default_name = os.path.basename(args.input).rsplit('.', 1)[0] + f'_pipeline_{PIPELINE_VERSION}.csv'
     input_dir = os.path.dirname(os.path.abspath(args.input))
     output_path = args.output or os.path.join(input_dir, default_name)
 

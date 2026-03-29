@@ -111,8 +111,7 @@ def determine(preamble_score, preamble_severity, prompt_sig, voice_dis,
     def _apply_cap(det, reason, conf):
         if severity_cap is None:
             return det, reason, conf
-        sev_order = {'GREEN': 0, 'YELLOW': 1, 'REVIEW': 1, 'AMBER': 2, 'RED': 3}
-        if sev_order.get(det, 0) > sev_order.get(severity_cap, 3):
+        if ChannelResult.SEV_ORDER.get(det, 0) > ChannelResult.SEV_ORDER.get(severity_cap, 3):
             gate_reason = lang_gate.get('reason', 'language support gate')
             return severity_cap, f"{reason} [capped from {det}: {gate_reason}]", min(conf, 0.40)
         return det, reason, conf

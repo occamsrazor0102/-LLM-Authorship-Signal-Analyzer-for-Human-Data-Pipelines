@@ -18,6 +18,7 @@ from llm_detector.io import load_xlsx, load_csv
 from llm_detector._constants import (
     GROUND_TRUTH_LABELS as _GROUND_TRUTH_LABELS,
     STREAMLIT_MIN_VERSION as _STREAMLIT_MIN_VERSION,
+    PIPELINE_VERSION, get_length_bin,
 )
 
 if HAS_TK:
@@ -324,7 +325,7 @@ class DetectorGUI:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("LLM Authorship Signal Analyzer v0.67")
+        self.root.title(f"LLM Authorship Signal Analyzer {PIPELINE_VERSION}")
         self.root.geometry("1180x920")
 
         self._memory_store = None
@@ -2715,12 +2716,6 @@ if HAS_TK:
                 notes = self._notes_var.get().strip()
 
                 wc = r.get('word_count', 0)
-                length_bin = (
-                    'short' if wc < 100 else
-                    'medium' if wc < 300 else
-                    'long' if wc < 800 else
-                    'very_long'
-                )
                 record = {
                     'task_id': r.get('task_id', ''),
                     'attempter': r.get('attempter', ''),
@@ -2731,12 +2726,12 @@ if HAS_TK:
                     'reviewer': self._reviewer,
                     'notes': notes,
                     'timestamp': datetime.now().isoformat(),
-                    'pipeline_version': 'v0.66',
+                    'pipeline_version': PIPELINE_VERSION,
                     'confidence': r.get('confidence', 0),
                     'word_count': wc,
                     'domain': r.get('domain', ''),
                     'mode': r.get('mode', ''),
-                    'length_bin': length_bin,
+                    'length_bin': get_length_bin(wc),
                 }
 
                 with open(self._output_path, 'a') as f:

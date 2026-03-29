@@ -1,10 +1,11 @@
 """Full analysis pipeline orchestration."""
 
+from llm_detector._constants import PIPELINE_VERSION, get_length_bin, is_ssi_triggered
 from llm_detector.compat import HAS_SEMANTIC, HAS_PERPLEXITY
 from llm_detector.normalize import normalize_text
 from llm_detector.language_gate import check_language_support
 from llm_detector.analyzers.preamble import run_preamble
-from llm_detector.analyzers.fingerprint import run_fingerprint, run_fingerprint_spans
+from llm_detector.analyzers.fingerprint import run_fingerprint_full
 from llm_detector.lexicon.integration import (
     run_prompt_signature_enhanced,
     run_voice_dissonance_enhanced,
@@ -31,19 +32,14 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
                    disabled_channels=None, precomputed_continuation=None,
                    ppl_model=None):
     """Run full v0.68 pipeline on a single prompt. Returns result dict."""
-    # Normalization pre-pass
     normalized_text, norm_report = normalize_text(text)
     word_count_raw = len(text.split())
     word_count = len(normalized_text.split())
-
-    # Fairness / language support gate
     lang_gate = check_language_support(normalized_text, word_count)
-
     text_for_analysis = normalized_text
 
-    # Run all analyzers
     preamble_score, preamble_severity, preamble_hits, preamble_spans = run_preamble(text_for_analysis)
-    fingerprint_score, fingerprint_hits, fingerprint_rate = run_fingerprint(text_for_analysis)
+    fingerprint_score, fingerprint_hits, fingerprint_rate, fingerprint_spans = run_fingerprint_full(text_for_analysis)
     prompt_sig = run_prompt_signature_enhanced(text_for_analysis)
     voice_dis = run_voice_dissonance_enhanced(text_for_analysis)
     instr_density = run_instruction_density_enhanced(
@@ -71,27 +67,22 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
     ppl = run_perplexity(text_for_analysis, model_id=ppl_model)
     tocsin = run_token_cohesiveness(text_for_analysis)
 
-    # Semantic flow: inter-sentence embedding similarity variance
     semantic_flow = run_semantic_flow(text_for_analysis)
 
-    # FEAT 10: Surprisal trajectory from per-token losses
     surprisal_traj = {}
     token_losses = ppl.get('token_losses')
     if token_losses:
         surprisal_traj = score_surprisal_windows(token_losses)
 
-    # Topic-scrubbed stylometry
     masked_text, mask_count = mask_topical_content(text_for_analysis)
     stylo_features = extract_stylometric_features(text_for_analysis, masked_text)
-
-    # Windowed scoring
     window_result = score_windows(text_for_analysis)
 
-    # Detection spans — merged from all annotation sources
+    # Detection spans merged from all annotation sources
     detection_spans = list(preamble_spans)
     detection_spans.extend(
         {'start': s, 'end': e, 'text': t, 'source': 'fingerprint', 'label': w, 'type': 'fingerprint'}
-        for s, e, t, _, w in run_fingerprint_spans(text_for_analysis)
+        for s, e, t, _, w in fingerprint_spans
     )
     detection_spans.extend(prompt_sig.get('pack_spans', []))
     detection_spans.extend(voice_dis.get('pack_spans', []))
@@ -103,7 +94,6 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         })
     detection_spans.sort(key=lambda x: x.get('start', 0))
 
-    # Evidence fusion
     det, reason, confidence, channel_details = determine(
         preamble_score, preamble_severity, prompt_sig, voice_dis, instr_density, word_count,
         self_sim=self_sim, cont_result=cont_result,
@@ -116,21 +106,11 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         disabled_channels=disabled_channels,
     )
 
-    # Conformal calibration
-    if word_count < 100:
-        length_bin = 'short'
-    elif word_count < 300:
-        length_bin = 'medium'
-    elif word_count < 800:
-        length_bin = 'long'
-    else:
-        length_bin = 'very_long'
-
+    length_bin = get_length_bin(word_count)
     cal_result = apply_calibration(confidence, cal_table, domain=domain, length_bin=length_bin)
 
-    # Audit trail
     audit_trail = {
-        'pipeline_version': 'v0.68',
+        'pipeline_version': PIPELINE_VERSION,
         'mode_resolved': channel_details.get('mode', mode),
         'channels': channel_details.get('channels', {}),
         'fairness_gate': {
@@ -164,7 +144,7 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         'mode': channel_details.get('mode', mode),
         'channel_details': channel_details,
         'audit_trail': audit_trail,
-        'pipeline_version': 'v0.68',
+        'pipeline_version': PIPELINE_VERSION,
         # Detection spans
         'detection_spans': detection_spans,
         # Normalization
@@ -213,12 +193,7 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         'voice_dissonance_calcs': voice_dis['calcs'],
         'voice_dissonance_hedges': voice_dis['hedges'],
         # SSI
-        'ssi_triggered': (
-            voice_dis['spec_score'] >= (5.0 if voice_dis['contractions'] == 0 else 7.0)
-            and voice_dis['voice_score'] < 0.5
-            and voice_dis['hedges'] == 0
-            and word_count >= 150
-        ),
+        'ssi_triggered': is_ssi_triggered(voice_dis, word_count),
         # Metadata
         'ground_truth': ground_truth,
         'language': language,
@@ -251,7 +226,6 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         'stylo_mattr': stylo_features.get('mattr', 0.0),
     }
 
-    # Semantic resonance
     result.update({
         'semantic_resonance_ai_score': semantic.get('semantic_ai_score', 0.0),
         'semantic_resonance_human_score': semantic.get('semantic_human_score', 0.0),
@@ -262,7 +236,6 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         'semantic_resonance_confidence': semantic.get('confidence', 0.0),
     })
 
-    # Perplexity
     result.update({
         'perplexity_value': ppl.get('perplexity', 0.0),
         'perplexity_determination': ppl.get('determination'),
@@ -275,119 +248,72 @@ def analyze_prompt(text, task_id='', occupation='', attempter='', stage='',
         'binoculars_determination': ppl.get('binoculars_determination'),
     })
 
-    # Self-similarity (NSSI)
-    if self_sim:
-        result.update({
-            'self_similarity_nssi_score': self_sim.get('nssi_score', 0.0),
-            'self_similarity_nssi_signals': self_sim.get('nssi_signals', 0),
-            'self_similarity_determination': self_sim.get('determination'),
-            'self_similarity_confidence': self_sim.get('confidence', 0.0),
-            'self_similarity_formulaic_density': self_sim.get('formulaic_density', 0.0),
-            'self_similarity_power_adj_density': self_sim.get('power_adj_density', 0.0),
-            'self_similarity_demonstrative_density': self_sim.get('demonstrative_density', 0.0),
-            'self_similarity_transition_density': self_sim.get('transition_density', 0.0),
-            'self_similarity_scare_quote_density': self_sim.get('scare_quote_density', 0.0),
-            'self_similarity_emdash_density': self_sim.get('emdash_density', 0.0),
-            'self_similarity_this_the_start_rate': self_sim.get('this_the_start_rate', 0.0),
-            'self_similarity_section_depth': self_sim.get('section_depth', 0),
-            'self_similarity_sent_length_cv': self_sim.get('sent_length_cv', 0.0),
-            'self_similarity_comp_ratio': self_sim.get('comp_ratio', 0.0),
-            'self_similarity_hapax_ratio': self_sim.get('hapax_ratio', 0.0),
-            'self_similarity_hapax_count': self_sim.get('hapax_count', 0),
-            'self_similarity_unique_words': self_sim.get('unique_words', 0),
-            'self_similarity_shuffled_comp_ratio': self_sim.get('shuffled_comp_ratio', 0.0),
-            'self_similarity_structural_compression_delta': self_sim.get('structural_compression_delta', 0.0),
-        })
-    else:
-        result.update({
-            'self_similarity_nssi_score': 0.0, 'self_similarity_nssi_signals': 0,
-            'self_similarity_determination': None, 'self_similarity_confidence': 0.0,
-            'self_similarity_formulaic_density': 0.0, 'self_similarity_power_adj_density': 0.0,
-            'self_similarity_demonstrative_density': 0.0, 'self_similarity_transition_density': 0.0,
-            'self_similarity_scare_quote_density': 0.0, 'self_similarity_emdash_density': 0.0,
-            'self_similarity_this_the_start_rate': 0.0, 'self_similarity_section_depth': 0,
-            'self_similarity_sent_length_cv': 0.0, 'self_similarity_comp_ratio': 0.0,
-            'self_similarity_hapax_ratio': 0.0, 'self_similarity_hapax_count': 0,
-            'self_similarity_unique_words': 0,
-            'self_similarity_shuffled_comp_ratio': 0.0,
-            'self_similarity_structural_compression_delta': 0.0,
-        })
+    _ss = self_sim or {}
+    result.update({
+        'self_similarity_nssi_score': _ss.get('nssi_score', 0.0),
+        'self_similarity_nssi_signals': _ss.get('nssi_signals', 0),
+        'self_similarity_determination': _ss.get('determination'),
+        'self_similarity_confidence': _ss.get('confidence', 0.0),
+        'self_similarity_formulaic_density': _ss.get('formulaic_density', 0.0),
+        'self_similarity_power_adj_density': _ss.get('power_adj_density', 0.0),
+        'self_similarity_demonstrative_density': _ss.get('demonstrative_density', 0.0),
+        'self_similarity_transition_density': _ss.get('transition_density', 0.0),
+        'self_similarity_scare_quote_density': _ss.get('scare_quote_density', 0.0),
+        'self_similarity_emdash_density': _ss.get('emdash_density', 0.0),
+        'self_similarity_this_the_start_rate': _ss.get('this_the_start_rate', 0.0),
+        'self_similarity_section_depth': _ss.get('section_depth', 0),
+        'self_similarity_sent_length_cv': _ss.get('sent_length_cv', 0.0),
+        'self_similarity_comp_ratio': _ss.get('comp_ratio', 0.0),
+        'self_similarity_hapax_ratio': _ss.get('hapax_ratio', 0.0),
+        'self_similarity_hapax_count': _ss.get('hapax_count', 0),
+        'self_similarity_unique_words': _ss.get('unique_words', 0),
+        'self_similarity_shuffled_comp_ratio': _ss.get('shuffled_comp_ratio', 0.0),
+        'self_similarity_structural_compression_delta': _ss.get('structural_compression_delta', 0.0),
+    })
 
-    # Continuation (DNA-GPT)
-    if cont_result:
-        proxy = cont_result.get('proxy_features', {})
-        result.update({
-            'continuation_bscore': cont_result.get('bscore', 0.0),
-            'continuation_bscore_max': cont_result.get('bscore_max', 0.0),
-            'continuation_determination': cont_result.get('determination'),
-            'continuation_confidence': cont_result.get('confidence', 0.0),
-            'continuation_n_samples': cont_result.get('n_samples', 0),
-            'continuation_mode': 'local' if proxy else 'api',
-            'continuation_ncd': proxy.get('ncd', 0.0),
-            'continuation_internal_overlap': proxy.get('internal_overlap', 0.0),
-            'continuation_cond_surprisal': proxy.get('cond_surprisal', 0.0),
-            'continuation_repeat4': proxy.get('repeat4', 0.0),
-            'continuation_ttr': proxy.get('ttr', 0.0),
-            'continuation_composite': proxy.get('composite', 0.0),
-            'continuation_composite_variance': proxy.get('composite_variance', 0.0),
-            'continuation_composite_stability': proxy.get('composite_stability', 0.0),
-            'continuation_improvement_rate': proxy.get('improvement_rate', 0.0),
-            'continuation_ncd_matrix_mean': proxy.get('ncd_matrix_mean', 0.0),
-            'continuation_ncd_matrix_variance': proxy.get('ncd_matrix_variance', 0.0),
-            'continuation_ncd_matrix_min': proxy.get('ncd_matrix_min', 0.0),
-        })
-    else:
-        result.update({
-            'continuation_bscore': 0.0, 'continuation_bscore_max': 0.0,
-            'continuation_determination': None, 'continuation_confidence': 0.0,
-            'continuation_n_samples': 0, 'continuation_mode': None,
-            'continuation_ncd': 0.0, 'continuation_internal_overlap': 0.0,
-            'continuation_cond_surprisal': 0.0, 'continuation_repeat4': 0.0,
-            'continuation_ttr': 0.0, 'continuation_composite': 0.0,
-            'continuation_composite_variance': 0.0, 'continuation_composite_stability': 0.0,
-            'continuation_improvement_rate': 0.0,
-            'continuation_ncd_matrix_mean': 0.0, 'continuation_ncd_matrix_variance': 0.0,
-            'continuation_ncd_matrix_min': 0.0,
-        })
+    _cr = cont_result or {}
+    _proxy = _cr.get('proxy_features', {})
+    result.update({
+        'continuation_bscore': _cr.get('bscore', 0.0),
+        'continuation_bscore_max': _cr.get('bscore_max', 0.0),
+        'continuation_determination': _cr.get('determination'),
+        'continuation_confidence': _cr.get('confidence', 0.0),
+        'continuation_n_samples': _cr.get('n_samples', 0),
+        'continuation_mode': ('local' if _proxy else 'api') if cont_result else None,
+        'continuation_ncd': _proxy.get('ncd', 0.0),
+        'continuation_internal_overlap': _proxy.get('internal_overlap', 0.0),
+        'continuation_cond_surprisal': _proxy.get('cond_surprisal', 0.0),
+        'continuation_repeat4': _proxy.get('repeat4', 0.0),
+        'continuation_ttr': _proxy.get('ttr', 0.0),
+        'continuation_composite': _proxy.get('composite', 0.0),
+        'continuation_composite_variance': _proxy.get('composite_variance', 0.0),
+        'continuation_composite_stability': _proxy.get('composite_stability', 0.0),
+        'continuation_improvement_rate': _proxy.get('improvement_rate', 0.0),
+        'continuation_ncd_matrix_mean': _proxy.get('ncd_matrix_mean', 0.0),
+        'continuation_ncd_matrix_variance': _proxy.get('ncd_matrix_variance', 0.0),
+        'continuation_ncd_matrix_min': _proxy.get('ncd_matrix_min', 0.0),
+    })
 
-    # Token cohesiveness (TOCSIN)
     result.update({
         'tocsin_cohesiveness': tocsin.get('cohesiveness', 0.0),
         'tocsin_cohesiveness_std': tocsin.get('cohesiveness_std', 0.0),
         'tocsin_determination': tocsin.get('determination'),
         'tocsin_confidence': tocsin.get('confidence', 0.0),
-    })
-
-    # Perplexity compound signals (FEAT 7)
-    result.update({
         'perplexity_comp_ratio': ppl.get('comp_ratio', 0.0),
         'perplexity_zlib_normalized_ppl': ppl.get('zlib_normalized_ppl', 0.0),
         'perplexity_comp_ppl_ratio': ppl.get('comp_ppl_ratio', 0.0),
-    })
-
-    # Semantic flow (inter-sentence variance)
-    result.update({
         'semantic_flow_variance': semantic_flow.get('flow_variance', 0.0),
         'semantic_flow_mean': semantic_flow.get('flow_mean', 0.0),
         'semantic_flow_std': semantic_flow.get('flow_std', 0.0),
         'semantic_flow_determination': semantic_flow.get('determination'),
         'semantic_flow_confidence': semantic_flow.get('confidence', 0.0),
-    })
-
-    # Perplexity burstiness
-    result.update({
         'ppl_burstiness': ppl.get('ppl_burstiness', 0.0),
         'sentence_ppl_count': ppl.get('sentence_ppl_count', 0),
-    })
-
-    # Surprisal trajectory (FEAT 10)
-    result.update({
         'surprisal_trajectory_cv': surprisal_traj.get('surprisal_trajectory_cv', 0.0),
         'surprisal_var_of_var': surprisal_traj.get('surprisal_var_of_var', 0.0),
         'surprisal_stationarity': surprisal_traj.get('surprisal_stationarity', 0.0),
     })
 
-    # Shadow model disagreement check (if memory store is active)
     shadow_disagreement = None
     if memory_store is not None:
         shadow_disagreement = memory_store.check_shadow_disagreement(result)

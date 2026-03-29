@@ -6,6 +6,8 @@ estimation for BEET pipeline batch results.
 
 from collections import defaultdict, Counter
 
+from llm_detector._constants import FLAGGED_DETERMINATIONS
+
 
 def profile_attempters(results, min_submissions=2):
     """Aggregate detection results by attempter.
@@ -31,7 +33,7 @@ def profile_attempters(results, min_submissions=2):
         # Identify primary detection pattern for flagged submissions
         flagged_channels = Counter()
         for r in submissions:
-            if r['determination'] in ('RED', 'AMBER', 'MIXED'):
+            if r['determination'] in FLAGGED_DETERMINATIONS:
                 cd = r.get('channel_details', {}).get('channels', {})
                 for ch_name, ch_info in cd.items():
                     if ch_info.get('severity') in ('RED', 'AMBER'):
@@ -42,7 +44,7 @@ def profile_attempters(results, min_submissions=2):
 
         # Mean confidence across flagged submissions
         flagged_confs = [r['confidence'] for r in submissions
-                        if r['determination'] in ('RED', 'AMBER', 'MIXED')]
+                        if r['determination'] in FLAGGED_DETERMINATIONS]
         mean_conf = sum(flagged_confs) / len(flagged_confs) if flagged_confs else 0.0
 
         profiles.append({
@@ -114,7 +116,7 @@ def channel_pattern_summary(results):
     channel_examples = defaultdict(list)
 
     for r in results:
-        if r['determination'] not in ('RED', 'AMBER', 'MIXED'):
+        if r['determination'] not in FLAGGED_DETERMINATIONS:
             continue
         cd = r.get('channel_details', {}).get('channels', {})
         candidates = [
