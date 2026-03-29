@@ -3,6 +3,7 @@
 Combines preamble, prompt signature, voice dissonance, instruction density, SSI.
 """
 
+from llm_detector._constants import is_ssi_triggered
 from llm_detector.channels import ChannelResult
 
 
@@ -71,14 +72,7 @@ def score_prompt_structure(preamble_score, preamble_severity, prompt_sig, voice_
             parts.append(f"IDI={idi:.0f}(AMBER)")
 
     # SSI (sterile specification)
-    ssi_spec_threshold = 5.0 if voice_dis['contractions'] == 0 else 7.0
-    ssi_triggered = (
-        voice_dis['spec_score'] >= ssi_spec_threshold
-        and voice_dis['voice_score'] < 0.5
-        and voice_dis['hedges'] == 0
-        and word_count >= 150
-    )
-    if ssi_triggered:
+    if is_ssi_triggered(voice_dis, word_count):
         sub['ssi'] = voice_dis['spec_score']
         if voice_dis['spec_score'] >= 8.0:
             score = max(score, 0.70)

@@ -20,6 +20,7 @@ from datetime import datetime
 from collections import defaultdict, Counter
 from pathlib import Path
 
+from llm_detector._constants import get_length_bin
 from llm_detector.baselines import _BASELINE_FIELDS
 from llm_detector.similarity import (
     _word_shingles, _STRUCT_FEATURES, _shingle_fingerprint, _minhash_similarity,
@@ -128,16 +129,7 @@ class MemoryStore:
         if 'similarity_upgrade' in r:
             record['similarity_upgrade'] = r['similarity_upgrade']
 
-        # Length bin
-        wc = r.get('word_count', 0)
-        if wc < 100:
-            record['length_bin'] = 'short'
-        elif wc < 300:
-            record['length_bin'] = 'medium'
-        elif wc < 800:
-            record['length_bin'] = 'long'
-        else:
-            record['length_bin'] = 'very_long'
+        record['length_bin'] = get_length_bin(r.get('word_count', 0))
 
         return record
 

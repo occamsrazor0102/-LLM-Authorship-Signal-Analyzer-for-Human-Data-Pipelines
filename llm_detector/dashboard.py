@@ -22,6 +22,7 @@ import pandas as pd
 
 from llm_detector.pipeline import analyze_prompt
 from llm_detector.io import load_xlsx, load_csv
+from llm_detector._constants import PIPELINE_VERSION, get_length_bin
 
 # ── Theme constants ──────────────────────────────────────────────────────────
 
@@ -226,7 +227,7 @@ def _render_sidebar():
         else:
             st.warning("\U0001f9e0 Memory store not loaded")
 
-        st.caption("v0.68.0")
+        st.caption(PIPELINE_VERSION)
 
     return page
 
@@ -1598,17 +1599,12 @@ def _page_memory():
                         "reviewer": session_reviewer,
                         "notes": st.session_state.get(f"lbl_notes_{idx}", ""),
                         "timestamp": datetime.now().isoformat(),
-                        "pipeline_version": "v0.66",
+                        "pipeline_version": PIPELINE_VERSION,
                         "confidence": r.get("confidence", 0),
                         "word_count": wc,
                         "domain": r.get("domain", ""),
                         "mode": r.get("mode", ""),
-                        "length_bin": (
-                            "short" if wc < 100 else
-                            "medium" if wc < 300 else
-                            "long" if wc < 800 else
-                            "very_long"
-                        ),
+                        "length_bin": get_length_bin(wc),
                     }
                     with open(out_path, "a") as fh:
                         fh.write(json.dumps(record) + "\n")

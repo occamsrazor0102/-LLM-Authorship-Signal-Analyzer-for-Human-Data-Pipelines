@@ -5,6 +5,8 @@ import pandas as pd
 from collections import defaultdict
 from datetime import datetime
 
+from llm_detector._constants import PIPELINE_VERSION, get_length_bin
+
 _BASELINE_FIELDS = [
     'task_id', 'occupation', 'attempter', 'word_count', 'determination',
     'confidence', 'preamble_score', 'prompt_signature_composite', 'prompt_signature_cfd',
@@ -69,16 +71,8 @@ def collect_baselines(results, output_path):
             record = {k: r.get(k) for k in _BASELINE_FIELDS}
             record['attack_type'] = derive_attack_type(record)
             record['_timestamp'] = timestamp
-            record['_version'] = 'v0.66'
-            wc = r.get('word_count', 0)
-            if wc < 100:
-                record['length_bin'] = 'short'
-            elif wc < 300:
-                record['length_bin'] = 'medium'
-            elif wc < 800:
-                record['length_bin'] = 'long'
-            else:
-                record['length_bin'] = 'very_long'
+            record['_version'] = PIPELINE_VERSION
+            record['length_bin'] = get_length_bin(r.get('word_count', 0))
             f.write(json.dumps(record) + '\n')
             n_written += 1
 

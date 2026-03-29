@@ -19,13 +19,25 @@ _FINGERPRINT_RE = re.compile(
 )
 
 
-def run_fingerprint(text):
-    """Detect LLM fingerprint words. Returns (score, hit_count, rate)."""
+def run_fingerprint_full(text):
+    """Detect LLM fingerprint words in a single pass.
+
+    Returns (score, hit_count, rate, spans) where spans is a list of
+    (start_char, end_char, matched_text, 'fingerprint', word) tuples.
+    """
     word_count = len(text.split())
-    matches = _FINGERPRINT_RE.findall(text)
-    hits = len(matches)
+    spans = []
+    for m in _FINGERPRINT_RE.finditer(text):
+        spans.append((m.start(), m.end(), m.group(), 'fingerprint', m.group().lower()))
+    hits = len(spans)
     rate = hits / max(word_count / 1000, 1)
     score = min(rate / 5.0, 1.0)
+    return score, hits, rate, spans
+
+
+def run_fingerprint(text):
+    """Detect LLM fingerprint words. Returns (score, hit_count, rate)."""
+    score, hits, rate, _ = run_fingerprint_full(text)
     return score, hits, rate
 
 
@@ -34,7 +46,5 @@ def run_fingerprint_spans(text):
 
     Returns list of (start_char, end_char, matched_text, 'fingerprint', word).
     """
-    spans = []
-    for m in _FINGERPRINT_RE.finditer(text):
-        spans.append((m.start(), m.end(), m.group(), 'fingerprint', m.group().lower()))
+    _, _, _, spans = run_fingerprint_full(text)
     return spans
